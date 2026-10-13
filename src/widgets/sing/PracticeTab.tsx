@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as Tone from 'tone'
 import { Combine, Headphones, Loader2, Mic, Pause, Pin, PinOff, Play, Repeat, RotateCcw, Scissors, SkipBack, Square, Volume2 } from 'lucide-react'
-import { useSing, type SessionTake } from '@/features/sing/useSingSession'
+import { latestPass, useSing, type SessionTake } from '@/features/sing/useSingSession'
 import { feedbackFrom, isScorable, noteFeedback, notesIn, type Phrase, type SungSample } from '@/songs/singAlong'
 import { audioNow, playBuffer, stopTake, takeBuffer } from '@/audio/sing/takePlayback'
 import { lyricsInPhrase, mergeWithPrevious, splitAt, splitPoint, takeFitsPhrase } from '@/songs/phrasing'
@@ -132,7 +132,9 @@ export function PracticeTab() {
   const list: SessionTake[] = useMemo(() => (phrase ? (takes[phrase.index] ?? []) : []), [phrase, takes])
   const take = list.find((t) => t.id === selected[phrase?.index ?? -1]) ?? list[0]
   const bestId = useMemo(() => [...list].filter((t) => t.score).sort((a, b) => b.score!.score - a.score!.score)[0]?.id, [list])
-  const overlay = useCallback((): SungSample[] => (take ? Array.from(take.sungMs, (ms, i) => ({ ms, midi: take.sungMidi[i]! })) : []), [take])
+  // Older takes may hold several passes over the phrase: show only the last one.
+  const overlay = useMemo((): SungSample[] => (take ? latestPass(Array.from(take.sungMs, (ms, i) => ({ ms, midi: take.sungMidi[i]! }))) : []), [take])
+  const getOverlay = useCallback(() => overlay, [overlay])
 
   const positionMs = useCallback(() => {
     const c = takeClock.current
@@ -299,9 +301,32 @@ export function PracticeTab() {
         </label>
         <div className="ml-auto">
           {s.mic === 'on' ? (
-            <span className="flex items-center gap-1.5 text-xs text-success">
-              <Mic className="h-3.5 w-3.5" /> 麦克风已开（正在录音）
-            </span>
+            <div className="flex flex-wrap items-center justify-end gap-3">
+              <span className="flex items-center gap-1.5 text-xs text-success">
+                <Mic className="h-3.5 w-3.5" /> 麦克风已开（正在录音）
+              </span>
+              <button
+                type="button"
+                onClick={() => s.setMonitor({ on: !s.monitor.on })}
+                aria-pressed={s.monitor.on}
+                title="戴耳机时打开：一边唱一边听到自己的声音"
+                className={cn('focus-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs', s.monitor.on ? 'border-amber/60 bg-amber-soft/40' : 'border-border/80 text-muted-foreground hover:text-foreground')}
+              >
+                <Headphones className="h-3.5 w-3.5" /> 监听
+              </button>
+              {s.monitor.on && (
+                <>
+                  <label className="flex items-center gap-1.5 text-xs">
+                    音量
+                    <input type="range" min={0} max={1.5} step={0.05} value={s.monitor.volume} onChange={(e) => s.setMonitor({ volume: Number(e.target.value) })} className="w-20 accent-[hsl(var(--amber))]" aria-label="监听音量" />
+                  </label>
+                  <label className="flex items-center gap-1 text-xs">
+                    <input type="checkbox" checked={s.monitor.reverb} onChange={(e) => s.setMonitor({ reverb: e.target.checked })} className="accent-[hsl(var(--amber))]" />
+                    加一点混响
+                  </label>
+                </>
+              )}
+            </div>
           ) : (
             <Button size="sm" variant="outline" onClick={() => void s.startMic()} disabled={s.mic === 'starting'}>
               {s.mic === 'starting' ? <Loader2 className="animate-spin" /> : <Mic />} 打开麦克风
@@ -310,13 +335,16 @@ export function PracticeTab() {
         </div>
       </div>
       {s.micError && <p className="text-sm text-destructive">{s.micError}</p>}
+      {s.mic === 'on' && s.monitor.on && (
+        <p className="text-xs text-muted-foreground">监听已开：请一定戴耳机（用外放会啸叫）。浏览器里的监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；录音和评分不受影响。</p>
+      )}
       {s.lagNotice !== null && (
         <p className="rounded-xl border border-amber/40 bg-amber-soft/20 px-3 py-2 text-sm">
           最近几句你可能都比原唱{s.lagNotice > 0 ? '晚' : '早'}约 {Math.abs(s.lagNotice)} 毫秒。评分已经按这个差来比较音高；如果是设备延迟，可以到「设置 → 延迟校准」校准一次。
         </p>
       )}
 
-      <PitchLane curve={curve} notes={notes} positionMs={positionMs} sung={getSung} overlay={overlay} shift={shift} low={range.low} high={range.high} />
+      <PitchLane curve={curve} notes={notes} positionMs={positionMs} sung={getSung} overlay={getOverlay} shift={shift} low={range.low} high={range.high} />
       {lyrics.length > 0 && <LyricsDisplay lines={lyrics} positionMs={positionMs} {...((loop || preview) && phrase ? { lockLine: lyrics.findIndex((l) => l.startMs >= phrase.startMs - 500 && l.startMs <= phrase.endMs) } : {})} />}
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Headphones className="h-3.5 w-3.5" /> 请戴耳机唱，否则伴奏会被录进去。灰色横条是原唱的音（颤音、滑音已经去掉，不打分），彩色是你，淡蓝是你选中的那一次。任何舒服的八度都可以。

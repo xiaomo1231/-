@@ -69,6 +69,17 @@ function previewXml(xml: string, part?: string): ImportPreview {
 }
 
 /**
+ * Tab sites write their adverts into the file's texts ("歌手 www.example.cn
+ * 某某网为您提供……"): keep what comes before the first web address or
+ * advert phrase.
+ */
+export function stripSiteAds(text: string): string {
+  const cut = text.search(/(https?:\/\/|www\.|[a-z0-9-]+\.(?:com|cn|net|org)\b|为您提供|提供优秀|中文娱乐网|吉他谱网|曲谱网|制谱[:：]?)/i)
+  const kept = (cut >= 0 ? text.slice(0, cut) : text).replace(/[\s\-—_|·:：,，]+$/, '').trim()
+  return kept || text.trim()
+}
+
+/**
  * Read a file with alphaTab (Guitar Pro 3–8; MusicXML is read by our own
  * importer too). The preview's tab and chords come from the guitar track
  * alphaTab picks; everything else is shown from the file itself.
@@ -82,6 +93,9 @@ async function previewWithAlphaTab(name: string, bytes: Uint8Array, format: Shee
     throw new ImportError('读不懂这个 Guitar Pro 文件：可能已损坏，或者是不支持的版本。可以在 Guitar Pro 里另存为 .gp5 或导出 MusicXML 再试。')
   }
   const meta = readSheetMeta(score)
+  meta.title = stripSiteAds(meta.title)
+  if (meta.artist) meta.artist = stripSiteAds(meta.artist)
+  if (meta.tabber) meta.tabber = stripSiteAds(meta.tabber)
   if (!meta.tracks.length || !meta.bars) throw new ImportError('这个文件里没有音轨或小节。')
   const track = defaultTrack(meta)
   const tab = trackToTab(score, track, 0, Math.min(8, meta.bars))

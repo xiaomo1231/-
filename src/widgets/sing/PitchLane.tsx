@@ -113,7 +113,7 @@ export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low,
       const k = shift()
       const line = (pts: readonly SungSample[], color: (ok: boolean) => string, width: number, until: number) => {
         g.lineWidth = width
-        let prev: { x: number; y: number; ms: number } | null = null
+        let prev: { x: number; y: number; ms: number; m: number } | null = null
         for (const s of pts) {
           if (s.ms < t0 - 200 || s.ms > until) {
             prev = null
@@ -122,8 +122,10 @@ export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low,
           const ref = refAt(s.ms)
           const m = foldToRef(s.midi, k, ref, low, high)
           const ok = ref !== undefined && !Number.isNaN(ref) && Math.abs(m - ref) <= 0.5
-          const p = { x: x(s.ms), y: y(m), ms: s.ms }
-          if (prev && s.ms - prev.ms < 120) {
+          const p = { x: x(s.ms), y: y(m), ms: s.ms, m }
+          // Only join neighbours: forward in time (an earlier pass of the same phrase must not be joined
+          // to a later one), close together, and no octave-error jumps.
+          if (prev && s.ms >= prev.ms && s.ms - prev.ms < 120 && Math.abs(m - prev.m) < 3) {
             g.strokeStyle = color(ok)
             g.beginPath()
             g.moveTo(prev.x, prev.y)

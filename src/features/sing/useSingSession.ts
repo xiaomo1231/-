@@ -9,6 +9,7 @@ import { loadPitchCurve } from '@/audio/backing/pitchCurve'
 import { detector } from '@/audio/pitch/detector'
 import { rawTime } from '@/audio/engine'
 import { SongClock, VoiceRecorder, encodeTake } from '@/audio/sing/voiceRecorder'
+import { VoiceMonitor, loadMonitorSettings, saveMonitorSettings, type MonitorSettings } from '@/audio/sing/voiceMonitor'
 import { notesOf, scoreNotes, steadyLag, toTakeScore, type NoteScore, type Phrase, type PitchCurve, type RefNote, type SungSample } from '@/songs/singAlong'
 import type { StemKind } from '@/songs/backingSync'
 import { autoPhrases, groupTakes, phrasesFromLyrics, phrasesFromRanges, sameStretch, takeFitsPhrase, type PhraseRange, type PhraseSource } from '@/songs/phrasing'
@@ -19,6 +20,13 @@ export const SESSION_TAKES = 5
 /** Recorded before / after a phrase so its edges are not cut. */
 const PAD_MS = 300
 const hzToMidi = (hz: number) => 69 + 12 * Math.log2(hz / 440)
+
+/** The samples of the last pass: a jump back in time starts a new pass. */
+export function latestPass(xs: readonly SungSample[]): SungSample[] {
+  let start = 0
+  for (let i = 1; i < xs.length; i++) if (xs[i]!.ms < xs[i - 1]!.ms - 50) start = i
+  return xs.slice(start)
+}
 
 export interface SessionTake extends SingTake {
   /** The full note-level result, for the report (only for takes of this session). */
@@ -153,6 +161,21 @@ export function useSingSession(source: SingSource) {
     return () => cancelAnimationFrame(raf)
   }, [])
 
+  // 监听: hear yourself in the headphones while the microphone is on.
+  const [monitor, setMonitorState] = useState<MonitorSettings>(loadMonitorSettings)
+  const monitorRef = useRef<VoiceMonitor | null>(null)
+  useEffect(() => {
+    saveMonitorSettings(monitor)
+    if (mic !== 'on' || !monitor.on) {
+      monitorRef.current?.stop()
+      return
+    }
+    monitorRef.current ??= new VoiceMonitor()
+    monitorRef.current.start(monitor)
+  }, [mic, monitor])
+  useEffect(() => () => monitorRef.current?.stop(), [])
+  const setMonitor = useCallback((patch: Partial<MonitorSettings>) => setMonitorState((m) => ({ ...m, ...patch })), [])
+
   const startMic = useCallback(async () => {
     setMic('starting')
     try {
@@ -199,8 +222,9 @@ export function useSingSession(source: SingSource) {
   /** Score and store the phrase just sung. Returns the take (null when nothing scorable was sung). */
   const finishPhrase = useCallback(
     async (p: Phrase): Promise<SessionTake | null> => {
-      const detail = scoreNotes(notes, p, samples.current)
-      const window = samples.current.filter((s) => s.ms >= p.startMs - PAD_MS && s.ms <= p.endMs + PAD_MS)
+      // Only the latest pass over this phrase (singing it again appends a second run of samples).
+      const window = latestPass(samples.current.filter((s) => s.ms >= p.startMs - PAD_MS && s.ms <= p.endMs + PAD_MS))
+      const detail = scoreNotes(notes, p, window)
       if (!window.length) return null
       const cut = cutRecording(p.startMs - PAD_MS, p.endMs + PAD_MS)
       const audio = cut ? encodeTake(cut.samples, cut.sampleRate) : null
@@ -305,6 +329,8 @@ export function useSingSession(source: SingSource) {
     setGuide,
     mic,
     micError,
+    monitor,
+    setMonitor,
     startMic,
     samples,
     clearSamples,
