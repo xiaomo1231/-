@@ -6,6 +6,7 @@
  * `lyricsFromSheet` loads the sheet's own file and throws a Chinese Error in
  * that case, so the UI can show the message as it is.
  */
+import { loadScoreDecoded } from '@/audio/alphatabEncoding'
 import type { model } from '@coderline/alphatab'
 import type { LyricLine } from '@/songs/singTypes'
 import { EMPTY_SYNC, audioMsForScoreMs, barTimeline, scoreMsAt, type BarTime, type SyncMap } from '@/songs/backingSync'
@@ -130,7 +131,7 @@ export async function lyricsFromSheet(sheetId: string): Promise<LyricLine[]> {
   const at = await loadAlphaTab()
   let score: AtScore
   try {
-    score = at.importer.ScoreLoader.loadScoreFromBytes(bytes)
+    score = loadScoreDecoded(at, bytes).score
   } catch {
     throw new Error('读不懂这份谱子文件，没法取出歌词。')
   }

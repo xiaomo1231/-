@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from 'react'
-import { Gauge, Headphones, Loader2, Pause, Play, Repeat, Square, Timer, Volume2, VolumeX } from 'lucide-react'
+import { Eye, Gauge, Headphones, Loader2, Pause, Play, Repeat, Square, Timer, Volume2, VolumeX } from 'lucide-react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import { alphaTabUrls, loadAlphaTab } from '@/audio/alphatabLoader'
+import { loadScoreDecoded } from '@/audio/alphatabEncoding'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
 
@@ -57,6 +58,40 @@ const fmt = (ms: number) => {
 
 const SPEEDS = [0.5, 0.6, 0.75, 0.9, 1, 1.25]
 
+/** What the sheet shows on top of the notes; the noisiest are off by default. */
+const DISPLAY_ITEMS = [
+  { key: 'chords', label: '和弦名', elements: ['EffectChordNames'], on: true },
+  { key: 'markers', label: '段落名', elements: ['EffectMarker'], on: true },
+  { key: 'text', label: '文字注释', elements: ['EffectText'], on: false },
+  { key: 'letRing', label: '延音（LetRing）', elements: ['EffectLetRing', 'EffectPalmMute'], on: false },
+  { key: 'dynamics', label: '力度记号', elements: ['EffectDynamics', 'EffectCrescendo'], on: true },
+  { key: 'technique', label: '技巧文字（H / P / 推弦…）', elements: ['EffectTap', 'EffectLeftHandTap', 'EffectPickStroke', 'EffectFingering', 'EffectHarmonics'], on: true },
+  { key: 'lyrics', label: '歌词', elements: ['EffectLyrics'], on: true },
+  { key: 'tempo', label: '速度与拍号标记', elements: ['EffectTempo', 'EffectTripletFeel'], on: true },
+] as const
+type DisplayKey = (typeof DISPLAY_ITEMS)[number]['key']
+const DISPLAY_STORE = 'groovelab:sheet-display'
+
+function loadDisplay(): Record<DisplayKey, boolean> {
+  const base = Object.fromEntries(DISPLAY_ITEMS.map((d) => [d.key, d.on])) as Record<DisplayKey, boolean>
+  try {
+    return { ...base, ...(JSON.parse(localStorage.getItem(DISPLAY_STORE) ?? '{}') as Partial<Record<DisplayKey, boolean>>) }
+  } catch {
+    return base
+  }
+}
+
+/**
+ * alphaTab's notation.elements for the chosen display, keyed by element name
+ * (the form its settings JSON takes — numeric keys do not survive the trip to
+ * the render worker).
+ */
+function displayElements(display: Record<DisplayKey, boolean>): Map<string, boolean> {
+  const m = new Map<string, boolean>()
+  for (const d of DISPLAY_ITEMS) for (const el of d.elements) m.set(el, display[d.key])
+  return m
+}
+
 /**
  * The sheet as written (alphaTab): standard notation and / or tab, playback
  * with a following cursor, speed, loop, count-in, metronome and per-track
@@ -79,6 +114,8 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
   const [metronome, setMetronome] = useState(false)
   const [muted, setMuted] = useState<Set<number>>(new Set())
   const [solo, setSolo] = useState<Set<number>>(new Set())
+  const [display, setDisplay] = useState(loadDisplay)
+  const [displayOpen, setDisplayOpen] = useState(false)
   const onScoreRef = useRef(onScore)
   onScoreRef.current = onScore
   const onApiRef = useRef(onApi)
@@ -92,8 +129,17 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
         const at = await loadAlphaTab()
         if (disposed || !host.current || !scroller.current) return
         const urls = alphaTabUrls()
+        // Chinese Guitar Pro 3–5 files keep their texts in GBK: find the encoding that reads cleanly.
+        let encoding = 'utf-8'
+        try {
+          encoding = loadScoreDecoded(at, bytes).encoding
+        } catch {
+          // alphaTab reports unreadable files itself below
+        }
         const a = new at.AlphaTabApi(host.current, {
           core: { scriptFile: urls.script, fontDirectory: urls.fonts, useWorkers: true },
+          importer: { encoding },
+          notation: { elements: displayElements(loadDisplay()) },
           display: { staveProfile: staff, scale: 0.95, resources: themeResources() },
           player: { playerMode: at.PlayerMode.EnabledSynthesizer, soundFont: urls.soundFont, scrollElement: scroller.current, enableCursor: true, enableUserInteraction: true, scrollOffsetY: -30 },
         } as never)
@@ -131,6 +177,20 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
     const t = score?.tracks[track]
     if (a && t) a.renderTracks([t])
   }, [track, score])
+
+  // What is shown above / below the notes.
+  useEffect(() => {
+    const a = api.current
+    try {
+      localStorage.setItem(DISPLAY_STORE, JSON.stringify(display))
+    } catch {
+      // storage blocked: the choice lasts for this visit
+    }
+    if (!a || !score) return
+    a.settings.fillFromJson({ notation: { elements: displayElements(display) } } as never)
+    a.updateSettings()
+    a.render()
+  }, [display, score])
 
   // Notation mode.
   useEffect(() => {
@@ -241,6 +301,18 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
         <Toggle on={countIn} onClick={() => setCountIn((v) => !v)} icon={<Timer />} label="预备拍" />
         <Toggle on={metronome} onClick={() => setMetronome((v) => !v)} icon={<Volume2 />} label="节拍器" />
         {!externalMix && <Toggle on={playAlong} onClick={() => toggleMute(track)} icon={<Headphones />} label="跟伴奏弹（静音当前音轨）" />}
+        <Toggle on={displayOpen} onClick={() => setDisplayOpen((v) => !v)} icon={<Eye />} label="显示" />
+        {displayOpen && (
+          <div className="flex w-full flex-wrap items-center gap-x-4 gap-y-2 border-t border-border/60 pt-2 text-xs">
+            {DISPLAY_ITEMS.map((d) => (
+              <label key={d.key} className="flex items-center gap-1.5">
+                <input type="checkbox" checked={display[d.key]} onChange={(e) => setDisplay((x) => ({ ...x, [d.key]: e.target.checked }))} className="accent-[hsl(var(--amber))]" />
+                {d.label}
+              </label>
+            ))}
+            <span className="text-muted-foreground">谱面太挤时可以关掉一些；文字注释里常有谱子网站的广告，默认不显示。</span>
+          </div>
+        )}
       </div>
 
       {!externalMix && score && score.tracks.length > 1 && (

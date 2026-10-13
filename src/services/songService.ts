@@ -1,4 +1,5 @@
 import { uuid } from '@/infrastructure/crypto/crypto'
+import { loadScoreDecoded } from '@/audio/alphatabEncoding'
 import { getDb } from '@/infrastructure/db/database'
 import type { SheetFile, SongSheet } from '@/entities/types'
 import type { Score } from '@/music/score'
@@ -76,7 +77,7 @@ async function previewWithAlphaTab(name: string, bytes: Uint8Array, format: Shee
   const at = await loadAlphaTab()
   let score
   try {
-    score = at.importer.ScoreLoader.loadScoreFromBytes(bytes)
+    score = loadScoreDecoded(at, bytes).score
   } catch {
     throw new ImportError('读不懂这个 Guitar Pro 文件：可能已损坏，或者是不支持的版本。可以在 Guitar Pro 里另存为 .gp5 或导出 MusicXML 再试。')
   }
