@@ -1,4 +1,5 @@
 import { NavLink, Outlet } from 'react-router-dom'
+import { isAdmin } from '@/services/adminMode'
 import { Activity, BookOpen, Disc3, FileMusic, Flame, Guitar, ListMusic, Mic, PenLine, Settings, SlidersHorizontal, Sparkles, WifiOff } from 'lucide-react'
 import { useOnline } from '@/features/pwa/useOnline'
 import { useProfileStore } from '@/features/profile/profileStore'
@@ -80,6 +81,7 @@ export function Shell() {
           <div className="flex items-center justify-between px-1 text-xs">
             <span className="text-muted-foreground">
               {profile.displayName || '乐手'} · {INSTRUMENT_LABEL[profile.instrument]}
+              {isAdmin(profile) && <span className="ml-1.5 rounded border border-amber/60 px-1 text-[10px] text-amber">管理员模式</span>}
             </span>
             <span
               className={cn('flex items-center gap-1 num', alive && profile.streak.current > 0 ? 'text-amber' : 'text-muted-foreground')}

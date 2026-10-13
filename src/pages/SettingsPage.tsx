@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react'
+import { isAdmin } from '@/services/adminMode'
+import { AdminPanel } from '@/widgets/settings/AdminPanel'
 import { useNavigate } from 'react-router-dom'
 import { Upload, Download, Guitar, KeyRound, Mic, Moon, Piano, RotateCcw, Sun, Trash2, CircleSlash } from 'lucide-react'
 import { RangeCalibration } from '@/widgets/pitch/RangeCalibration'
@@ -58,6 +60,7 @@ export function SettingsPage() {
             <div className="flex-1 space-y-2">
               <Label htmlFor="name">昵称</Label>
               <Input id="name" value={name} onChange={(e) => setName(e.target.value.slice(0, 24))} />
+              {isAdmin(profile) && <p className="text-xs text-amber">管理员模式：所有阶段、级别和项目都已解锁（只影响能不能进入，学习记录照常保存）。改成别的昵称即恢复正常。</p>}
             </div>
             <Button variant="outline" onClick={() => void save({ displayName: name.trim() }, '已保存')} disabled={name.trim() === profile.displayName}>
               保存
@@ -227,6 +230,12 @@ export function SettingsPage() {
       <Section title="AI 导师（可选）" id="ai">
         <AISettingsForm />
       </Section>
+
+      {isAdmin(profile) && (
+        <Section title="管理员">
+          <AdminPanel />
+        </Section>
+      )}
 
       <Section title="数据">
         <div className="flex flex-wrap items-center gap-3">

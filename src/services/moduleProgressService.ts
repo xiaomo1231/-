@@ -1,4 +1,6 @@
 import { getDb } from '@/infrastructure/db/database'
+import { isAdmin } from './adminMode'
+import { ProfileService } from './profileService'
 import { clampLevel } from '@/drills/levels'
 import { MODULES, moduleInfo, type ModuleId } from '@/drills/types'
 import type { ModuleProgress } from '@/entities/types'
@@ -45,7 +47,8 @@ export const ModuleProgressService = {
   async setLevel(moduleId: ModuleId, level: number): Promise<ModuleProgress> {
     const db = getDb()
     const cur = await this.ensure(moduleId)
-    const target = Math.min(clampLevel(moduleId, level), cur.unlockedLevel)
+    const admin = isAdmin(await ProfileService.get())
+    const target = admin ? clampLevel(moduleId, level) : Math.min(clampLevel(moduleId, level), cur.unlockedLevel)
     if (target === cur.level) return cur
     const next: ModuleProgress = { ...cur, level: target, recentAtLevel: [], updatedAt: Date.now() }
     await db.moduleProgress.put(next)

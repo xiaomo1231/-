@@ -8,6 +8,7 @@ import {
   separateFile,
   type Engine,
   type HelperStatus,
+  type SeparationMode,
   type SeparationProgress,
 } from '@/audio/separation/separate'
 import { Button } from '@/shared/ui/Button'
@@ -28,10 +29,13 @@ import { cn } from '@/shared/lib/utils'
  */
 export function SeparateDialog({
   file,
+  mode = 'stems',
   onClose,
   onDone,
 }: {
   file: File | null
+  /** 'vocals': only the voice and the rest (跟唱; fast, model shipped with the site). */
+  mode?: SeparationMode
   onClose: () => void
   onDone: (files: File[], engine: Engine) => void
 }) {
@@ -62,6 +66,7 @@ export function SeparateDialog({
     try {
       const r = await separateFile(file, {
         engine,
+        mode,
         onProgress: setProgress,
         signal: abort.current.signal,
       })
@@ -94,7 +99,7 @@ export function SeparateDialog({
             <span className="font-medium text-foreground" title={file?.name}>
               {shortName(file?.name ?? '')}
             </span>
-            」分成人声、鼓、贝斯、吉他、钢琴、其它几轨。全部在这台电脑上完成，歌曲不会上传到网上。
+            」{mode === 'vocals' ? '分成人声和伴奏' : '分成人声、鼓、贝斯、吉他、钢琴、其它几轨'}。全部在这台电脑上完成，歌曲不会上传到网上。
           </DialogDescription>
         </DialogHeader>
 
@@ -119,7 +124,11 @@ export function SeparateDialog({
               onPick={() => setEngine('browser')}
               icon={hasWebGpu() ? <Monitor className="h-4 w-4" /> : <Cpu className="h-4 w-4" />}
               title="在浏览器里分轨"
-              text={`不用安装任何东西。${cached ? '模型已下载。' : `第一次要从 Hugging Face 下载约 ${BROWSER_MODEL_MB} MB 的模型（之后缓存）。`}${hasWebGpu() ? '有显卡加速，一首歌大约几分钟。' : '这个浏览器不支持显卡加速，会很慢（可能半小时以上）。'}`}
+              text={
+                mode === 'vocals'
+                  ? `不用安装任何东西，人声模型随网站自带。${hasWebGpu() ? '有显卡加速，一首歌通常一两分钟。' : crossOriginIsolated ? '没有显卡加速，用处理器多线程计算，会慢一些。' : '没有显卡加速，会比较慢。'}`
+                  : `不用安装任何东西。${cached ? '模型已下载。' : `第一次要从 Hugging Face 下载约 ${BROWSER_MODEL_MB} MB 的模型（之后缓存）。`}${hasWebGpu() ? '有显卡加速，一首歌大约几分钟。' : '这个浏览器不支持显卡加速，会很慢。'}`
+              }
             />
           </div>
         )}

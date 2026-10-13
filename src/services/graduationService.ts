@@ -4,6 +4,7 @@ import { STAGES } from '@/course/stages'
 import { graduationComplete, graduationStarter, graduationSteps, type GradProgress, type GradStep } from '@/course/graduation'
 import { CompositionService, CourseService } from './courseService'
 import { ProfileService } from './profileService'
+import { isAdmin } from './adminMode'
 import { BadgeService } from './badgeService'
 import type { BadgeInfo } from './progressRules'
 
@@ -13,7 +14,8 @@ export const GraduationService = {
     const stage5 = STAGES.find((s) => s.stage === 5)!
     const progress = await CourseService.progressAll()
     const done = stage5.lessons.filter((l) => progress.some((p) => p.lessonId === l.id && p.completedAt)).length
-    return { ok: done === stage5.lessons.length, done, total: stage5.lessons.length }
+    const admin = isAdmin(await ProfileService.get())
+    return { ok: admin || done === stage5.lessons.length, done, total: stage5.lessons.length }
   },
 
   async project(): Promise<Composition | undefined> {

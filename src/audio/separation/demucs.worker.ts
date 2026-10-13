@@ -7,6 +7,7 @@
  */
 import type * as Ort from 'onnxruntime-web'
 import { SEGMENT, STEMS_6, chunkPlan, chunkWeight } from './chunks'
+import { gpuAdapter, modelBytes as cachedModel, wasmThreads } from './modelCache'
 
 export interface WorkerRequest {
   type: 'run'
@@ -17,47 +18,11 @@ export interface WorkerRequest {
 }
 
 export type WorkerMessage =
-  | { type: 'progress'; phase: 'download' | 'load' | 'separate'; ratio: number; backend?: string }
+  | { type: 'progress'; phase: 'download' | 'load' | 'separate'; ratio: number; backend?: string; threads?: number; elapsed?: number }
   | { type: 'done'; stems: Array<{ name: (typeof STEMS_6)[number]; left: Float32Array; right: Float32Array }>; backend: string }
   | { type: 'error'; message: string }
 
 const post = (m: WorkerMessage, transfer: Transferable[] = []) => (self as unknown as DedicatedWorkerGlobalScope).postMessage(m, transfer)
-
-const CACHE = 'groovelab-models-v1'
-
-async function modelBytes(url: string): Promise<ArrayBuffer> {
-  const cache = await caches.open(CACHE).catch(() => null)
-  const hit = await cache?.match(url).catch(() => undefined)
-  if (hit) {
-    post({ type: 'progress', phase: 'download', ratio: 1 })
-    return hit.arrayBuffer()
-  }
-  const res = await fetch(url)
-  if (!res.ok || !res.body) throw new Error(`模型下载失败（${res.status}）。检查网络后重试。`)
-  const total = Number(res.headers.get('content-length')) || 0
-  const reader = res.body.getReader()
-  const parts: Uint8Array[] = []
-  let got = 0
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    parts.push(value)
-    got += value.length
-    if (total) post({ type: 'progress', phase: 'download', ratio: got / total })
-  }
-  const bytes = new Uint8Array(got)
-  let o = 0
-  for (const p of parts) {
-    bytes.set(p, o)
-    o += p.length
-  }
-  try {
-    await cache?.put(url, new Response(bytes, { headers: { 'content-type': 'application/octet-stream' } }))
-  } catch {
-    // Storage full or restricted: still separate now, download again next time.
-  }
-  return bytes.buffer
-}
 
 self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   const req = e.data
@@ -65,10 +30,11 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
   try {
     const ort = (await import(/* @vite-ignore */ `${req.base}ort/ort.webgpu.min.mjs`)) as typeof Ort
     ort.env.wasm.wasmPaths = `${req.base}ort/`
-    ort.env.wasm.numThreads = self.crossOriginIsolated ? Math.max(1, Math.min(8, (navigator.hardwareConcurrency || 4) - 1)) : 1
-    const bytes = await modelBytes(req.modelUrl)
+    const threads = wasmThreads()
+    ort.env.wasm.numThreads = threads
+    const bytes = await cachedModel(req.modelUrl, (r) => post({ type: 'progress', phase: 'download', ratio: r }))
     post({ type: 'progress', phase: 'load', ratio: 0 })
-    const hasGpu = 'gpu' in navigator && (await (navigator as unknown as { gpu: { requestAdapter(): Promise<unknown> } }).gpu.requestAdapter().catch(() => null)) !== null
+    const hasGpu = (await gpuAdapter()) !== null
     let session: Ort.InferenceSession
     let backend = hasGpu ? 'webgpu' : 'wasm'
     try {
@@ -78,7 +44,8 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       backend = 'wasm'
       session = await ort.InferenceSession.create(new Uint8Array(bytes), { executionProviders: ['wasm'], graphOptimizationLevel: 'all' })
     }
-    post({ type: 'progress', phase: 'separate', ratio: 0, backend })
+    post({ type: 'progress', phase: 'separate', ratio: 0, backend, threads, elapsed: 0 })
+    const tRun = performance.now()
 
     const total = req.left.length
     const plan = chunkPlan(total)
@@ -101,7 +68,7 @@ self.onmessage = async (e: MessageEvent<WorkerRequest>) => {
       }
       for (let j = 0; j < c.length; j++) weight[c.start + j]! += chunkWeight(c, j)
       for (const t of Object.values(result)) t.dispose?.()
-      post({ type: 'progress', phase: 'separate', ratio: (ci + 1) / plan.length, backend })
+      post({ type: 'progress', phase: 'separate', ratio: (ci + 1) / plan.length, backend, threads, elapsed: (performance.now() - tRun) / 1000 })
     }
     for (const [l, r] of out) {
       for (let i = 0; i < total; i++) {

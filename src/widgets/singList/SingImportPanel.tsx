@@ -100,6 +100,7 @@ export function SingImportPanel() {
             <input ref={sepInput} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg" className="hidden" aria-label="选择要自动分轨的原曲" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setSepFile(f) }} />
             <SeparateDialog
               file={sepFile}
+              mode="vocals"
               onClose={() => setSepFile(null)}
               onDone={(out) => {
                 const original = sepFile

@@ -6,6 +6,7 @@ import type { Lesson, StageInfo } from '@/course/types'
 import type { Composition, CompositionVersion, LessonProgress, ModuleProgress, StudentProfile } from '@/entities/types'
 import { ModuleProgressService } from './moduleProgressService'
 import { ProfileService } from './profileService'
+import { effectiveProfile } from './adminMode'
 import { BadgeService } from './badgeService'
 import type { BadgeInfo } from './progressRules'
 import { handsOnFor, type HandsOnStep } from '@/course/handsOn'
@@ -132,7 +133,7 @@ export const CourseService = {
 
   async status(): Promise<StageStatus[]> {
     const [profile, lessons, modules] = await Promise.all([ProfileService.ensure(), this.progressAll(), ModuleProgressService.all()])
-    return computeStageStatus(profile, lessons, modules)
+    return computeStageStatus(effectiveProfile(profile), lessons, modules)
   },
 
   /** Unlock the next stage when allowed. Returns the newly unlocked stage, or null. */

@@ -1,6 +1,7 @@
 import { create } from 'zustand'
 import type { StudentProfile } from '@/entities/types'
 import { ProfileService } from '@/services/profileService'
+import { effectiveProfile } from '@/services/adminMode'
 import { useThemeStore } from '@/features/theme/themeStore'
 import { setTimbre, trainingTimbre } from '@/audio/engine'
 import { inputManager } from '@/audio/input/inputManager'
@@ -34,7 +35,7 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
       useThemeStore.getState().setMode(profile.theme)
       setTimbre(trainingTimbre(profile))
       applyDevices(profile)
-      set({ profile })
+      set({ profile: effectiveProfile(profile) })
       return profile
     } finally {
       set({ loading: false })
@@ -44,7 +45,8 @@ export const useProfileStore = create<ProfileStore>((set, get) => ({
     useThemeStore.getState().setMode(profile.theme)
     setTimbre(trainingTimbre(profile))
     applyDevices(profile)
-    set({ profile })
+    // 管理员模式: pages see every stage unlocked; the stored row is unchanged.
+    set({ profile: effectiveProfile(profile) })
   },
   async refresh() {
     const profile = await ProfileService.ensure()

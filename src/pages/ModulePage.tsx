@@ -11,6 +11,7 @@ import { useAsync } from '@/shared/lib/useAsync'
 import { MODULE_ICON } from '@/widgets/drill/moduleIcons'
 import { moduleDisplayName } from '@/widgets/drill/moduleName'
 import { useProfileStore } from '@/features/profile/profileStore'
+import { isAdmin } from '@/services/adminMode'
 import { VuBar } from '@/widgets/meter/VuBar'
 import { confusionLabel } from '@/widgets/drill/confusionLabel'
 import { Button } from '@/shared/ui/Button'
@@ -28,6 +29,7 @@ function ModuleDetail({ moduleId }: { moduleId: ModuleId }) {
   const info = moduleInfo(moduleId)
   const Icon = MODULE_ICON[moduleId]
   const profile = useProfileStore((s) => s.profile)!
+  const admin = isAdmin(profile)
   const { data, reload } = useAsync(async () => {
     const [progress, skills, confusions] = await Promise.all([
       ModuleProgressService.ensure(moduleId),
@@ -119,7 +121,7 @@ function ModuleDetail({ moduleId }: { moduleId: ModuleId }) {
         <h2 className="mb-4 text-xl font-semibold">级别</h2>
         <div className="grid grid-cols-7 gap-3">
           {titles.map((t) => {
-            const unlocked = (progress?.unlockedLevel ?? 1) >= t.level
+            const unlocked = admin || (progress?.unlockedLevel ?? 1) >= t.level
             const current = progress?.level === t.level
             return (
               <button

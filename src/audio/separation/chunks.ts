@@ -1,6 +1,6 @@
 /**
  * Chunking for Demucs-style separation (pure): fixed-length segments with a
- * quarter overlap, cross-faded linearly. Unlike the reference script, the
+ * one-eighth overlap (0.16.3; was a quarter), cross-faded linearly. Unlike the reference script, the
  * very start and the very end are not faded (nothing overlaps there), so no
  * audio is lost at the edges.
  */
@@ -8,7 +8,7 @@
 export const DEMUCS_RATE = 44100
 /** htdemucs input length: 7.8 s at 44.1 kHz. */
 export const SEGMENT = 343980
-export const OVERLAP = SEGMENT >> 2
+export const OVERLAP = SEGMENT >> 3
 export const STEMS_6 = ['drums', 'bass', 'other', 'vocals', 'guitar', 'piano'] as const
 
 export interface Chunk {

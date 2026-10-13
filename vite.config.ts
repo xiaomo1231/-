@@ -11,7 +11,8 @@ import { readFileSync, readdirSync, statSync } from 'node:fs'
  */
 function publicFiles(dir: string, base = ''): string[] {
   return readdirSync(dir).flatMap((name) => {
-    if (!base && name === 'ort') return []
+    // ort (~27 MB) and the vocals model (~33 MB) load only when a song is separated.
+    if (!base && (name === 'ort' || name === 'models')) return []
     const full = path.join(dir, name)
     const url = `${base}/${name}`
     return statSync(full).isDirectory() ? publicFiles(full, url) : [url]
