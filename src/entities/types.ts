@@ -445,6 +445,20 @@ export interface SingTake {
   speed?: number
   /** Student pinned it: never pruned. */
   kept?: boolean
+  /** Put away in a draft (重新开始 → 存为草稿): not shown, not pruned. */
+  archive?: string
+}
+
+/** A set of earlier takes the student put away to start fresh (跟唱 草稿). */
+export interface SingDraft {
+  id: string
+  name: string
+  createdAt: number
+  takes: number
+  /** Phrases with at least one take. */
+  phrases: number
+  /** Mean of the best score per phrase (0–1), when any was scored. */
+  avgBest?: number
 }
 
 /** Score of one take (the summary of SingAlong's note-level scoring). */
@@ -472,6 +486,8 @@ export interface SingMeta {
   phraseCuts?: Array<{ startMs: number; endMs: number }>
   comp?: CompPlan
   mix?: MixSettings
+  /** Earlier takes put away to start fresh (0.21.6). */
+  drafts?: SingDraft[]
   /** Saved versions of the mix for A/B comparison (0.21.0). */
   mixSnapshots?: Array<{ name: string; mix: MixSettings }>
   updatedAt: number

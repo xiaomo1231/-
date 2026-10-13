@@ -269,6 +269,40 @@ export function useSingSession(source: SingSource) {
     [source.key],
   )
 
+  // ---- 重新开始 / 草稿 -----------------------------------------------------------
+  /** Bumped after a fresh start or a restored draft: the practice view forgets what it scored. */
+  const [resetToken, setResetToken] = useState(0)
+  const afterReset = useCallback(
+    (m: SingMeta) => {
+      setMetaState(m)
+      samples.current = []
+      lags.current = []
+      setLagNotice(null)
+      setResetToken((x) => x + 1)
+      void SingService.takes(source.key).then(setAllTakes)
+    },
+    [source.key],
+  )
+  /** Put the current takes away as a draft, then start fresh. False when there was nothing to put away. */
+  const saveDraftAndRestart = useCallback(
+    async (name: string) => {
+      const m = await SingService.saveDraft(source.key, name)
+      if (m) afterReset(m)
+      return m !== null
+    },
+    [source.key, afterReset],
+  )
+  const clearAllTakes = useCallback(async () => afterReset(await SingService.clearTakes(source.key)), [source.key, afterReset])
+  const clearPhraseTakes = useCallback(
+    async (ids: string[]) => {
+      setMetaState(await SingService.clearTakes(source.key, ids))
+      setAllTakes((all) => all.filter((t) => !ids.includes(t.id)))
+    },
+    [source.key],
+  )
+  const restoreDraft = useCallback(async (id: string) => afterReset(await SingService.restoreDraft(source.key, id)), [source.key, afterReset])
+  const deleteDraft = useCallback(async (id: string) => setMetaState(await SingService.deleteDraft(source.key, id)), [source.key])
+
   const updateTake = useCallback(async (t: SessionTake, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs'>>) => {
     await SingService.updateTake(t.id, patch)
     setAllTakes((all) => all.map((x) => (x.id === t.id ? { ...x, ...patch } : x)))
@@ -315,6 +349,12 @@ export function useSingSession(source: SingSource) {
     resegment,
     bests,
     previewing,
+    resetToken,
+    saveDraftAndRestart,
+    clearAllTakes,
+    clearPhraseTakes,
+    restoreDraft,
+    deleteDraft,
     notes,
     meta,
     setMeta,

@@ -1,6 +1,6 @@
 import { uuid } from '@/infrastructure/crypto/crypto'
 import { getDb } from '@/infrastructure/db/database'
-import type { AudioFile, CoverWork, SingKey, SingMeta, SingSong, SingTake, SongSheet } from '@/entities/types'
+import type { AudioFile, CoverWork, SingDraft, SingKey, SingMeta, SingSong, SingTake, SongSheet } from '@/entities/types'
 import { SCORE_VERSION } from '@/songs/singAlong'
 import { sameStretch } from '@/songs/phrasing'
 import { detectStem, type StemKind } from '@/songs/backingSync'
@@ -52,6 +52,25 @@ export function cleanSongTitle(fileName: string): string {
   const kept = tokens.filter((w) => !hashy(w) && !hexy(w) && !/^obj$/i.test(w))
   const out = kept.join(' ').trim()
   return out.length >= 2 ? out.slice(0, 60) : '未命名歌曲'
+}
+
+/** "10月13日 21:05" */
+function defaultDraftName(): string {
+  const d = new Date()
+  return `${d.getMonth() + 1}月${d.getDate()}日 ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+
+/** Size and average best score of a set of takes (for the draft list). */
+export function draftSummary(takes: readonly SingTake[]): Pick<SingDraft, 'takes' | 'phrases' | 'avgBest'> {
+  const best = new Map<number, number>()
+  const sung = new Set<number>()
+  for (const t of takes) {
+    if (t.phrase < 0) continue
+    sung.add(t.phrase)
+    if (t.score) best.set(t.phrase, Math.max(best.get(t.phrase) ?? 0, t.score.score))
+  }
+  const scores = [...best.values()]
+  return { takes: takes.length, phrases: sung.size, ...(scores.length ? { avgBest: scores.reduce((a, b) => a + b, 0) / scores.length } : {}) }
 }
 
 export const SingService = {
@@ -172,10 +191,11 @@ export const SingService = {
     const db = getDb()
     await db.transaction('rw', db.singTakes, db.singMeta, db.singSongs, async () => {
       await db.singTakes.put(take)
-      const all =
+      const all = (
         take.phrase < 0
           ? await db.singTakes.where('[key+phrase]').equals([take.key, take.phrase]).toArray()
           : (await db.singTakes.where('key').equals(take.key).toArray()).filter((t) => t.id === take.id || (t.phrase >= 0 && sameStretch(t, take)))
+      ).filter((t) => !t.archive)
       const keep = new Set(all.filter((t) => t.kept).map((t) => t.id))
       const byTime = [...all].sort((a, b) => b.createdAt - a.createdAt)
       if (take.phrase < 0) byTime.slice(0, 3).forEach((t) => keep.add(t.id))
@@ -199,10 +219,78 @@ export const SingService = {
   },
 
   /** Stored takes of a source (optionally one phrase), newest first. */
+  /** The current takes of a source (not the ones put away in drafts), newest first. */
   async takes(key: SingKey, phrase?: number): Promise<SingTake[]> {
     const db = getDb()
     const rows = phrase === undefined ? await db.singTakes.where('key').equals(key).toArray() : await db.singTakes.where('[key+phrase]').equals([key, phrase]).toArray()
-    return rows.sort((a, b) => b.createdAt - a.createdAt)
+    return rows.filter((t) => !t.archive).sort((a, b) => b.createdAt - a.createdAt)
+  },
+
+  // ---- 重新开始 / 草稿 ----------------------------------------------------------
+
+  /** Put every current take away in a new draft and start fresh (scores reset). Returns the meta, or null when there was nothing to put away. */
+  async saveDraft(key: SingKey, name: string): Promise<SingMeta | null> {
+    const db = getDb()
+    let out: SingMeta | null = null
+    await db.transaction('rw', db.singTakes, db.singMeta, async () => {
+      const active = (await db.singTakes.where('key').equals(key).toArray()).filter((t) => !t.archive)
+      if (!active.length) return
+      const draft: SingDraft = { id: uuid(), name: name.trim().slice(0, 40) || defaultDraftName(), createdAt: Date.now(), ...draftSummary(active) }
+      await db.singTakes.bulkPut(active.map((t) => ({ ...t, archive: draft.id })))
+      const m = await this.meta(key)
+      out = { ...m, drafts: [draft, ...(m.drafts ?? [])], phraseBests: {}, ...(m.comp ? { comp: { ...m.comp, picks: {}, phraseOffsets: {}, fullTakeId: undefined } } : {}), updatedAt: Date.now() }
+      await db.singMeta.put(out)
+    })
+    return out
+  },
+
+  /** Delete current takes: all of them, or the given ones (one phrase). Drafts stay. */
+  async clearTakes(key: SingKey, ids?: string[]): Promise<SingMeta> {
+    const db = getDb()
+    let out!: SingMeta
+    await db.transaction('rw', db.singTakes, db.singMeta, async () => {
+      const active = (await db.singTakes.where('key').equals(key).toArray()).filter((t) => !t.archive && (!ids || ids.includes(t.id)))
+      await db.singTakes.bulkDelete(active.map((t) => t.id))
+      const m = await this.meta(key)
+      out = { ...m, ...(ids ? {} : { phraseBests: {} }), ...(m.comp && !ids ? { comp: { ...m.comp, picks: {}, phraseOffsets: {}, fullTakeId: undefined } } : {}), updatedAt: Date.now() }
+      await db.singMeta.put(out)
+    })
+    return out
+  },
+
+  /** Bring a draft back. The current takes (if any) are first put away as a draft of their own, so nothing is lost. */
+  async restoreDraft(key: SingKey, draftId: string): Promise<SingMeta> {
+    const db = getDb()
+    let out!: SingMeta
+    await db.transaction('rw', db.singTakes, db.singMeta, async () => {
+      const all = await db.singTakes.where('key').equals(key).toArray()
+      const m = await this.meta(key)
+      let drafts = (m.drafts ?? []).filter((d) => d.id !== draftId)
+      const active = all.filter((t) => !t.archive)
+      if (active.length) {
+        const auto: SingDraft = { id: uuid(), name: `恢复草稿前自动保存（${defaultDraftName()}）`, createdAt: Date.now(), ...draftSummary(active) }
+        await db.singTakes.bulkPut(active.map((t) => ({ ...t, archive: auto.id })))
+        drafts = [auto, ...drafts]
+      }
+      const back = all.filter((t) => t.archive === draftId)
+      await db.singTakes.bulkPut(back.map(({ archive: _a, ...t }) => t))
+      out = { ...m, drafts, phraseBests: {}, ...(m.comp ? { comp: { ...m.comp, picks: {}, phraseOffsets: {}, fullTakeId: undefined } } : {}), updatedAt: Date.now() }
+      await db.singMeta.put(out)
+    })
+    return out
+  },
+
+  async deleteDraft(key: SingKey, draftId: string): Promise<SingMeta> {
+    const db = getDb()
+    let out!: SingMeta
+    await db.transaction('rw', db.singTakes, db.singMeta, async () => {
+      const gone = (await db.singTakes.where('key').equals(key).toArray()).filter((t) => t.archive === draftId)
+      await db.singTakes.bulkDelete(gone.map((t) => t.id))
+      const m = await this.meta(key)
+      out = { ...m, drafts: (m.drafts ?? []).filter((d) => d.id !== draftId), updatedAt: Date.now() }
+      await db.singMeta.put(out)
+    })
+    return out
   },
 
   async updateTake(id: string, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs'>>): Promise<void> {

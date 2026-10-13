@@ -1,11 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import * as Tone from 'tone'
-import { Combine, Headphones, Loader2, Mic, Pause, Pin, PinOff, Play, Repeat, RotateCcw, Scissors, SkipBack, Square, Volume2 } from 'lucide-react'
+import { Combine, Headphones, Loader2, Mic, Pause, Pin, PinOff, Play, Repeat, RotateCcw, Scissors, SkipBack, Square, Trash2, Volume2 } from 'lucide-react'
 import { latestPass, useSing, type SessionTake } from '@/features/sing/useSingSession'
 import { feedbackFrom, isScorable, noteFeedback, notesIn, type Phrase, type SungSample } from '@/songs/singAlong'
 import { audioNow, playBuffer, stopTake, takeBuffer } from '@/audio/sing/takePlayback'
 import { lyricsInPhrase, mergeWithPrevious, splitAt, splitPoint, takeFitsPhrase } from '@/songs/phrasing'
 import { PitchLane } from './PitchLane'
+import { RestartDialog } from './RestartDialog'
 import { LyricsDisplay } from './LyricsDisplay'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
@@ -54,6 +55,14 @@ export function PracticeTab() {
   const pinned = useRef<{ index: number; untilMs: number } | null>(null)
   const phrase: Phrase | undefined = phrases[phraseIdx]
   const lyrics = useMemo(() => meta?.lyrics ?? [], [meta?.lyrics])
+
+  const [restartOpen, setRestartOpen] = useState(false)
+  // A fresh start or a restored draft: nothing of the old run counts as scored any more.
+  useEffect(() => {
+    if (!s.resetToken) return
+    scored.current.clear()
+    setSelected({})
+  }, [s.resetToken])
 
   // New cuts: phrase numbers mean something else now.
   useEffect(() => {
@@ -285,6 +294,10 @@ export function PracticeTab() {
         <button type="button" onClick={() => setLoop((v) => !v)} aria-pressed={loop} className={cn('focus-ring flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 text-xs', loop ? 'border-amber/60 bg-amber-soft/40' : 'border-border/80 text-muted-foreground hover:text-foreground')}>
           <Repeat className="h-3.5 w-3.5" /> 循环这一句
         </button>
+        <button type="button" onClick={() => setRestartOpen(true)} className="focus-ring flex items-center gap-1.5 rounded-lg border border-border/80 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground" title="把之前的评分存为草稿或删除，从头开始">
+          <RotateCcw className="h-3.5 w-3.5" /> 重新开始{s.meta?.drafts?.length ? `（草稿 ${s.meta.drafts.length}）` : ''}
+        </button>
+        <RestartDialog open={restartOpen} onClose={() => setRestartOpen(false)} />
         <label className="flex items-center gap-1.5 text-xs">
           速度
           <select value={s.speed} onChange={(e) => s.setSpeed(Number(e.target.value))} className="focus-ring h-8 rounded-lg border border-border bg-background px-2">
@@ -438,6 +451,23 @@ export function PracticeTab() {
                   </Button>
                 </>
               )}
+              <Button
+                size="sm"
+                variant="ghost"
+                className="text-destructive"
+                onClick={() => {
+                  if (!phrase || !window.confirm(`清除第 ${phrase.index + 1} 句的 ${list.length} 条演唱记录和评分？不能恢复。`)) return
+                  if (previewRef.current) stopPreview()
+                  scored.current.delete(phrase.index)
+                  setSelected((m) => {
+                    const { [phrase.index]: _gone, ...rest } = m
+                    return rest
+                  })
+                  void s.clearPhraseTakes(list.map((t) => t.id))
+                }}
+              >
+                <Trash2 /> 清除这一句的记录
+              </Button>
               <Button size="sm" variant="ghost" onClick={() => void s.updateTake(take, { kept: !take.kept })}>
                 {take.kept ? <PinOff /> : <Pin />} {take.kept ? '取消保留' : '保留这一次'}
               </Button>
