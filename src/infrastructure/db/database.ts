@@ -1,5 +1,9 @@
 import Dexie, { type Table } from 'dexie'
 import type {
+  MixCourseVoice,
+  MixLessonProgress,
+  EarDrillStats,
+  UserMixPreset,
   LibraryFolder,
   LibrarySong,
   AISettingsRow,
@@ -70,6 +74,10 @@ export class GrooveLabDB extends Dexie {
   covers!: Table<CoverWork, string>
   libraryFolders!: Table<LibraryFolder, string>
   librarySongs!: Table<LibrarySong, string>
+  mixCourse!: Table<MixCourseVoice, string>
+  mixProgress!: Table<MixLessonProgress, string>
+  earStats!: Table<EarDrillStats, string>
+  userMixPresets!: Table<UserMixPreset, string>
 
   constructor(name = DB_NAME) {
     super(name)
@@ -146,6 +154,13 @@ export class GrooveLabDB extends Dexie {
       libraryFolders: 'id',
       librarySongs: 'id, folderId, artist, addedAt',
     })
+    // v12: 后期课堂 — own voice for lessons, lesson progress, ear-drill stats; user mix presets (跟唱后期).
+    this.version(12).stores({
+      mixCourse: 'id',
+      mixProgress: 'lessonId',
+      earStats: 'kind',
+      userMixPresets: 'id, createdAt',
+    })
   }
 }
 
@@ -196,6 +211,10 @@ export async function clearAllData(): Promise<void> {
       db.covers,
       db.libraryFolders,
       db.librarySongs,
+      db.mixCourse,
+      db.mixProgress,
+      db.earStats,
+      db.userMixPresets,
     ],
     async () => {
       await Promise.all([
@@ -228,6 +247,10 @@ export async function clearAllData(): Promise<void> {
         db.covers.clear(),
         db.libraryFolders.clear(),
         db.librarySongs.clear(),
+        db.mixCourse.clear(),
+        db.mixProgress.clear(),
+        db.earStats.clear(),
+        db.userMixPresets.clear(),
       ])
     },
   )

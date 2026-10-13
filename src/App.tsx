@@ -31,6 +31,9 @@ import { SheetDetailPage } from '@/pages/SheetDetailPage'
 import { SingListPage } from '@/pages/SingListPage'
 import { SingPage } from '@/pages/SingPage'
 import { LibraryPage } from '@/pages/LibraryPage'
+import { MixingPage } from '@/pages/MixingPage'
+import { MixLessonPage } from '@/pages/MixLessonPage'
+import { EarTrainingPage } from '@/pages/EarTrainingPage'
 import { RunService } from '@/services/runService'
 
 /** Loads the profile once; children render after it is available. */
@@ -86,6 +89,9 @@ const router = createBrowserRouter([
               { path: '/sheets', element: <SheetsPage /> },
               { path: '/sheets/:id', element: <SheetDetailPage /> },
               { path: '/library', element: <LibraryPage /> },
+              { path: '/mixing', element: <MixingPage /> },
+              { path: '/mixing/ear', element: <EarTrainingPage /> },
+              { path: '/mixing/:lessonId', element: <MixLessonPage /> },
               { path: '/sing', element: <SingListPage /> },
               { path: '/sing/:kind/:id', element: <SingPage /> },
               { path: '/guitar', element: <GuitarPage /> },

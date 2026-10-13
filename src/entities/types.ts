@@ -335,6 +335,45 @@ export interface SheetBacking {
   synthVolume?: number
 }
 
+/** 后期课堂 (0.19.0, Dexie v12): the student's own voice for the lessons (one row, id 'voice'). */
+export interface MixCourseVoice {
+  id: 'voice'
+  /** Mono samples as a WAV blob. */
+  blob: Blob
+  sampleRate: number
+  durationMs: number
+  /** 'recorded' in the course, or taken from a 跟唱 take. */
+  source: 'recorded' | 'take'
+  createdAt: number
+}
+
+/** A lesson read / its task passed. */
+export interface MixLessonProgress {
+  lessonId: string
+  readAt?: number
+  taskPassedAt?: number
+}
+
+/** Ear-drill record per kind. */
+export interface EarDrillStats {
+  kind: string
+  level: number
+  attempts: number
+  correct: number
+  /** Last answers at the current level (true = right), newest last, at most 10. */
+  recent: boolean[]
+  best: number
+  updatedAt: number
+}
+
+/** A mix the student saved as their own preset (0.21.0). */
+export interface UserMixPreset {
+  id: string
+  name: string
+  mix: import('@/songs/singTypes').MixSettings
+  createdAt: number
+}
+
 /**
  * 歌曲库 (0.18.0, Dexie v11): a folder on this computer the student chose.
  * The handle is the browser's permission to read it (asked again after a

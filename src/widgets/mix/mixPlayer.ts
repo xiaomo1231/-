@@ -3,7 +3,8 @@
  * 图只在第一次播放时建立（同一个 Tone 上下文），之后参数通过 update 即时生效。
  */
 import * as Tone from 'tone'
-import { buildMixGraph, type MixGraph } from '@/audio/sing/mixChain'
+import { buildMixGraph, stemGain, structureKey, type MixGraph } from '@/audio/sing/mixChain'
+import { ensureMixWorklet } from '@/audio/fx/mixWorklet'
 import type { MixSettings } from '@/songs/singTypes'
 
 export interface Region {
@@ -28,7 +29,10 @@ export class MixPlayer {
   private sources: AudioBufferSourceNode[] = []
   private voice: AudioBuffer | null = null
   private backing: AudioBuffer[] = []
+  private backingNames: string[] = []
   private bpm = 100
+  private worklets = false
+  private builtKey = ''
   private mix: MixSettings | null = null
 
   private playing = false
@@ -47,11 +51,22 @@ export class MixPlayer {
     return Math.max(this.voice?.duration ?? 0, ...this.backing.map((b) => b.duration), 0)
   }
 
-  setBuffers(voice: AudioBuffer | null, backing: AudioBuffer[]): void {
+  setBuffers(voice: AudioBuffer | null, backing: AudioBuffer[], names: string[] = []): void {
     if (voice === this.voice && backing === this.backing) return
+    const wasPlaying = this.playing
+    const at = this.position()
     this.stop()
+    // The stem inputs belong to the graph: rebuild it for a different number of stems.
+    if (backing.length !== this.backing.length) {
+      this.graph?.dispose()
+      this.graph = null
+    }
     this.voice = voice
     this.backing = backing
+    this.backingNames = names
+    // A new voice (e.g. after tuning) keeps the place in the song.
+    if (wasPlaying) void this.play(at, this.loopRegion)
+    else this.pausedAt = Math.min(at, this.total())
   }
 
   setBpm(bpm: number): void {
@@ -66,13 +81,38 @@ export class MixPlayer {
   }
 
   private applyMix(): void {
-    if (this.graph && this.mix) this.graph.update(this.mix, this.bpm)
+    if (!this.graph || !this.mix) return
+    if (structureKey(this.mix) !== this.builtKey && this.ctx) {
+      // The insert order changed: a new graph (playback continues from the same place).
+      const wasPlaying = this.playing
+      const at = this.position()
+      this.stopSources()
+      this.graph.dispose()
+      this.graph = null
+      this.build(this.ctx)
+      if (wasPlaying && !this.excerptActive) {
+        this.startOffset = at
+        this.startedAt = this.ctx.currentTime + 0.03
+        this.spawn(this.ctx, this.startedAt, at, undefined, this.loopRegion)
+      }
+      return
+    }
+    this.graph.update(this.mix, this.bpm)
+    this.graph.stemGains.forEach((g, i) => (g.gain.value = stemGain(this.mix!, this.backingNames[i])))
+  }
+
+  private build(ctx: AudioContext): void {
+    if (!this.voiceIn || !this.backingIn || !this.mix) return
+    this.graph = buildMixGraph(ctx, this.voiceIn, this.backingIn, ctx.destination, this.mix, this.bpm, { worklets: this.worklets, stems: this.backing.length })
+    this.builtKey = structureKey(this.mix)
+    this.graph.stemGains.forEach((g, i) => (g.gain.value = stemGain(this.mix!, this.backingNames[i])))
   }
 
   /** Builds the audio graph on first use. Must run from a user gesture. */
   private async ensure(): Promise<AudioContext> {
     await Tone.start()
     const ctx = Tone.getContext().rawContext as AudioContext
+    this.worklets = await ensureMixWorklet(ctx)
     if (!this.ctx || this.ctx !== ctx) {
       this.graph?.dispose()
       this.voiceIn?.disconnect()
@@ -82,16 +122,7 @@ export class MixPlayer {
       this.backingIn = ctx.createGain()
       this.graph = null
     }
-    if (!this.graph && this.voiceIn && this.backingIn && this.mix) {
-      this.graph = buildMixGraph(
-        ctx,
-        this.voiceIn,
-        this.backingIn,
-        ctx.destination,
-        this.mix,
-        this.bpm,
-      )
-    }
+    if (!this.graph) this.build(ctx)
     return ctx
   }
 
@@ -130,7 +161,7 @@ export class MixPlayer {
       this.sources.push(s)
     }
     if (this.voice) make(this.voice, this.voiceIn)
-    for (const b of this.backing) make(b, this.backingIn)
+    this.backing.forEach((b, i) => make(b, this.graph?.stemGains[i] ?? this.backingIn!))
   }
 
   /** Song position in seconds. */
@@ -215,6 +246,14 @@ export class MixPlayer {
         if (my !== this.gen) return
         const pass = passes[i]!
         onPass?.(i)
+        if (structureKey(pass.mix) !== this.builtKey && this.ctx) {
+          this.graph?.dispose()
+          this.graph = null
+          const live = this.mix
+          this.mix = pass.mix
+          this.build(this.ctx)
+          this.mix = live
+        }
         this.graph?.update(pass.mix, this.bpm)
         this.stopSources()
         this.spawn(ctx, ctx.currentTime + 0.05, region.start, dur, null)
@@ -239,6 +278,10 @@ export class MixPlayer {
 
   reduction(): number {
     return this.graph?.reduction() ?? 0
+  }
+
+  dynReduction(): ReturnType<MixGraph['dynReduction']> | null {
+    return this.graph?.dynReduction() ?? null
   }
 
   meters(): MixGraph['meters'] | null {

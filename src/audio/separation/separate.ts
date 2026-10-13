@@ -158,11 +158,12 @@ async function runMdx(
   backend: 'webgpu' | 'wasm',
   onProgress: (p: SeparationProgress) => void,
   signal?: AbortSignal,
+  workerCount?: number,
 ): Promise<{ vocals: [Float32Array, Float32Array]; workers: number; seconds: number; loadSeconds: number }> {
   const base = new URL((import.meta.env?.BASE_URL as string | undefined) ?? '/', window.location.href).href
   const total = left.length
   const { padded, chunks } = mdxPlan(total, VOCALS_OVERLAP)
-  const count = backend === 'webgpu' ? 1 : cpuWorkers()
+  const count = backend === 'webgpu' ? 1 : (workerCount ?? cpuWorkers())
   const batch = backend === 'webgpu' ? 2 : 1
   const label = backend === 'webgpu' ? '显卡加速' : `处理器 ${count} 路并行`
   const accL = new Float32Array(padded)
@@ -195,7 +196,11 @@ async function runMdx(
         w.postMessage(req, [...ls, ...rs].map((x) => x.buffer))
       }
       for (const w of workers) {
-        w.onerror = (e) => reject(new Error(e.message || '分轨进程出错。'))
+        // An error without a message: the worker died (out of memory, GPU lost) or could not load.
+        w.onerror = (e) => {
+          console.error('separation worker failed', e.message, e.filename, e.lineno)
+          reject(new WorkerCrashed(e.message || '', backend === 'webgpu' && done === 0))
+        }
         w.onmessage = (e: MessageEvent<MdxMessage>) => {
           const m = e.data
           if (m.type === 'error') reject(backend === 'webgpu' && done === 0 ? new GpuFailed(m.message) : new Error(m.message))
@@ -250,20 +255,44 @@ async function runMdx(
 }
 
 class GpuFailed extends Error {}
+/** The worker stopped without a usable error (crash, memory). */
+class WorkerCrashed extends Error {
+  constructor(
+    detail: string,
+    readonly gpu: boolean,
+  ) {
+    super(detail || '分轨进程意外退出')
+  }
+}
 
 /** Vocals and the rest, in this browser (MDX-Net vocals model). */
 async function vocalsInBrowser(file: File, onProgress: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<File[]> {
   onProgress({ phase: 'load', ratio: 0, text: '正在解码音频…' })
   const { left, right } = await decodeStereo(file, MDX_RATE)
   let backend: 'webgpu' | 'wasm' = (await gpuCanRun()) ? 'webgpu' : 'wasm'
-  let r: Awaited<ReturnType<typeof runMdx>>
-  try {
-    r = await runMdx(left, right, backend, onProgress, signal)
-  } catch (e) {
-    if (!(e instanceof GpuFailed)) throw e
-    onProgress({ phase: 'load', ratio: 0, text: '显卡加速没能启动，改用处理器计算…' })
-    backend = 'wasm'
-    r = await runMdx(left, right, backend, onProgress, signal)
+  let r: Awaited<ReturnType<typeof runMdx>> | null = null
+  // GPU → CPU (all workers) → CPU with 2 → CPU with 1: a crash (often memory) retries smaller.
+  const plans: Array<{ backend: 'webgpu' | 'wasm'; workers?: number }> = [...(backend === 'webgpu' ? [{ backend: 'webgpu' as const }] : []), { backend: 'wasm' }, { backend: 'wasm', workers: 2 }, { backend: 'wasm', workers: 1 }]
+  const seen = new Set<string>()
+  let lastErr: unknown = null
+  for (const plan of plans) {
+    const n = plan.backend === 'webgpu' ? 1 : (plan.workers ?? cpuWorkers())
+    const key = `${plan.backend}${n}`
+    if (seen.has(key)) continue
+    seen.add(key)
+    if (lastErr) onProgress({ phase: 'load', ratio: 0, text: plan.backend === 'wasm' && n === cpuWorkers() ? '显卡加速出了问题，改用处理器计算…' : `刚才的分轨进程意外退出（可能是内存不够），改用 ${n} 路重试…` })
+    try {
+      backend = plan.backend
+      r = await runMdx(left, right, plan.backend, onProgress, signal, plan.workers)
+      break
+    } catch (e) {
+      if (!(e instanceof GpuFailed) && !(e instanceof WorkerCrashed)) throw e
+      lastErr = e
+    }
+  }
+  if (!r) {
+    const detail = lastErr instanceof Error && lastErr.message !== '分轨进程意外退出' ? `（${lastErr.message}）` : ''
+    throw new Error(`分轨进程意外退出，换了几种方式也没成功${detail}。常见原因是内存不够：关掉其它占内存的网页或程序后重试；歌曲很长时可以先剪短一些。`)
   }
   recordTiming({ at: Date.now(), mode: 'vocals', engine: 'browser', backend, precision: 'fp16', threads: r.workers, seconds: r.seconds + r.loadSeconds, audioSeconds: left.length / MDX_RATE })
   onProgress({ phase: 'encode', ratio: 0, text: '正在保存分好的轨道…' })

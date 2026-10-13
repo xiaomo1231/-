@@ -1,6 +1,6 @@
 import { NavLink, Outlet } from 'react-router-dom'
 import { isAdmin } from '@/services/adminMode'
-import { Activity, BookOpen, Library, Disc3, FileMusic, Flame, Guitar, ListMusic, Mic, PenLine, Settings, SlidersHorizontal, Sparkles, WifiOff } from 'lucide-react'
+import { Activity, BookOpen, Headphones, Library, Disc3, FileMusic, Flame, Guitar, ListMusic, Mic, PenLine, Settings, SlidersHorizontal, Sparkles, WifiOff } from 'lucide-react'
 import { useOnline } from '@/features/pwa/useOnline'
 import { useProfileStore } from '@/features/profile/profileStore'
 import { INSTRUMENT_LABEL } from '@/entities/types'
@@ -17,6 +17,7 @@ const NAV = [
   { to: '/songs', label: '曲库', icon: ListMusic },
   { to: '/sheets', label: '我的谱子', icon: FileMusic },
   { to: '/library', label: '歌曲库', icon: Library },
+  { to: '/mixing', label: '后期课堂', icon: Headphones },
   { to: '/sing', label: '跟唱', icon: Mic },
   { to: '/portfolio', label: '作品集', icon: Disc3 },
   { to: '/skills', label: '技能地图', icon: Sparkles },
