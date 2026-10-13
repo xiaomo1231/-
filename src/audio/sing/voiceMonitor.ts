@@ -7,15 +7,23 @@
  */
 import { inputManager } from '@/audio/input/inputManager'
 import { reverbImpulse } from '@/audio/sing/mixChain'
+import { desktop, type NativeMonitorInfo } from '@/app/desktop'
 
 export interface MonitorSettings {
   on: boolean
   /** 0–1.5 */
   volume: number
   reverb: boolean
+  /** App only (0.23.0): monitor through the sound card driver instead of the browser. */
+  native: boolean
+  /** App only: 'wasapi', or 'asio:<driver name>'. */
+  nativeApi: string
 }
 
-export const MONITOR_DEFAULTS: MonitorSettings = { on: false, volume: 0.8, reverb: true }
+export const MONITOR_DEFAULTS: MonitorSettings = { on: false, volume: 0.8, reverb: true, native: true, nativeApi: 'wasapi' }
+
+/** What the monitor is doing now (shown under the monitor controls). */
+export type MonitorStatus = { kind: 'browser' } | { kind: 'native'; info: NativeMonitorInfo } | { kind: 'fallback'; reason: string }
 const STORE = 'groovelab:sing-monitor'
 
 export function loadMonitorSettings(): MonitorSettings {
@@ -38,12 +46,68 @@ export class VoiceMonitor {
   private nodes: AudioNode[] = []
   private out: GainNode | null = null
   private wet: GainNode | null = null
+  /** Settings the native monitor was started with ('' = not running natively). */
+  private nativeKey = ''
+  private starting: Promise<void> | null = null
+
+  constructor(private readonly onStatus: (s: MonitorStatus) => void = () => undefined) {}
 
   get running(): boolean {
-    return this.out !== null
+    return this.out !== null || this.nativeKey !== ''
   }
 
   start(s: MonitorSettings): void {
+    const app = desktop()
+    if (app && s.native) {
+      void this.startNative(s)
+      return
+    }
+    if (this.nativeKey) this.stopNative()
+    this.startBrowser(s)
+    this.onStatus({ kind: 'browser' })
+  }
+
+  /** Through the app's sound card driver; falls back to the browser monitor when that fails. */
+  private async startNative(s: MonitorSettings): Promise<void> {
+    const app = desktop()!
+    const key = s.nativeApi
+    await this.starting
+    if (this.nativeKey === key) {
+      void app.monitor.update({ volume: s.volume, reverb: s.reverb })
+      return
+    }
+    this.stopBrowser()
+    this.starting = (async () => {
+      try {
+        if (this.nativeKey) await app.monitor.stop()
+        const asio = key.startsWith('asio:') ? key.slice(5) : ''
+        const info = await app.monitor.start({
+          api: asio ? 'asio' : 'wasapi',
+          ...(asio ? { asioName: asio } : {}),
+          inputName: inputManager.current?.label ?? '',
+          outputName: await inputManager.outputLabel().catch(() => ''),
+          volume: s.volume,
+          reverb: s.reverb,
+        })
+        this.nativeKey = key
+        this.onStatus({ kind: 'native', info })
+      } catch (e) {
+        this.nativeKey = ''
+        this.startBrowser(s)
+        this.onStatus({ kind: 'fallback', reason: e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e) })
+      } finally {
+        this.starting = null
+      }
+    })()
+    await this.starting
+  }
+
+  private stopNative(): void {
+    this.nativeKey = ''
+    void desktop()?.monitor.stop().catch(() => undefined)
+  }
+
+  private startBrowser(s: MonitorSettings): void {
     if (this.out) return this.update(s)
     const bus = inputManager.bus
     const ctx = bus.context
@@ -87,6 +151,11 @@ export class VoiceMonitor {
   }
 
   stop(): void {
+    if (this.nativeKey) this.stopNative()
+    this.stopBrowser()
+  }
+
+  private stopBrowser(): void {
     try {
       inputManager.bus.disconnect(this.nodes[0]!)
     } catch {

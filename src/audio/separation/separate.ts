@@ -10,6 +10,7 @@
  *   six stems, slower; the 285 MB model is downloaded once from Hugging Face.
  */
 import { encodeWav } from '@/export/wav'
+import { NativeMdxWorker, nativeSeparation } from './nativeMdx'
 import { DEMUCS_RATE } from './chunks'
 import type { WorkerMessage, WorkerRequest } from './demucs.worker'
 import type { MdxMessage, MdxRequest } from './mdx.worker'
@@ -161,10 +162,12 @@ async function gpuCanRun(): Promise<boolean> {
  * Separate the song's chunks with a set of workers (one on the GPU, several on
  * the CPU) and blend them like UVR. Returns the vocals.
  */
+type MdxBackend = 'native' | 'webgpu' | 'wasm'
+
 async function runMdx(
   left: Float32Array,
   right: Float32Array,
-  backend: 'webgpu' | 'wasm',
+  backend: MdxBackend,
   onProgress: (p: SeparationProgress) => void,
   signal?: AbortSignal,
   workerCount?: number,
@@ -172,13 +175,13 @@ async function runMdx(
   const base = new URL((import.meta.env?.BASE_URL as string | undefined) ?? '/', window.location.href).href
   const total = left.length
   const { padded, chunks } = mdxPlan(total, VOCALS_OVERLAP)
-  const count = backend === 'webgpu' ? 1 : (workerCount ?? cpuWorkers())
-  const batch = backend === 'webgpu' ? 2 : 1
-  const label = backend === 'webgpu' ? '显卡加速' : `处理器 ${count} 路并行`
+  const count = backend === 'wasm' ? (workerCount ?? cpuWorkers()) : 1
+  const batch = backend === 'wasm' ? 1 : 2
+  let label = backend === 'native' ? '应用加速' : backend === 'webgpu' ? '显卡加速' : `处理器 ${count} 路并行`
   const accL = new Float32Array(padded)
   const accR = new Float32Array(padded)
   const div = new Float32Array(padded)
-  const workers = Array.from({ length: count }, () => new Worker(new URL('./mdx.worker.ts', import.meta.url), { type: 'module' }))
+  const workers = Array.from({ length: count }, () => (backend === 'native' ? (new NativeMdxWorker() as unknown as Worker) : new Worker(new URL('./mdx.worker.ts', import.meta.url), { type: 'module' })))
   const t0 = performance.now()
   let t1 = 0
   try {
@@ -209,13 +212,15 @@ async function runMdx(
         // An error without a message: the worker died (out of memory, GPU lost) or could not load.
         w.onerror = (e) => {
           console.error('separation worker failed', e.message, e.filename, e.lineno)
-          reject(new WorkerCrashed(e.message || '', backend === 'webgpu' && done === 0))
+          reject(new WorkerCrashed(e.message || '', backend !== 'wasm' && done === 0))
         }
         w.onmessage = (e: MessageEvent<MdxMessage>) => {
           const m = e.data
-          if (m.type === 'error') reject(backend === 'webgpu' && done === 0 ? new GpuFailed(m.message) : new Error(m.message))
+          if (m.type === 'error') reject(backend !== 'wasm' && done === 0 ? new GpuFailed(m.message) : new Error(m.message))
           else if (m.type === 'progress') onProgress({ phase: 'download', ratio: m.ratio, text: '正在读取人声模型…' })
           else if (m.type === 'ready') {
+            const provider = (m as { provider?: 'dml' | 'cpu' }).provider
+            if (provider) label = provider === 'dml' ? '应用 · 显卡加速' : '应用 · 处理器全部核心'
             if (++ready === count) {
               t1 = performance.now()
               onProgress({ phase: 'separate', ratio: 0, text: `正在分离人声（${label}）… 0%` })
@@ -254,7 +259,7 @@ async function runMdx(
             } else send(w)
           }
         }
-        const init: MdxRequest = { type: 'init', base, modelUrl: `${base}${VOCALS_MODEL_PATH}`, backend }
+        const init: MdxRequest = { type: 'init', base, modelUrl: `${base}${VOCALS_MODEL_PATH}`, backend: backend === 'native' ? 'webgpu' : backend }
         w.postMessage(init)
       }
       onProgress({ phase: 'load', ratio: 0, text: `正在准备模型（${label}）…` })
@@ -280,19 +285,31 @@ async function vocalsInBrowser(file: File, onProgress: (p: SeparationProgress) =
   onProgress({ phase: 'load', ratio: 0, text: '正在解码音频…' })
   const { left, right } = await decodeStereo(file, MDX_RATE)
   throwIfAborted(signal)
-  let backend: 'webgpu' | 'wasm' = (await gpuCanRun()) ? 'webgpu' : 'wasm'
+  const gpu = await gpuCanRun()
+  let backend: MdxBackend = nativeSeparation() ? 'native' : gpu ? 'webgpu' : 'wasm'
   let r: Awaited<ReturnType<typeof runMdx>> | null = null
-  // GPU → CPU (all workers) → CPU with 2 → CPU with 1: a crash (often memory) retries smaller.
-  const plans: Array<{ backend: 'webgpu' | 'wasm'; workers?: number }> = [...(backend === 'webgpu' ? [{ backend: 'webgpu' as const }] : []), { backend: 'wasm' }, { backend: 'wasm', workers: 2 }, { backend: 'wasm', workers: 1 }]
+  // (App →) GPU → CPU (all workers) → CPU with 2 → CPU with 1: a crash (often memory) retries smaller.
+  const plans: Array<{ backend: MdxBackend; workers?: number }> = [
+    ...(nativeSeparation() ? [{ backend: 'native' as const }] : []),
+    ...(gpu ? [{ backend: 'webgpu' as const }] : []),
+    { backend: 'wasm' },
+    { backend: 'wasm', workers: 2 },
+    { backend: 'wasm', workers: 1 },
+  ]
   const seen = new Set<string>()
   let lastErr: unknown = null
   for (const plan of plans) {
-    const n = plan.backend === 'webgpu' ? 1 : (plan.workers ?? cpuWorkers())
+    const n = plan.backend === 'wasm' ? (plan.workers ?? cpuWorkers()) : 1
     const key = `${plan.backend}${n}`
     if (seen.has(key)) continue
     seen.add(key)
     throwIfAborted(signal)
-    if (lastErr) onProgress({ phase: 'load', ratio: 0, text: plan.backend === 'wasm' && n === cpuWorkers() ? '显卡加速出了问题，改用处理器计算…' : `刚才的分轨进程意外退出（可能是内存不够），改用 ${n} 路重试…` })
+    if (lastErr)
+      onProgress({
+        phase: 'load',
+        ratio: 0,
+        text: plan.backend === 'webgpu' ? '应用加速出了问题，改用浏览器的显卡加速…' : plan.backend === 'wasm' && n === cpuWorkers() ? '显卡加速出了问题，改用处理器计算…' : `刚才的分轨进程意外退出（可能是内存不够），改用 ${n} 路重试…`,
+      })
     try {
       backend = plan.backend
       r = await runMdx(left, right, plan.backend, onProgress, signal, plan.workers)
@@ -368,7 +385,8 @@ async function viaBrowser(file: File, onProgress: (p: SeparationProgress) => voi
 /** Separate a recording into stems. Uses the local helper when it is running, unless `engine` says otherwise. */
 export async function separateFile(file: File, opts: { engine?: Engine; mode?: SeparationMode; onProgress: (p: SeparationProgress) => void; signal?: AbortSignal }): Promise<{ files: File[]; engine: Engine }> {
   opts.onProgress({ phase: 'connect', ratio: 0, text: '正在查找本机分轨服务…' })
-  const engine = opts.engine ?? ((await helperStatus()) ? 'local' : 'browser')
+  // The app separates by itself (as fast as the helper on a graphics card); the helper is for the browser version.
+  const engine = opts.engine ?? (nativeSeparation() ? 'browser' : (await helperStatus()) ? 'local' : 'browser')
   throwIfAborted(opts.signal)
   const t0 = performance.now()
   if (engine === 'local') {

@@ -9,7 +9,7 @@ import { loadPitchCurve } from '@/audio/backing/pitchCurve'
 import { detector } from '@/audio/pitch/detector'
 import { rawTime } from '@/audio/engine'
 import { SongClock, VoiceRecorder, encodeTake } from '@/audio/sing/voiceRecorder'
-import { VoiceMonitor, loadMonitorSettings, saveMonitorSettings, type MonitorSettings } from '@/audio/sing/voiceMonitor'
+import { VoiceMonitor, loadMonitorSettings, saveMonitorSettings, type MonitorSettings, type MonitorStatus } from '@/audio/sing/voiceMonitor'
 import { notesOf, scoreNotes, steadyLag, toTakeScore, type NoteScore, type Phrase, type PitchCurve, type RefNote, type SungSample } from '@/songs/singAlong'
 import type { StemKind } from '@/songs/backingSync'
 import { autoPhrases, groupTakes, phrasesFromLyrics, phrasesFromRanges, sameStretch, takeFitsPhrase, type PhraseRange, type PhraseSource } from '@/songs/phrasing'
@@ -164,13 +164,14 @@ export function useSingSession(source: SingSource) {
   // 监听: hear yourself in the headphones while the microphone is on.
   const [monitor, setMonitorState] = useState<MonitorSettings>(loadMonitorSettings)
   const monitorRef = useRef<VoiceMonitor | null>(null)
+  const [monitorStatus, setMonitorStatus] = useState<MonitorStatus | null>(null)
   useEffect(() => {
     saveMonitorSettings(monitor)
     if (mic !== 'on' || !monitor.on) {
       monitorRef.current?.stop()
       return
     }
-    monitorRef.current ??= new VoiceMonitor()
+    monitorRef.current ??= new VoiceMonitor(setMonitorStatus)
     monitorRef.current.start(monitor)
   }, [mic, monitor])
   useEffect(() => () => monitorRef.current?.stop(), [])
@@ -370,6 +371,7 @@ export function useSingSession(source: SingSource) {
     mic,
     micError,
     monitor,
+    monitorStatus,
     setMonitor,
     startMic,
     samples,

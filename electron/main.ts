@@ -1,0 +1,244 @@
+/**
+ * 律动工坊 应用版 (0.23.0): the built site (dist/) in its own window, plus
+ * what a browser cannot do — the vocals model on the graphics card through
+ * onnxruntime-node (DirectML), low-latency monitoring through the sound card
+ * driver, and folders / microphone without asking every time.
+ *
+ * The page is served from app://groovelab/ (a fixed origin, so its stored
+ * data never "disappears" the way a changed port would make it).
+ */
+import { app, BrowserWindow, ipcMain, Menu, net, protocol, session, shell } from 'electron'
+import { existsSync, statSync } from 'node:fs'
+import { cpus } from 'node:os'
+import path from 'node:path'
+import { pathToFileURL } from 'node:url'
+import { Worker } from 'node:worker_threads'
+
+const ORIGIN = 'app://groovelab'
+const here = __dirname
+/** Built site: next to the main script when packaged (web/), else the project's dist/. */
+const webRoot = existsSync(path.join(here, '..', 'web', 'index.html'))
+  ? path.join(here, '..', 'web')
+  : path.join(here, '..', 'dist')
+
+protocol.registerSchemesAsPrivileged([
+  {
+    scheme: 'app',
+    privileges: {
+      standard: true,
+      secure: true,
+      supportFetchAPI: true,
+      corsEnabled: true,
+      stream: true,
+      codeCache: true,
+    },
+  },
+])
+app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
+// Same data folder however the app is started (%APPDATA%\GrooveLab).
+app.setPath('userData', path.join(app.getPath('appData'), 'GrooveLab'))
+
+const TYPES: Record<string, string> = {
+  '.html': 'text/html; charset=utf-8',
+  '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.css': 'text/css; charset=utf-8',
+  '.json': 'application/json',
+  '.webmanifest': 'application/manifest+json',
+  '.svg': 'image/svg+xml',
+  '.png': 'image/png',
+  '.ico': 'image/x-icon',
+  '.wasm': 'application/wasm',
+  '.onnx': 'application/octet-stream',
+  '.mp3': 'audio/mpeg',
+  '.wav': 'audio/wav',
+  '.ogg': 'audio/ogg',
+  '.sf2': 'application/octet-stream',
+  '.woff2': 'font/woff2',
+  '.map': 'application/json',
+}
+
+/** A file of the site; unknown paths without an extension are app routes (index.html). */
+async function serve(req: Request): Promise<Response> {
+  const url = new URL(req.url)
+  const rel = decodeURIComponent(url.pathname).replace(/^\/+/, '')
+  let file = path.normalize(path.join(webRoot, rel))
+  if (!file.startsWith(webRoot)) return new Response('forbidden', { status: 403 })
+  // No service worker in the app: the files are already on this computer.
+  if (rel === 'sw.js') return new Response('', { status: 404 })
+  if (!existsSync(file) || statSync(file).isDirectory()) {
+    if (path.extname(rel)) return new Response('not found', { status: 404 })
+    file = path.join(webRoot, 'index.html')
+  }
+  const res = await net.fetch(pathToFileURL(file).href)
+  const headers = new Headers({
+    'content-type': TYPES[path.extname(file).toLowerCase()] ?? 'application/octet-stream',
+    'cache-control': 'no-cache',
+  })
+  const len = res.headers.get('content-length')
+  if (len) headers.set('content-length', len)
+  return new Response(res.body, { status: 200, headers })
+}
+
+// ---- Workers ----------------------------------------------------------------
+
+/** A worker thread answering {id, …} requests with {id, ok, …}. */
+class Port {
+  private worker: Worker | null = null
+  private next = 1
+  private waiting = new Map<
+    number,
+    { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }
+  >()
+  constructor(
+    private readonly script: string,
+    private readonly data: unknown = undefined,
+  ) {}
+  private get w(): Worker {
+    if (this.worker) return this.worker
+    const w = new Worker(path.join(here, this.script), { workerData: this.data })
+    w.on('message', (m: { id?: number; ok?: boolean; message?: string }) => {
+      if (m.id === undefined) return
+      const p = this.waiting.get(m.id)
+      if (!p) return
+      this.waiting.delete(m.id)
+      if (m.ok) p.resolve(m as Record<string, unknown>)
+      else p.reject(new Error(m.message ?? '出错了'))
+    })
+    const die = (e: Error) => {
+      for (const p of this.waiting.values()) p.reject(e)
+      this.waiting.clear()
+      this.worker = null
+    }
+    w.on('error', die)
+    w.on('exit', (code) => code !== 0 && die(new Error(`后台进程意外退出（${code}）`)))
+    this.worker = w
+    return w
+  }
+  ask(
+    req: Record<string, unknown>,
+    transfer: ArrayBuffer[] = [],
+  ): Promise<Record<string, unknown>> {
+    const id = this.next++
+    return new Promise((resolve, reject) => {
+      this.waiting.set(id, { resolve, reject })
+      this.w.postMessage({ ...req, id }, transfer)
+    })
+  }
+  async close(): Promise<void> {
+    const w = this.worker
+    this.worker = null
+    await w?.terminate()
+  }
+}
+
+const modelPath = path.join(webRoot, 'models', 'vocals-mdx-fp16.onnx')
+let separator: Port | null = null
+const monitor = new Port('monitor.cjs')
+
+ipcMain.handle('mdx:init', async () => {
+  if (!existsSync(modelPath)) throw new Error('应用里没有找到人声模型文件。')
+  separator ??= new Port('separator.cjs', { modelPath, cores: cpus().length })
+  const r = await separator.ask({ type: 'init' })
+  return { provider: r.provider }
+})
+ipcMain.handle('mdx:run', async (_e, left: Float32Array[], right: Float32Array[]) => {
+  if (!separator) throw new Error('分轨模型还没准备好。')
+  const r = await separator.ask(
+    { type: 'run', left, right },
+    [...new Set([...left, ...right].map((x) => x.buffer as ArrayBuffer))],
+  )
+  return { left: r.left, right: r.right }
+})
+ipcMain.handle('mdx:dispose', async () => {
+  await separator?.close()
+  separator = null
+})
+ipcMain.handle('monitor:devices', async () => (await monitor.ask({ type: 'devices' })).value)
+ipcMain.handle(
+  'monitor:start',
+  async (_e, s: Record<string, unknown>) => (await monitor.ask({ type: 'start', ...s })).value,
+)
+ipcMain.handle(
+  'monitor:update',
+  async (_e, s: Record<string, unknown>) => void (await monitor.ask({ type: 'update', ...s })),
+)
+ipcMain.handle('monitor:stats', async () => (await monitor.ask({ type: 'stats' })).value)
+ipcMain.handle('monitor:stop', async () => void (await monitor.ask({ type: 'stop' })))
+ipcMain.on('app:version', (e) => {
+  e.returnValue = app.getVersion()
+})
+
+// ---- Window -----------------------------------------------------------------
+
+function createWindow(): void {
+  const win = new BrowserWindow({
+    width: 1440,
+    height: 920,
+    minWidth: 900,
+    minHeight: 600,
+    title: '律动工坊',
+    backgroundColor: '#0b0f17',
+    icon: path.join(webRoot, 'icons', 'icon-512.png'),
+    autoHideMenuBar: true,
+    webPreferences: {
+      preload: path.join(here, 'preload.cjs'),
+      contextIsolation: true,
+      sandbox: true,
+      nodeIntegration: false,
+    },
+  })
+  // Links to other sites open in the normal browser.
+  win.webContents.setWindowOpenHandler(({ url }) => {
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+    return { action: 'deny' }
+  })
+  win.webContents.on('will-navigate', (e, url) => {
+    if (
+      url.startsWith(ORIGIN) ||
+      (process.env.GROOVELAB_DEV_URL && url.startsWith(process.env.GROOVELAB_DEV_URL))
+    )
+      return
+    e.preventDefault()
+    if (/^https?:/i.test(url)) void shell.openExternal(url)
+  })
+  win.webContents.on('before-input-event', (_e, input) => {
+    if (input.type === 'keyDown' && input.key === 'F12') win.webContents.toggleDevTools()
+  })
+  // GROOVELAB_DEV_URL=http://localhost:5174 shows the dev server instead (developing the app parts).
+  void win.loadURL(process.env.GROOVELAB_DEV_URL ?? `${ORIGIN}/`)
+}
+
+if (!app.requestSingleInstanceLock()) app.quit()
+else {
+  app.on('second-instance', () => {
+    const w = BrowserWindow.getAllWindows()[0]
+    if (w) {
+      if (w.isMinimized()) w.restore()
+      w.focus()
+    }
+  })
+  void app.whenReady().then(() => {
+    Menu.setApplicationMenu(null)
+    protocol.handle('app', serve)
+    // Microphone and the folders the student chose: allowed without asking again.
+    const allowed = new Set([
+      'media',
+      'fileSystem',
+      'clipboard-sanitized-write',
+      'clipboard-read',
+      'notifications',
+      'fullscreen',
+      'persistent-storage',
+    ])
+    session.defaultSession.setPermissionRequestHandler((_wc, permission, done) =>
+      done(allowed.has(permission)),
+    )
+    session.defaultSession.setPermissionCheckHandler((_wc, permission) => allowed.has(permission))
+    createWindow()
+  })
+  app.on('window-all-closed', () => {
+    void monitor.ask({ type: 'stop' }).catch(() => undefined)
+    app.quit()
+  })
+}

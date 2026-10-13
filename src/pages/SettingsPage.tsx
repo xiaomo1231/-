@@ -2,7 +2,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import { isAdmin } from '@/services/adminMode'
 import { AdminPanel } from '@/widgets/settings/AdminPanel'
 import { useNavigate } from 'react-router-dom'
-import { Upload, Download, Guitar, KeyRound, Mic, Moon, Piano, RotateCcw, Sun, Trash2, CircleSlash } from 'lucide-react'
+import { Loader2, Upload, Download, Guitar, KeyRound, Mic, Moon, Piano, RotateCcw, Sun, Trash2, CircleSlash } from 'lucide-react'
 import { RangeCalibration } from '@/widgets/pitch/RangeCalibration'
 import { BadgeService } from '@/services/badgeService'
 import { midiToName } from '@/music/pitch'
@@ -10,6 +10,8 @@ import { INSTRUMENT_LABEL, type InstrumentId } from '@/entities/types'
 import { ProfileService } from '@/services/profileService'
 import { SettingsService } from '@/services/settingsService'
 import { ImportError, exportAllData, importAllData, parseBackup, resetAllData } from '@/services/dataService'
+import { FullBackupError, exportFullBackup, isFullBackup, restoreFullBackup, summarizeFullBackup, type FullBackupSummary } from '@/services/fullBackup'
+import { desktop } from '@/app/desktop'
 import { useProfileStore } from '@/features/profile/profileStore'
 import { toast } from '@/features/toast/toastStore'
 import { PROVIDER_PRESETS, createProvider, getPreset, type AIProviderId } from '@/infrastructure/ai/presets'
@@ -32,6 +34,8 @@ export function SettingsPage() {
   const [confirmReset, setConfirmReset] = useState(false)
   const [calibrating, setCalibrating] = useState(false)
   const [pendingImport, setPendingImport] = useState<{ text: string; name: string; works: number; attempts: number } | null>(null)
+  const [pendingFull, setPendingFull] = useState<{ file: File; summary: FullBackupSummary } | null>(null)
+  const [fullBusy, setFullBusy] = useState<'export' | 'restore' | null>(null)
   const fileInput = useRef<HTMLInputElement>(null)
 
   // Links like /settings#ai jump to that section.
@@ -254,19 +258,50 @@ export function SettingsPage() {
           >
             <Download /> 导出练习数据
           </Button>
+          <Button
+            variant="outline"
+            disabled={fullBusy !== null}
+            onClick={async () => {
+              setFullBusy('export')
+              try {
+                const blob = await exportFullBackup(desktop()?.version ?? 'web')
+                const url = URL.createObjectURL(blob)
+                const a = document.createElement('a')
+                a.href = url
+                a.download = `groovelab-完整备份-${new Date().toISOString().slice(0, 10)}.glbackup`
+                a.click()
+                setTimeout(() => URL.revokeObjectURL(url), 60_000)
+                toast({ title: `完整备份已导出（${(blob.size / 1048576).toFixed(0)} MB）`, variant: 'success' })
+              } catch (err) {
+                toast({ title: '没能导出完整备份', description: err instanceof Error ? err.message : String(err), variant: 'error' })
+              } finally {
+                setFullBusy(null)
+              }
+            }}
+          >
+            {fullBusy === 'export' ? <Loader2 className="animate-spin" /> : <Download />} 导出完整备份（含音频）
+          </Button>
           <Button variant="outline" onClick={() => fileInput.current?.click()}>
             <Upload /> 从备份恢复
           </Button>
           <input
             ref={fileInput}
             type="file"
-            accept="application/json,.json"
+            accept="application/json,.json,.glbackup"
             className="hidden"
             aria-label="选择备份文件"
             onChange={async (e) => {
               const file = e.target.files?.[0]
               e.target.value = ''
               if (!file) return
+              if (await isFullBackup(file)) {
+                try {
+                  setPendingFull({ file, summary: await summarizeFullBackup(file) })
+                } catch (err) {
+                  toast({ title: '不能恢复这个文件', description: err instanceof FullBackupError ? err.message : String(err), variant: 'error' })
+                }
+                return
+              }
               const text = await file.text()
               try {
                 const { counts } = parseBackup(text)
@@ -280,7 +315,7 @@ export function SettingsPage() {
             <Trash2 /> 清空全部数据
           </Button>
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">所有数据只存在这台电脑的浏览器里。换浏览器或清除站点数据前，请先导出备份。导出文件包含练习记录、课程进度、作品和版本历史，不包含 API 密钥。</p>
+        <p className="mt-3 text-xs text-muted-foreground">所有数据只存在这台电脑的浏览器里。换浏览器或清除站点数据前，请先导出备份。「导出练习数据」包含练习记录、课程进度、作品和版本历史；「完整备份」另外包含导入的谱子、原曲和分轨、跟唱歌曲、录音和翻唱作品，用来搬到应用版或另一台电脑（歌曲库文件夹需要重新添加）。都不包含 API 密钥。</p>
       </Section>
 
       <Dialog open={pendingImport !== null} onOpenChange={(o) => !o && setPendingImport(null)}>
@@ -308,6 +343,40 @@ export function SettingsPage() {
               }}
             >
               确认导入
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={pendingFull !== null} onOpenChange={(o) => !o && fullBusy === null && setPendingFull(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>用完整备份替换现在的全部数据？</DialogTitle>
+            <DialogDescription>
+              「{pendingFull?.file.name}」（{((pendingFull?.summary.bytes ?? 0) / 1048576).toFixed(0)} MB，{pendingFull?.summary.exportedAt.slice(0, 10)} 导出）包含 {pendingFull?.summary.counts.compositions ?? 0} 首作品、{pendingFull?.summary.counts.drillAttempts ?? 0} 条练习记录、{pendingFull?.summary.counts.songSheets ?? 0} 份谱子、{pendingFull?.summary.counts.singSongs ?? 0} 首跟唱歌曲、{pendingFull?.summary.counts.singTakes ?? 0} 段录音。恢复会替换这台电脑上现有的全部数据（AI 设置和歌曲库文件夹保留），无法撤销。
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="ghost" disabled={fullBusy !== null} onClick={() => setPendingFull(null)}>
+              取消
+            </Button>
+            <Button
+              disabled={fullBusy !== null}
+              onClick={async () => {
+                if (!pendingFull) return
+                setFullBusy('restore')
+                try {
+                  await restoreFullBackup(pendingFull.file)
+                  window.location.assign('/camp')
+                } catch (err) {
+                  setPendingFull(null)
+                  toast({ title: '恢复失败，数据没有改变', description: err instanceof Error ? err.message : String(err), variant: 'error' })
+                } finally {
+                  setFullBusy(null)
+                }
+              }}
+            >
+              {fullBusy === 'restore' ? <Loader2 className="animate-spin" /> : null} 确认恢复
             </Button>
           </DialogFooter>
         </DialogContent>

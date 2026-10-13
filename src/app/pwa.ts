@@ -8,6 +8,8 @@ import { logger } from '@/infrastructure/logger/logger'
  */
 export function setupServiceWorker(): void {
   if (!('serviceWorker' in navigator)) return
+  // The app (Electron) has its files on disk already.
+  if ((window as unknown as { groovelab?: unknown }).groovelab) return
   if (!import.meta.env.PROD) {
     void navigator.serviceWorker.getRegistrations().then((regs) => regs.forEach((r) => void r.unregister()))
     return

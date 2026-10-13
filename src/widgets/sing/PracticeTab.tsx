@@ -14,6 +14,7 @@ import { SingService } from '@/services/singService'
 import { uuid } from '@/infrastructure/crypto/crypto'
 import { lyricsInPhrase as lyricOf } from '@/songs/phrasing'
 import { LyricsDisplay } from './LyricsDisplay'
+import { NativeMonitorControls } from './NativeMonitorControls'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
 
@@ -459,6 +460,7 @@ export function PracticeTab() {
                     <input type="checkbox" checked={s.monitor.reverb} onChange={(e) => s.setMonitor({ reverb: e.target.checked })} className="accent-[hsl(var(--amber))]" />
                     加一点混响
                   </label>
+                  <NativeMonitorControls monitor={s.monitor} setMonitor={s.setMonitor} />
                 </>
               )}
             </div>
@@ -483,7 +485,15 @@ export function PracticeTab() {
         />
       )}
       {s.mic === 'on' && s.monitor.on && (
-        <p className="text-xs text-muted-foreground">监听已开：请一定戴耳机（用外放会啸叫）。浏览器里的监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；录音和评分不受影响。</p>
+        <p className="text-xs text-muted-foreground">
+          监听已开：请一定戴耳机（用外放会啸叫）。
+          {s.monitorStatus?.kind === 'native'
+            ? `低延迟监听（${s.monitorStatus.info.api}，${s.monitorStatus.info.input} → ${s.monitorStatus.info.output}），延迟约 ${s.monitorStatus.info.latencyMs} 毫秒。`
+            : s.monitorStatus?.kind === 'fallback'
+              ? `低延迟监听没能打开（${s.monitorStatus.reason}），先用普通监听，会有一点延迟（通常 20–60 毫秒）。`
+              : '浏览器里的监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；'}
+          录音和评分不受影响。
+        </p>
       )}
       {s.lagNotice !== null && (
         <p className="rounded-xl border border-amber/40 bg-amber-soft/20 px-3 py-2 text-sm">

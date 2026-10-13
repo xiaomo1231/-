@@ -27,3 +27,7 @@ public/models/
 
 # LDDC (the student's own lyric downloader and lyrics, never committed)
 LDDC-*/
+
+# desktop app build output
+electron-dist/
+build/
