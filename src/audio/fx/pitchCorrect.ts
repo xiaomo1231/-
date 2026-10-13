@@ -35,7 +35,32 @@ export interface TuneOptions {
   speedMs: number
   /** Allowed pitch classes 0–11 (C=0). Undefined = chromatic (all 12). */
   scale?: number[]
+  /**
+   * Target note per moment instead of the nearest allowed semitone (e.g. the
+   * original singer's note): given the time (ms in the recording) and the
+   * sung note's centre (MIDI), the MIDI note to pull toward, or null to leave
+   * that moment alone.
+   */
+  target?: (ms: number, centreMidi: number) => number | null
+  /** Largest correction in semitones (default 1). */
+  maxShift?: number
+  /** Filled in with what was done (for a before / after summary). */
+  stats?: TuneStats
 }
+
+export interface TuneStats {
+  /** Voiced frames looked at. */
+  frames: number
+  /** Frames that had a target and were moved. */
+  corrected: number
+  /** Frames left alone (no target / too far from it). */
+  skipped: number
+  /** Sum of |target − centre| in cents over corrected frames, before and after. */
+  centsBefore: number
+  centsAfter: number
+}
+
+export const emptyStats = (): TuneStats => ({ frames: 0, corrected: 0, skipped: 0, centsBefore: 0, centsAfter: 0 })
 
 const MAJOR = [0, 2, 4, 5, 7, 9, 11]
 const MINOR = [0, 2, 3, 5, 7, 8, 10]
@@ -140,7 +165,7 @@ function runs(midi: Float64Array): Array<[number, number]> {
 }
 
 /** Step 2: per-frame shift in semitones for one run (frames a..b), smoothed. */
-function shiftCurve(midi: Float64Array, a: number, b: number, hop: number, sr: number, opts: TuneOptions, allowed: boolean[]): Float64Array {
+function shiftCurve(midi: Float64Array, centre: Float64Array, a: number, b: number, hop: number, sr: number, opts: TuneOptions, allowed: boolean[]): Float64Array {
   const n = b - a + 1
   const half = Math.max(1, Math.round((CENTRE_S * sr) / hop / 2))
   const amount = Math.min(1, Math.max(0, opts.amount))
@@ -149,8 +174,22 @@ function shiftCurve(midi: Float64Array, a: number, b: number, hop: number, sr: n
     const nb: number[] = []
     for (let j = Math.max(0, i - half); j <= Math.min(n - 1, i + half); j++) nb.push(midi[a + j]!)
     const c = median(nb)
-    const s = amount * (nearestAllowed(c, allowed) - c)
-    shift[i] = Math.max(-MAX_SHIFT_SEMITONES, Math.min(MAX_SHIFT_SEMITONES, s))
+    const max = opts.maxShift ?? MAX_SHIFT_SEMITONES
+    const target = opts.target ? opts.target((centre[a + i]! / sr) * 1000, c) : nearestAllowed(c, allowed)
+    const st = opts.stats
+    if (st) st.frames++
+    if (target === null || Math.abs(target - c) > max + 1e-9) {
+      shift[i] = 0
+      if (st) st.skipped++
+      continue
+    }
+    const s = amount * (target - c)
+    shift[i] = Math.max(-max, Math.min(max, s))
+    if (st) {
+      st.corrected++
+      st.centsBefore += Math.abs(target - c) * 100
+      st.centsAfter += Math.abs(target - c - shift[i]!) * 100
+    }
   }
   if (opts.speedMs > 0) {
     // Zero-phase one-pole (forward then backward), starting from the run's own ends.
@@ -198,7 +237,7 @@ export function correctPitch(samples: Float32Array, sampleRate: number, opts: Tu
   const fadeLen = Math.max(1, Math.round(FADE_S * sampleRate))
 
   for (const [a, b] of runs(midi)) {
-    const shift = shiftCurve(midi, a, b, hop, sampleRate, opts, allowed)
+    const shift = shiftCurve(midi, centre, a, b, hop, sampleRate, opts, allowed)
     if (shift.every((s) => Math.abs(s) < 1e-6)) continue
     const pitch = midi.slice(a, b + 1)
     const periodAt = (t: number): number => sampleRate / (440 * 2 ** ((frameInterp(pitch, centre, a, t, hop) - 69) / 12))

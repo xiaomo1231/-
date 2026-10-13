@@ -141,6 +141,7 @@ export const CONTROLS: Record<string, ControlSpec> = {
   'vocal.tune.on': sw('音高修正开关'),
   'vocal.tune.amount': pct('修正力度'),
   'vocal.tune.speedMs': num('修正速度（越小越快、越像电音）', 0, 400, 1, 'ms', { digits: 0 }),
+  'vocal.tune.range': num('最多拉多远（超过就当成故意唱的，不拉）', 0.5, 6, 0.5, '半音', { digits: 1 }),
   'backing.gainDb': db('伴奏音量'),
   'backing.eq.on': sw('伴奏 EQ 开关'),
   'backing.eq.lowDb': db('伴奏低频', -15, 15),

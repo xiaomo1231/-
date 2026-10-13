@@ -7,6 +7,12 @@ import { audioNow, playBuffer, stopTake, takeBuffer } from '@/audio/sing/takePla
 import { lyricsInPhrase, mergeWithPrevious, splitAt, splitPoint, takeFitsPhrase } from '@/songs/phrasing'
 import { PitchLane } from './PitchLane'
 import { RestartDialog } from './RestartDialog'
+import { RunBanner, RunReportCard, type RunReport } from './FullRun'
+import { assembleVoice, type VoicePiece } from '@/songs/compAssembly'
+import { encodeTake } from '@/audio/sing/voiceRecorder'
+import { SingService } from '@/services/singService'
+import { uuid } from '@/infrastructure/crypto/crypto'
+import { lyricsInPhrase as lyricOf } from '@/songs/phrasing'
 import { LyricsDisplay } from './LyricsDisplay'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
@@ -57,6 +63,118 @@ export function PracticeTab() {
   const lyrics = useMemo(() => meta?.lyrics ?? [], [meta?.lyrics])
 
   const [restartOpen, setRestartOpen] = useState(false)
+
+  // ---- 整首重新开始: sing the whole song from the top -------------------------
+  const [run, setRun] = useState<{ phase: 'countdown' | 'running' | 'paused'; countdown: number; startedAt: number } | null>(null)
+  const runRef = useRef(run)
+  runRef.current = run
+  const runPieces = useRef<VoicePiece[]>([])
+  const runSegStart = useRef(0)
+  const [runReport, setRunReport] = useState<RunReport | null>(null)
+  const scorableCount = useMemo(() => phrases.filter((p) => isScorable(notesIn(notes, p))).length, [phrases, notes])
+  /** Phrase takes sung during this run (the newest per phrase). */
+  const runTakes = useMemo(() => {
+    if (!run) return []
+    const out: SessionTake[] = []
+    for (const [k, list] of Object.entries(takes)) {
+      if (Number(k) < 0) continue
+      const t = list.find((x) => x.createdAt >= run.startedAt && x.score)
+      if (t) out.push(t)
+    }
+    return out
+  }, [run, takes])
+  const runAvg = runTakes.length ? runTakes.reduce((t, x) => t + x.score!.score, 0) / runTakes.length : null
+
+  const startRun = async () => {
+    if (previewRef.current) stopPreview()
+    setRunReport(null)
+    setLoop(false)
+    if (s.mic !== 'on') await s.startMic()
+    s.pause()
+    s.clearSamples(0, Infinity)
+    scored.current.clear()
+    runPieces.current = []
+    runSegStart.current = 0
+    player.current?.seek(0)
+    setPhraseIdx(0)
+    const startedAt = Date.now()
+    for (let c = 3; c > 0; c--) {
+      setRun({ phase: 'countdown', countdown: c, startedAt })
+      await new Promise((r) => setTimeout(r, 1000))
+      if (!runRef.current) return
+    }
+    setRun({ phase: 'running', countdown: 0, startedAt })
+    s.play(0)
+  }
+  const cutSegment = () => {
+    const end = player.current?.positionMs() ?? 0
+    const cut = s.cutRecording(runSegStart.current, end)
+    if (cut && cut.samples.length) runPieces.current.push({ samples: cut.samples, sampleRate: cut.sampleRate, startMs: cut.startMs })
+  }
+  const pauseRun = () => {
+    if (!run || run.phase !== 'running') return
+    cutSegment()
+    s.pause()
+    setRun({ ...run, phase: 'paused' })
+  }
+  const resumeRun = () => {
+    if (!run || run.phase !== 'paused') return
+    runSegStart.current = player.current?.positionMs() ?? 0
+    s.play()
+    setRun({ ...run, phase: 'running' })
+  }
+  /** End of the run (the song ended or 结束 was pressed): whole-song take into 完整版, then the report. */
+  const finishRun = async () => {
+    const r = runRef.current
+    if (!r) return
+    if (r.phase === 'running') cutSegment()
+    s.pause()
+    setRun(null)
+    if (r.phase === 'countdown') return
+    const RATE = 44100
+    let savedToFull = false
+    const pieces = runPieces.current
+    if (pieces.length) {
+      const endMs = Math.max(...pieces.map((p) => p.startMs + (p.samples.length / p.sampleRate) * 1000))
+      const voice = assembleVoice(pieces, endMs, RATE, 10)
+      const scores = runTakes.map((t) => t.score!)
+      const mean = scores.length ? scores.reduce((a, b) => a + b.score, 0) / scores.length : 0
+      const take: SessionTake = {
+        id: uuid(),
+        key: s.source.key,
+        phrase: -1,
+        createdAt: Date.now(),
+        score: scores.length
+          ? { score: mean, notesSung: scores.reduce((a, b) => a + b.notesSung, 0), notesTotal: scores.reduce((a, b) => a + b.notesTotal, 0), meanAbsCents: Math.round(scores.reduce((a, b) => a + b.meanAbsCents, 0) / scores.length), biasCents: Math.round(scores.reduce((a, b) => a + b.biasCents, 0) / scores.length), lagMs: 0, octaveShift: 0, noteCents: [] }
+          : null,
+        sungMs: new Float32Array(),
+        sungMidi: new Float32Array(),
+        audio: encodeTake(voice, RATE).blob,
+        audioStartMs: 0,
+      }
+      s.addTake(take)
+      await SingService.saveTake(take)
+      const comp = s.meta?.comp
+      await s.setMeta({ comp: { mode: 'full', picks: comp?.picks ?? {}, offsetMs: comp?.offsetMs ?? 0, phraseOffsets: comp?.phraseOffsets ?? {}, fullTakeId: take.id } })
+      savedToFull = true
+    }
+    const last = s.meta?.drafts?.[0]
+    setRunReport({
+      phrases: runTakes
+        .map((t) => {
+          const i = phrases.findIndex((p) => takes[p.index]?.includes(t))
+          const ph = phrases[i]
+          return { index: i, lyric: ph ? lyricOf(lyrics, ph) : '', score: t.score!.score, notesSung: t.score!.notesSung, notesTotal: t.score!.notesTotal, biasCents: t.score!.biasCents }
+        })
+        .filter((x) => x.index >= 0)
+        .sort((a, b) => a.index - b.index),
+      scorable: scorableCount,
+      ...(last?.avgBest !== undefined ? { previous: { name: last.name, avg: last.avgBest } } : {}),
+      savedToFull,
+    })
+  }
+  const finishRunRef = useRef(finishRun)
+  finishRunRef.current = finishRun
   // A fresh start or a restored draft: nothing of the old run counts as scored any more.
   useEffect(() => {
     if (!s.resetToken) return
@@ -112,6 +230,10 @@ export function PracticeTab() {
           const cur = phrases.findIndex((ph) => pos >= ph.startMs - 300 && pos <= ph.endMs + 300)
           if (!loop && !pinned.current && cur >= 0 && cur !== phraseIdx) setPhraseIdx(cur)
           if (loop && phrase && pos > phrase.endMs + 700) restartPhrase(phrase)
+          const lastPhrase = phrases[phrases.length - 1]
+          if (runRef.current?.phase === 'running' && lastPhrase && pos > lastPhrase.endMs + 2600) void finishRunRef.current()
+        } else if (runRef.current?.phase === 'running' && pos >= (p.duration || Infinity) - 300) {
+          void finishRunRef.current()
         }
       }
       raf = requestAnimationFrame(tick)
@@ -295,9 +417,9 @@ export function PracticeTab() {
           <Repeat className="h-3.5 w-3.5" /> 循环这一句
         </button>
         <button type="button" onClick={() => setRestartOpen(true)} className="focus-ring flex items-center gap-1.5 rounded-lg border border-border/80 px-2.5 py-1.5 text-xs text-muted-foreground hover:text-foreground" title="把之前的评分存为草稿或删除，从头开始">
-          <RotateCcw className="h-3.5 w-3.5" /> 重新开始{s.meta?.drafts?.length ? `（草稿 ${s.meta.drafts.length}）` : ''}
+          <RotateCcw className="h-3.5 w-3.5" /> 整首重新开始{s.meta?.drafts?.length ? `（草稿 ${s.meta.drafts.length}）` : ''}
         </button>
-        <RestartDialog open={restartOpen} onClose={() => setRestartOpen(false)} />
+        <RestartDialog open={restartOpen} onClose={() => setRestartOpen(false)} onStart={() => void startRun()} />
         <label className="flex items-center gap-1.5 text-xs">
           速度
           <select value={s.speed} onChange={(e) => s.setSpeed(Number(e.target.value))} className="focus-ring h-8 rounded-lg border border-border bg-background px-2">
@@ -348,6 +470,18 @@ export function PracticeTab() {
         </div>
       </div>
       {s.micError && <p className="text-sm text-destructive">{s.micError}</p>}
+      {run && <RunBanner phase={run.phase} countdown={run.countdown} sung={runTakes.length} total={scorableCount} avg={runAvg} onPause={pauseRun} onResume={resumeRun} onStop={() => void finishRun()} />}
+      {runReport && (
+        <RunReportCard
+          report={runReport}
+          onClose={() => setRunReport(null)}
+          onPractise={(i) => {
+            setRunReport(null)
+            setLoop(true)
+            goTo(i, true)
+          }}
+        />
+      )}
       {s.mic === 'on' && s.monitor.on && (
         <p className="text-xs text-muted-foreground">监听已开：请一定戴耳机（用外放会啸叫）。浏览器里的监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；录音和评分不受影响。</p>
       )}

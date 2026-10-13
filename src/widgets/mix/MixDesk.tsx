@@ -4,7 +4,8 @@ import { renderMix } from '@/audio/sing/mixChain'
 import { toast } from '@/features/toast/toastStore'
 import { encodeWav } from '@/export/wav'
 import { encodeMp3 } from '@/export/mp3'
-import { prepareVoice, needsPrep } from '@/audio/fx/voicePrep'
+import { prepareVoice, needsPrep, prepStats } from '@/audio/fx/voicePrep'
+import type { RefNote } from '@/songs/singAlong'
 import { SingService } from '@/services/singService'
 import { Button, Slider } from '@/shared/ui'
 import { GUIDE_STEPS } from '@/songs/mixLessons'
@@ -40,6 +41,8 @@ export interface MixDeskProps {
   onMix: (m: MixSettings) => void
   snapshots?: Snapshot[]
   onSnapshots?: (s: Snapshot[]) => void
+  /** The original singer's notes (for pitch correction toward them). */
+  refNotes?: RefNote[]
   songKey: string
   title: string
   artist?: string
@@ -110,14 +113,14 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
     }
     let dead = false
     setPrepping(true)
-    void prepareVoice(rawVoice, mix, phrases)
+    void prepareVoice(rawVoice, mix, phrases, props.refNotes)
       .then((v) => !dead && setVoice(v))
       .finally(() => !dead && setPrepping(false))
     return () => {
       dead = true
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [rawVoice, phrases, mix.vocal.autoLevel, mix.vocal.tune])
+  }, [rawVoice, phrases, mix.vocal.autoLevel, mix.vocal.tune, props.refNotes])
   const total = useMemo(
     () => Math.max(voice?.duration ?? 0, ...backing.map((b) => b.duration), 0),
     [voice, backing],
@@ -959,7 +962,7 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
         </ModulePanel>
 
         <ModulePanel {...extraPanel('tune', '音高修正（实验）', v.tune.on, (on) => setVocal('tune', { on }), `力度 ${Math.round(v.tune.amount * 100)}%`)}>
-          <TuneControls mix={mix} onMix={apply} />
+          <TuneControls mix={mix} onMix={apply} hasReference={!!props.refNotes?.length} stats={prepping ? null : prepStats(rawVoice, mix)} />
           {listenButton('tune', '音高修正')}
           <LearnLinks module="tune" />
         </ModulePanel>

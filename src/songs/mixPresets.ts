@@ -35,7 +35,7 @@ const POP_SETTINGS: MixSettings = {
     mod: { on: false, type: 'doubler', rate: 0.6, depth: 0.4, mix: 0.35 },
     order: [...DEFAULT_ORDER],
     autoLevel: { on: false, strength: 0.6, phraseDb: {} },
-    tune: { on: false, amount: 0.5, speedMs: 60, scale: 'chromatic', keyTonic: 0, mode: 'major' },
+    tune: { on: false, amount: 0.5, speedMs: 60, scale: 'chromatic', keyTonic: 0, mode: 'major', range: 2, gaps: 'keep' },
   },
   backing: {
     gainDb: -2,
@@ -347,9 +347,11 @@ export function clampMix(input: MixSettings): MixSettings {
         on: bool(tune.on, false),
         amount: c(tune.amount, 0, 1),
         speedMs: c(tune.speedMs, 0, 400),
-        scale: pick(tune.scale, ['chromatic', 'key'] as const, 'chromatic'),
+        scale: pick(tune.scale, ['chromatic', 'key', 'reference'] as const, 'chromatic'),
         keyTonic: Math.round(c(tune.keyTonic, 0, 11)),
         mode: pick(tune.mode, ['major', 'minor'] as const, 'major'),
+        range: c(tune.range, 0.5, 6),
+        gaps: pick(tune.gaps, ['keep', 'nearest'] as const, 'keep'),
       },
     },
     backing: {

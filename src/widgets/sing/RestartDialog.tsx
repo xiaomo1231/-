@@ -15,19 +15,20 @@ const fmtDate = (t: number) => {
  * 重新开始: start this song fresh — keep the earlier takes as a draft, or
  * delete them — and the drafts kept so far (restore / delete).
  */
-export function RestartDialog({ open, onClose }: { open: boolean; onClose: () => void }) {
+export function RestartDialog({ open, onClose, onStart }: { open: boolean; onClose: () => void; onStart?: () => void }) {
   const s = useSing()
   const [name, setName] = useState('')
   const [busy, setBusy] = useState<string | null>(null)
   const drafts = s.meta?.drafts ?? []
   const current = Object.values(s.takes).reduce((n, list) => n + list.length, 0)
 
-  const run = async (label: string, fn: () => Promise<unknown>, done: string) => {
+  const run = async (label: string, fn: () => Promise<unknown>, done: string, start = false) => {
     setBusy(label)
     try {
       await fn()
       toast({ title: done, variant: 'success' })
       onClose()
+      if (start) onStart?.()
     } catch (e) {
       toast({ title: '没有成功', description: e instanceof Error ? e.message : String(e), variant: 'error' })
     } finally {
@@ -42,19 +43,20 @@ export function RestartDialog({ open, onClose }: { open: boolean; onClose: () =>
         if (!(await s.saveDraftAndRestart(name))) throw new Error('现在还没有唱过的记录，不需要存草稿。')
         setName('')
       },
-      '已存为草稿，可以重新开始了',
+      '已存为草稿，从头开始唱整首',
+      true,
     )
   const deleteAndRestart = () => {
     if (!window.confirm(`删除这首歌现在的 ${current} 条演唱记录和评分？删除后不能恢复（草稿不受影响）。`)) return
-    void run('delete', () => s.clearAllTakes(), '已清空，可以重新开始了')
+    void run('delete', () => s.clearAllTakes(), '已清空，从头开始唱整首', true)
   }
 
   return (
     <Dialog open={open} onOpenChange={(o) => !o && busy === null && onClose()}>
       <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle>重新开始</DialogTitle>
-          <DialogDescription>现在有 {current} 条演唱记录。重新开始后，每一句的成绩从零算起；作品集里已经保存的翻唱不受影响。</DialogDescription>
+          <DialogTitle>整首重新开始</DialogTitle>
+          <DialogDescription>现在有 {current} 条演唱记录。选好之后会回到开头、倒数 3 秒，从第一句一直唱到最后一句，唱完给出整首报告，录音自动放进「完整版」。作品集里已经保存的翻唱不受影响。</DialogDescription>
         </DialogHeader>
 
         <section className="space-y-2 rounded-xl border border-border/80 p-3">
@@ -75,6 +77,16 @@ export function RestartDialog({ open, onClose }: { open: boolean; onClose: () =>
           </div>
           <Button variant="outline" className="text-destructive" onClick={deleteAndRestart} disabled={busy !== null || current === 0}>
             {busy === 'delete' ? <Loader2 className="animate-spin" /> : <Trash2 />} 删除并重新开始
+          </Button>
+        </section>
+
+        <section className="flex flex-wrap items-center justify-between gap-2 rounded-xl border border-border/80 p-3">
+          <div>
+            <p className="text-sm font-medium">保留现在的记录，直接从头唱整首</p>
+            <p className="text-xs text-muted-foreground">新的一遍会加在现有记录上（每句保留最好和最近的几次）。</p>
+          </div>
+          <Button variant="outline" onClick={() => (onClose(), onStart?.())} disabled={busy !== null}>
+            从头唱整首
           </Button>
         </section>
 

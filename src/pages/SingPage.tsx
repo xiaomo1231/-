@@ -153,6 +153,7 @@ function SingWorkspace({ source }: { source: SingSource }) {
                       mix={session.meta?.mix ?? DEFAULT_MIX}
                       onMix={(m) => void session.setMeta({ mix: m })}
                       snapshots={session.meta?.mixSnapshots ?? []}
+                      refNotes={session.notes}
                       onSnapshots={(s) => void session.setMeta({ mixSnapshots: s })}
                       songKey={source.key}
                       title={title}

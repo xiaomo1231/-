@@ -62,8 +62,13 @@ export interface MixSettings {
     order: InsertId[]
     /** Phrase-by-phrase level riding (applied to the voice before the chain); extra dB per phrase. */
     autoLevel: { on: boolean; strength: number; phraseDb: Record<number, number> }
-    /** Pitch correction (experimental, applied to the voice before the chain). */
-    tune: { on: boolean; amount: number; speedMs: number; scale: 'chromatic' | 'key'; keyTonic: number; mode: 'major' | 'minor' }
+    /**
+     * Pitch correction (experimental, applied to the voice before the chain).
+     * scale 'reference' pulls toward the original singer's notes (the song's
+     * pitch line); `range` = largest pull in semitones (farther = sung on
+     * purpose, left alone); `gaps` = what to do where the original has no note.
+     */
+    tune: { on: boolean; amount: number; speedMs: number; scale: 'chromatic' | 'key' | 'reference'; keyTonic: number; mode: 'major' | 'minor'; range: number; gaps: 'keep' | 'nearest' }
   }
   backing: {
     gainDb: number

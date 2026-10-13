@@ -143,7 +143,7 @@ export function PhraseOffsets({ mix, onMix, phrases }: { mix: MixSettings; onMix
 const KEYS = ['C', 'C♯/D♭', 'D', 'E♭', 'E', 'F', 'F♯/G♭', 'G', 'A♭', 'A', 'B♭', 'B']
 
 /** Pitch correction settings, with the key choice. */
-export function TuneControls({ mix, onMix }: { mix: MixSettings; onMix: (m: MixSettings) => void }) {
+export function TuneControls({ mix, onMix, hasReference = false, stats }: { mix: MixSettings; onMix: (m: MixSettings) => void; hasReference?: boolean; stats?: { frames: number; corrected: number; skipped: number; centsBefore: number; centsAfter: number } | null }) {
   const t = mix.vocal.tune
   const patch = (p: Partial<typeof t>) => onMix({ ...mix, vocal: { ...mix.vocal, tune: { ...t, ...p } } })
   return (
@@ -154,7 +154,14 @@ export function TuneControls({ mix, onMix }: { mix: MixSettings; onMix: (m: MixS
         <select value={t.scale} onChange={(e) => patch({ scale: e.target.value as typeof t.scale })} className="focus-ring h-8 rounded-lg border border-border bg-background px-2 text-xs">
           <option value="chromatic">最近的半音（不限调）</option>
           <option value="key">只用这首歌的调内音</option>
+          {hasReference && <option value="reference">原唱的音（整首对齐）</option>}
         </select>
+        {t.scale === 'reference' && (
+          <select value={t.gaps} onChange={(e) => patch({ gaps: e.target.value as typeof t.gaps })} className="focus-ring h-8 rounded-lg border border-border bg-background px-2 text-xs" aria-label="原唱没有音的地方">
+            <option value="keep">原唱没有音的地方：不修正</option>
+            <option value="nearest">原唱没有音的地方：拉到最近的半音</option>
+          </select>
+        )}
         {t.scale === 'key' && (
           <>
             <select value={t.keyTonic} onChange={(e) => patch({ keyTonic: Number(e.target.value) })} className="focus-ring h-8 rounded-lg border border-border bg-background px-2 text-xs" aria-label="调">
@@ -171,6 +178,17 @@ export function TuneControls({ mix, onMix }: { mix: MixSettings; onMix: (m: MixS
           </>
         )}
       </div>
+      {t.scale === 'reference' && <Controls paths={['vocal.tune.range']} mix={mix} onMix={onMix} />}
+      {t.scale === 'reference' && (
+        <p className="text-xs text-muted-foreground">按原唱这首歌的音高线（颤音、滑音已去掉）对齐：你唱得早一点或晚一点（±150 毫秒内）也能找到对应的音；你用别的八度唱，就对齐到你那个八度；离原唱太远的音当成故意唱的（和声、改编），不拉。</p>
+      )}
+      {t.on && stats && stats.frames > 0 && (
+        <p className="num rounded-lg bg-muted/40 px-2 py-1.5 text-xs">
+          修正了 {Math.round((stats.corrected / stats.frames) * 100)}% 的唱段
+          {stats.corrected > 0 ? `，平均偏差 ${Math.round(stats.centsBefore / stats.corrected)} → ${Math.round(stats.centsAfter / stats.corrected)} 音分` : ''}
+          {stats.skipped > 0 ? `；${Math.round((stats.skipped / stats.frames) * 100)}% 没动（${t.scale === 'reference' ? '原唱没有音或离得太远' : '离目标太远'}）` : ''}
+        </p>
+      )}
       <p className="text-xs text-muted-foreground">实验功能：在浏览器里离线处理，长歌需要几秒。力度别太大、速度别太快，否则会有明显的"电音"感；它只能把音拉近，不能代替把歌唱准。</p>
     </div>
   )
