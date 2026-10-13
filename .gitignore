@@ -1,0 +1,26 @@
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+*.log
+.env
+.env.*
+!.env.example
+dist/
+coverage/
+.vite/
+node_modules/
+release/
+*.zip
+
+# local separation helper (installed per machine)
+helper/.venv/
+helper/models/
+helper/jobs/
+__pycache__/
+
+# copied from node_modules by `npm install` (scripts/copy-*.mjs)
+public/ort/
+public/alphatab/
+# vocals model (half precision, made by scripts/make-vocal-model.py; shipped in the release zip)
+public/models/
