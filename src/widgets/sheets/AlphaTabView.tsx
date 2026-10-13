@@ -3,6 +3,7 @@ import { Eye, Gauge, Headphones, Loader2, Pause, Play, Repeat, Square, Timer, Vo
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import { alphaTabUrls, loadAlphaTab } from '@/audio/alphatabLoader'
 import { loadScoreDecoded } from '@/audio/alphatabEncoding'
+import { stripSiteAds } from '@/services/songService'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
 
@@ -72,6 +73,40 @@ const DISPLAY_ITEMS = [
 type DisplayKey = (typeof DISPLAY_ITEMS)[number]['key']
 const DISPLAY_STORE = 'groovelab:sheet-display'
 
+/** Where the chord diagrams go: next to the chords in the music, in a list on top, or nowhere. */
+type DiagramMode = 'inline' | 'top' | 'off'
+const DIAGRAM_STORE = 'groovelab:sheet-diagrams'
+const DIAGRAM_LABEL: Record<DiagramMode, string> = { inline: '跟着谱面（换和弦的地方）', top: '全部放在最上面', off: '不显示' }
+
+function loadDiagrams(): DiagramMode {
+  try {
+    const v = localStorage.getItem(DIAGRAM_STORE)
+    return v === 'top' || v === 'off' ? v : 'inline'
+  } catch {
+    return 'inline'
+  }
+}
+
+/** Chord diagrams per the mode (the score's own stylesheet decides where alphaTab draws them). */
+function applyDiagrams(score: model.Score, mode: DiagramMode): void {
+  const st = score.stylesheet
+  st.globalDisplayChordDiagramsOnTop = mode === 'top'
+  st.perTrackChordDiagramsOnTop = null
+  st.globalDisplayChordDiagramsInScore = mode === 'inline'
+}
+
+/** Tab sites put adverts into the header texts; the sheet shows what comes before them. */
+function cleanHeader(score: model.Score): void {
+  score.title = stripSiteAds(score.title ?? '')
+  score.subTitle = stripSiteAds(score.subTitle ?? '')
+  score.artist = stripSiteAds(score.artist ?? '')
+  score.album = stripSiteAds(score.album ?? '')
+  score.words = stripSiteAds(score.words ?? '')
+  score.music = stripSiteAds(score.music ?? '')
+  score.tab = stripSiteAds(score.tab ?? '')
+  score.copyright = stripSiteAds(score.copyright ?? '')
+}
+
 function loadDisplay(): Record<DisplayKey, boolean> {
   const base = Object.fromEntries(DISPLAY_ITEMS.map((d) => [d.key, d.on])) as Record<DisplayKey, boolean>
   try {
@@ -116,6 +151,9 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
   const [solo, setSolo] = useState<Set<number>>(new Set())
   const [display, setDisplay] = useState(loadDisplay)
   const [displayOpen, setDisplayOpen] = useState(false)
+  const [diagrams, setDiagrams] = useState<DiagramMode>(loadDiagrams)
+  const diagramsRef = useRef(diagrams)
+  diagramsRef.current = diagrams
   const onScoreRef = useRef(onScore)
   onScoreRef.current = onScore
   const onApiRef = useRef(onApi)
@@ -146,6 +184,8 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
         api.current = a
         onApiRef.current?.(a)
         a.scoreLoaded.on((s) => {
+          cleanHeader(s)
+          applyDiagrams(s, diagramsRef.current)
           setScore(s)
           onScoreRef.current?.(s)
         })
@@ -191,6 +231,19 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
     a.updateSettings()
     a.render()
   }, [display, score])
+
+  // Chord diagrams: next to the chords, on top, or off.
+  useEffect(() => {
+    try {
+      localStorage.setItem(DIAGRAM_STORE, diagrams)
+    } catch {
+      // storage blocked
+    }
+    const a = api.current
+    if (!a || !score) return
+    applyDiagrams(score, diagrams)
+    a.render()
+  }, [diagrams, score])
 
   // Notation mode.
   useEffect(() => {
@@ -310,6 +363,16 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
                 {d.label}
               </label>
             ))}
+            <label className="flex items-center gap-1.5">
+              和弦图
+              <select value={diagrams} onChange={(e) => setDiagrams(e.target.value as DiagramMode)} className="focus-ring h-7 rounded-md border border-border bg-background px-1.5">
+                {(Object.keys(DIAGRAM_LABEL) as DiagramMode[]).map((m) => (
+                  <option key={m} value={m}>
+                    {DIAGRAM_LABEL[m]}
+                  </option>
+                ))}
+              </select>
+            </label>
             <span className="text-muted-foreground">谱面太挤时可以关掉一些；文字注释里常有谱子网站的广告，默认不显示。</span>
           </div>
         )}
