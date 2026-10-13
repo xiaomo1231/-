@@ -77,6 +77,11 @@ export function hasWebGpu(): boolean {
   return typeof navigator !== 'undefined' && 'gpu' in navigator
 }
 
+/** Stop right away when the student pressed 「强制停止」. */
+function throwIfAborted(signal?: AbortSignal): void {
+  if (signal?.aborted) throw new DOMException('cancelled', 'AbortError')
+}
+
 const baseName = (name: string) => name.replace(/\.[^.]+$/, '').slice(0, 60) || 'song'
 
 /** Separate with the local helper. Mode 'full' = best vocals (roformer) + six stems from the rest. */
@@ -85,10 +90,14 @@ async function viaHelper(file: File, onProgress: (p: SeparationProgress) => void
   const res = await fetch(`${HELPER_URL}/separate?name=${encodeURIComponent(file.name)}`, { method: 'POST', body: file, ...(signal ? { signal } : {}) })
   if (!res.ok) throw new Error(`本机分轨服务出错（${res.status}）：${await res.text()}`)
   const { job } = (await res.json()) as { job: string }
+  // Tell the helper to stop too (it finishes the model pass it is in, then drops the job).
+  const cancel = () => void fetch(`${HELPER_URL}/jobs/${job}/cancel`, { method: 'POST' }).catch(() => undefined)
+  signal?.addEventListener('abort', cancel, { once: true })
   for (;;) {
     if (signal?.aborted) throw new DOMException('cancelled', 'AbortError')
     await new Promise((r) => setTimeout(r, 700))
-    const st = (await (await fetch(`${HELPER_URL}/jobs/${job}`)).json()) as { state: 'running' | 'done' | 'error'; ratio: number; text: string; files?: Array<{ stem: string; url: string }>; error?: string }
+    const st = (await (await fetch(`${HELPER_URL}/jobs/${job}`)).json()) as { state: 'running' | 'done' | 'error' | 'cancelled'; ratio: number; text: string; files?: Array<{ stem: string; url: string }>; error?: string }
+    if (st.state === 'cancelled') throw new DOMException('cancelled', 'AbortError')
     if (st.state === 'error') throw new Error(st.error ?? '本机分轨失败。')
     onProgress({ phase: 'separate', ratio: st.ratio, text: st.text })
     if (st.state === 'done') {
@@ -174,6 +183,7 @@ async function runMdx(
   let t1 = 0
   try {
     return await new Promise((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException('cancelled', 'AbortError'))
       signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))
       let next = 0
       let done = 0
@@ -269,6 +279,7 @@ class WorkerCrashed extends Error {
 async function vocalsInBrowser(file: File, onProgress: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<File[]> {
   onProgress({ phase: 'load', ratio: 0, text: '正在解码音频…' })
   const { left, right } = await decodeStereo(file, MDX_RATE)
+  throwIfAborted(signal)
   let backend: 'webgpu' | 'wasm' = (await gpuCanRun()) ? 'webgpu' : 'wasm'
   let r: Awaited<ReturnType<typeof runMdx>> | null = null
   // GPU → CPU (all workers) → CPU with 2 → CPU with 1: a crash (often memory) retries smaller.
@@ -280,6 +291,7 @@ async function vocalsInBrowser(file: File, onProgress: (p: SeparationProgress) =
     const key = `${plan.backend}${n}`
     if (seen.has(key)) continue
     seen.add(key)
+    throwIfAborted(signal)
     if (lastErr) onProgress({ phase: 'load', ratio: 0, text: plan.backend === 'wasm' && n === cpuWorkers() ? '显卡加速出了问题，改用处理器计算…' : `刚才的分轨进程意外退出（可能是内存不够），改用 ${n} 路重试…` })
     try {
       backend = plan.backend
@@ -314,6 +326,7 @@ async function vocalsInBrowser(file: File, onProgress: (p: SeparationProgress) =
 async function viaBrowser(file: File, onProgress: (p: SeparationProgress) => void, signal?: AbortSignal): Promise<File[]> {
   onProgress({ phase: 'load', ratio: 0, text: '正在解码音频…' })
   const { left, right } = await decodeStereo(file, DEMUCS_RATE)
+  throwIfAborted(signal)
   const worker = new Worker(new URL('./demucs.worker.ts', import.meta.url), { type: 'module' })
   const base = new URL((import.meta.env?.BASE_URL as string | undefined) ?? '/', window.location.href).href
   try {
@@ -321,6 +334,7 @@ async function viaBrowser(file: File, onProgress: (p: SeparationProgress) => voi
     let backend: string | undefined
     let threads: number | undefined
     const stems = await new Promise<Extract<WorkerMessage, { type: 'done' }>['stems']>((resolve, reject) => {
+      if (signal?.aborted) return reject(new DOMException('cancelled', 'AbortError'))
       signal?.addEventListener('abort', () => reject(new DOMException('cancelled', 'AbortError')))
       worker.onmessage = (e: MessageEvent<WorkerMessage>) => {
         const m = e.data
@@ -355,6 +369,7 @@ async function viaBrowser(file: File, onProgress: (p: SeparationProgress) => voi
 export async function separateFile(file: File, opts: { engine?: Engine; mode?: SeparationMode; onProgress: (p: SeparationProgress) => void; signal?: AbortSignal }): Promise<{ files: File[]; engine: Engine }> {
   opts.onProgress({ phase: 'connect', ratio: 0, text: '正在查找本机分轨服务…' })
   const engine = opts.engine ?? ((await helperStatus()) ? 'local' : 'browser')
+  throwIfAborted(opts.signal)
   const t0 = performance.now()
   if (engine === 'local') {
     const files = await viaHelper(file, opts.onProgress, opts.signal)

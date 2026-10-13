@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from 'react'
-import { Cpu, Loader2, Monitor, Scissors, Zap } from 'lucide-react'
+import { AlertTriangle, Cpu, Loader2, Monitor, Scissors, Square, Zap } from 'lucide-react'
 import {
   BROWSER_MODEL_MB,
   browserModelCached,
@@ -21,6 +21,9 @@ import {
   DialogTitle,
 } from '@/shared/ui/Dialog'
 import { cn } from '@/shared/lib/utils'
+
+/** No progress for this long while separating → suggest 「强制停止」. */
+const STALL_MS = 30_000
 
 /**
  * 自动分轨: split one recording into stems with the local helper (fast, UVR
@@ -46,11 +49,25 @@ export function SeparateDialog({
   const [error, setError] = useState<string | null>(null)
   const abort = useRef<AbortController | null>(null)
   const running = progress !== null && error === null
+  const [stopped, setStopped] = useState(false)
+  // No progress for a while: probably stuck (shown next to the stop button).
+  const lastChange = useRef(Date.now())
+  const [stalled, setStalled] = useState(false)
+  useEffect(() => {
+    lastChange.current = Date.now()
+    setStalled(false)
+  }, [progress?.text, progress?.ratio])
+  useEffect(() => {
+    if (!running) return
+    const t = setInterval(() => setStalled(Date.now() - lastChange.current > STALL_MS), 2000)
+    return () => clearInterval(t)
+  }, [running])
 
   useEffect(() => {
     if (!file) return
     setProgress(null)
     setError(null)
+    setStopped(false)
     setHelper(undefined)
     void helperStatus().then((h) => {
       setHelper(h)
@@ -62,6 +79,7 @@ export function SeparateDialog({
   const start = async () => {
     if (!file) return
     setError(null)
+    setStopped(false)
     abort.current = new AbortController()
     try {
       const r = await separateFile(file, {
@@ -74,21 +92,34 @@ export function SeparateDialog({
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') {
         setProgress(null)
+        setStopped(true)
         return
       }
       setError(e instanceof Error ? e.message : String(e))
     }
   }
 
-  const cancel = () => {
+  /** 强制停止: end every separation process now (the page's workers; the local helper after its current pass). */
+  const forceStop = () => {
     abort.current?.abort()
-    if (!running) onClose()
+    abort.current = null
+    setProgress(null)
+    setStopped(true)
   }
+  const close = () => {
+    if (running) {
+      if (!window.confirm('正在分轨，要强制停止并关闭吗？')) return
+      forceStop()
+    }
+    onClose()
+  }
+  // Closing the page or leaving it also stops the processes.
+  useEffect(() => () => abort.current?.abort(), [])
 
   const gpuName = helper?.device.startsWith('cuda:') ? helper.device.slice(5) : null
 
   return (
-    <Dialog open={file !== null} onOpenChange={(o) => !o && !running && onClose()}>
+    <Dialog open={file !== null} onOpenChange={(o) => !o && close()}>
       <DialogContent className="overflow-hidden">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
@@ -147,6 +178,12 @@ export function SeparateDialog({
             <p className="text-xs text-muted-foreground">
               分轨期间可以留在这个页面做别的，别关闭网页。
             </p>
+            {stalled && (
+              <p className="flex items-start gap-1.5 rounded-lg border border-amber/50 bg-amber-soft/20 px-2 py-1.5 text-xs">
+                <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber" aria-hidden />
+                已经一段时间没有进展了，可能卡住了。可以点「强制停止」，关掉其它占内存的网页后再试。
+              </p>
+            )}
           </div>
         )}
         {error && (
@@ -154,14 +191,25 @@ export function SeparateDialog({
             分轨没有完成：{error}
           </p>
         )}
+        {stopped && !running && !error && (
+          <p className="text-sm text-muted-foreground" role="status">
+            已强制停止，后台的分轨进程都已结束{engine === 'local' ? '（本机助手会在算完当前这一步后停下并删掉临时文件）' : ''}。可以重新开始。
+          </p>
+        )}
 
         <DialogFooter>
-          <Button variant="ghost" onClick={cancel}>
-            {running ? '取消分轨' : '关闭'}
-          </Button>
+          {running ? (
+            <Button variant="destructive" onClick={forceStop}>
+              <Square /> 强制停止
+            </Button>
+          ) : (
+            <Button variant="ghost" onClick={close}>
+              关闭
+            </Button>
+          )}
           {!running && (
             <Button onClick={() => void start()} disabled={helper === undefined}>
-              <Scissors /> {error ? '重试' : '开始分轨'}
+              <Scissors /> {error || stopped ? '重新开始' : '开始分轨'}
             </Button>
           )}
         </DialogFooter>

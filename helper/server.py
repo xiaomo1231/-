@@ -11,6 +11,7 @@ Endpoints (CORS limited to the GrooveLab page):
   GET  /health            -> {"ok": true, "device": "...", "version": "..."}
   POST /separate?name=..   body = the audio file  -> {"job": id}
   GET  /jobs/<id>          -> {"state", "ratio", "text", "files": [{"stem", "url"}]}
+  POST /jobs/<id>/cancel   -> stop it (queued: at once; running: after the current model pass)
   GET  /files/<id>/<name>  -> the separated WAV
 
 Models download automatically on first use into helper/models.
@@ -86,13 +87,22 @@ def stem_of(path: str) -> str | None:
     return found[-1].strip().title() if found else None
 
 
+class Cancelled(Exception):
+    pass
+
+
 def run_job(job_id: str) -> None:
-    job = jobs[job_id]
+    job = jobs.get(job_id)
+    if not job:
+        return
     out = JOBS / job_id
     try:
         src = out / job["input"]
 
         def step(ratio: float, text: str) -> None:
+            # A model pass cannot be interrupted safely; the job stops between passes.
+            if job.get("cancelled"):
+                raise Cancelled()
             job.update(ratio=ratio, text=text)
 
         step(0.05, "正在加载人声模型（第一次会自动下载）…")
@@ -125,7 +135,11 @@ def run_job(job_id: str) -> None:
             src.unlink()
         except OSError:
             pass
+        step(1.0, "分轨完成")
         job.update(state="done", ratio=1.0, text="分轨完成")
+    except Cancelled:
+        job.update(state="cancelled", text="已停止")
+        shutil.rmtree(out, ignore_errors=True)
     except Exception as exc:  # report to the page
         traceback.print_exc()
         job.update(state="error", error=f"{type(exc).__name__}: {exc}")
@@ -142,7 +156,12 @@ def prune() -> None:
 
 def worker() -> None:
     while True:
-        run_job(work.get())
+        job_id = work.get()
+        job = jobs.get(job_id)
+        if job and job.get("cancelled"):
+            shutil.rmtree(JOBS / job_id, ignore_errors=True)
+            continue
+        run_job(job_id)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -202,6 +221,15 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         if self.headers.get("Origin") not in ALLOWED_ORIGINS:
             return self.reply(403, {"error": "origin not allowed"})
+        m = re.fullmatch(r"/jobs/([0-9a-f]{32})/cancel", url.path)
+        if m:
+            job = jobs.get(m.group(1))
+            if not job:
+                return self.reply(404, {"error": "no such job"})
+            job["cancelled"] = True
+            if job["state"] == "running" and job.get("text") == "排队中…":
+                job.update(state="cancelled", text="已停止")
+            return self.reply(200, {"ok": True, "state": job["state"]})
         if url.path != "/separate":
             return self.reply(404, {"error": "not found"})
         size = int(self.headers.get("Content-Length") or 0)
