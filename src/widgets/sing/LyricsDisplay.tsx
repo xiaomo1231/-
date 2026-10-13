@@ -89,6 +89,7 @@ export function LyricsDisplay({ lines, positionMs, lockLine }: LyricsDisplayProp
       <p aria-live="polite" className="min-h-[2.75rem] text-2xl font-semibold leading-snug">
         {current ? <Sung text={current.text} progress={view.progress} /> : <span className="text-muted-foreground">…</span>}
       </p>
+      {current?.translation && <p className="-mt-1 text-sm text-muted-foreground">{current.translation}</p>}
       {next && <p className="text-sm text-muted-foreground">{next.text}</p>}
     </div>
   )

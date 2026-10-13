@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { FolderOpen, FolderPlus, Loader2, Mic, Pencil, Play, RefreshCw, Search, ShieldCheck, Square, Trash2, Wand2 } from 'lucide-react'
+import { FileText, FolderOpen, FolderPlus, Loader2, Mic, Pencil, Play, RefreshCw, Search, ShieldCheck, Square, Trash2, Wand2 } from 'lucide-react'
 import type { LibrarySong } from '@/entities/types'
 import { useLibrary, groupSongs, matchesSearch } from '@/features/library/useLibrary'
 import { LibraryService } from '@/services/libraryService'
@@ -22,7 +22,7 @@ export function LibraryPage() {
   const navigate = useNavigate()
   const lib = useLibrary({
     watch: true,
-    onNew: (r, f) => toast({ title: `「${f.name}」里新增 ${r.added} 首歌`, variant: 'info' }),
+    onNew: (r, f) => toast({ title: f.kind === 'lyrics' ? `「${f.name}」里新增 ${r.added} 个歌词文件` : `「${f.name}」里新增 ${r.added} 首歌`, variant: 'info' }),
   })
   const [query, setQuery] = useState('')
   const [onlyReview, setOnlyReview] = useState(false)
@@ -105,9 +105,14 @@ export function LibraryPage() {
           <p className="mt-1 text-sm text-muted-foreground">列出你选的文件夹里已有的歌，并整理歌名。网站只读取这些文件，不会下载或上传任何歌曲。</p>
         </div>
         {supported && (
-          <Button onClick={() => void lib.addFolder().catch((e) => toast({ title: '没能添加文件夹', description: errText(e), variant: 'error' }))}>
-            <FolderPlus /> 添加文件夹
-          </Button>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" onClick={() => void lib.addFolder('lyrics').catch((e) => toast({ title: '没能添加歌词文件夹', description: errText(e), variant: 'error' }))}>
+              <FileText /> 添加歌词文件夹
+            </Button>
+            <Button onClick={() => void lib.addFolder().catch((e) => toast({ title: '没能添加文件夹', description: errText(e), variant: 'error' }))}>
+              <FolderPlus /> 添加文件夹
+            </Button>
+          </div>
         )}
       </header>
 
@@ -119,13 +124,15 @@ export function LibraryPage() {
         <section className="space-y-2 rounded-3xl border border-border/80 bg-card p-4" aria-label="文件夹">
           {lib.folders.map((f) => {
             const a = lib.access[f.id]
-            const count = lib.songs.filter((s) => s.folderId === f.id).length
+            const lyrics = f.kind === 'lyrics'
+            const count = lyrics ? (f.lyricFiles?.length ?? 0) : lib.songs.filter((s) => s.folderId === f.id).length
             return (
               <div key={f.id} className="flex flex-wrap items-center gap-2 text-sm">
-                <FolderOpen className="h-4 w-4 text-cyan" aria-hidden />
+                {lyrics ? <FileText className="h-4 w-4 text-amber" aria-hidden /> : <FolderOpen className="h-4 w-4 text-cyan" aria-hidden />}
                 <span className="font-medium">{f.name}</span>
+                {lyrics && <span className="rounded-full bg-amber-soft/40 px-2 py-0.5 text-[11px]">歌词</span>}
                 <span className="text-xs text-muted-foreground">
-                  {count} 首{a === 'granted' ? ' · 打开时会自动发现新歌' : ''}
+                  {lyrics ? `${count} 个歌词文件${a === 'granted' ? ' · 跟唱时自动配上' : ''}` : `${count} 首${a === 'granted' ? ' · 打开时会自动发现新歌' : ''}`}
                 </span>
                 <span className="ml-auto flex flex-wrap gap-1">
                   {a !== 'granted' ? (
@@ -146,6 +153,11 @@ export function LibraryPage() {
           })}
           {Object.values(lib.access).some((a) => a !== 'granted') && (
             <p className="text-xs text-muted-foreground">浏览器每次重新打开后，需要点一下「允许访问」才能读文件夹，这是浏览器的规定。</p>
+          )}
+          {!lib.folders.some((f) => f.kind === 'lyrics') && (
+            <p className="text-xs text-muted-foreground">
+              有自己下载的歌词（.lrc / .srt / .ass，例如用 LDDC 下的）？点「添加歌词文件夹」选放歌词的文件夹，跟唱时会按歌名和演唱者自动配上。网站不会联网找歌词。
+            </p>
           )}
         </section>
       )}

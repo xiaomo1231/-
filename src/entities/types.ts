@@ -1,6 +1,7 @@
 import type { SheetFormat, SheetTrackInfo } from '@/import/gpImport'
 import type { PracticeRole, StemKind, StemMix, SyncMap } from '@/songs/backingSync'
 import type { CompPlan, LyricLine, MixSettings } from '@/songs/singTypes'
+import type { LyricFileEntry } from '@/songs/lyricFiles'
 import type { ModuleId } from '@/drills/types'
 import type { Score } from '@/music/score'
 import type { RigPreset, RigSettings } from '@/audio/guitar/rigSettings'
@@ -385,6 +386,10 @@ export interface LibraryFolder {
   handle: FileSystemDirectoryHandle
   addedAt: number
   lastScanAt?: number
+  /** 'lyrics' = a folder of lyric files (0.22.0); missing = songs. */
+  kind?: 'songs' | 'lyrics'
+  /** Lyric files found in a lyrics folder (names and tags only). */
+  lyricFiles?: LyricFileEntry[]
 }
 
 /** A song file in a library folder, with its cleaned-up name. Id = folderId + '/' + path. */

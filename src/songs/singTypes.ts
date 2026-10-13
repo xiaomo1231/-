@@ -10,6 +10,8 @@ export interface LyricLine {
   text: string
   /** Word / character timings when known (enhanced LRC, GP syllables). */
   words?: Array<{ startMs: number; text: string }>
+  /** A translation / romanisation shown under the line (from the lyric file, 0.22.0). */
+  translation?: string
 }
 
 /** Insert effects on the voice, in the order the student chose (0.21.0). */

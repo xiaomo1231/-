@@ -9,8 +9,8 @@ import {
   formatLrc,
   mergeWithNext,
   moveText,
-  parseLrc,
   setLineStart,
+  shiftAll,
   shiftLine,
   splitLine,
   splitLyricText,
@@ -18,6 +18,10 @@ import {
 } from '@/songs/lyrics'
 import type { LyricLine } from '@/songs/singTypes'
 import { alignLyrics } from '@/songs/phrasing'
+import { decodeLyricBytes, parseLyricFile } from '@/songs/lyricFiles'
+import { LibraryService } from '@/services/libraryService'
+import { LyricFileList, type LyricChoice } from '@/widgets/sing/LyricFileMatch'
+import { useLyricLookup } from '@/features/sing/useLyricLookup'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
 import { LyricsDisplay } from '@/widgets/sing/LyricsDisplay'
@@ -151,6 +155,8 @@ export function LyricsTab() {
   const [draft, setDraft] = useState<LyricLine[] | null>(null)
   const [tapFrom, setTapFrom] = useState(0)
   const [tap, setTap] = useState<{ from: number; count: number } | null>(null)
+  const lyr = useLyricLookup(source.title, source.artist)
+  const [reading, setReading] = useState<LyricChoice | null>(null)
   const tapTimes = useRef<number[]>([])
   const fileInput = useRef<HTMLInputElement>(null)
   const tapping = tap !== null
@@ -230,8 +236,8 @@ export function LyricsTab() {
   const importFile = async (file: File) => {
     setBusy(true)
     try {
-      const text = await file.text()
-      const parsed = parseLrc(text)
+      const text = decodeLyricBytes(new Uint8Array(await file.arrayBuffer()))
+      const parsed = parseLyricFile(file.name, text)
       if (parsed.lines.length) applyTimed(parsed.lines)
       else {
         const texts = splitLyricText(text)
@@ -242,6 +248,22 @@ export function LyricsTab() {
       setError(`读不了这个文件：${errorText(e)}`)
     } finally {
       setBusy(false)
+    }
+  }
+
+  /** Lines from a file in the lyrics folder (timed: the phrases follow them). */
+  const fromLyricFolder = async (c: LyricChoice | null) => {
+    if (!c) return
+    setReading(c)
+    setError(null)
+    try {
+      const parsed = await LibraryService.readLyrics(c.folderId, c.entry)
+      if (parsed.lines.length) applyTimed(parsed.lines)
+      else setError('这个歌词文件里没有带时间的歌词。')
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setReading(null)
     }
   }
 
@@ -411,18 +433,25 @@ export function LyricsTab() {
         <div className="space-y-1">
           <h3 className="font-semibold">还没有歌词</h3>
           <p className="text-sm text-muted-foreground">
-            歌词受版权保护，网站不会自动下载。请导入你自己的 LRC 文件，或粘贴你有权使用的歌词。
+            歌词受版权保护，网站不会自动下载。请导入你自己的歌词文件（LRC / SRT / ASS），或粘贴你有权使用的歌词。
           </p>
         </div>
 
+        {lyr.hasFolders && lyr.lookup && (
+          <div className="space-y-1 rounded-xl border border-border/70 p-3">
+            <p className="text-sm font-medium">从歌词文件夹选</p>
+            <LyricFileList lookup={lyr.lookup} locked={lyr.locked} onAllow={() => void lyr.allow()} value={reading} onChange={(c) => void fromLyricFolder(c)} busy={reading !== null} />
+          </div>
+        )}
+
         <div className="flex flex-wrap items-center gap-2">
           <Button variant="outline" disabled={busy} onClick={() => fileInput.current?.click()}>
-            导入 LRC 文件
+            导入歌词文件
           </Button>
           <input
             ref={fileInput}
             type="file"
-            accept=".lrc,.txt,text/plain"
+            accept=".lrc,.srt,.ass,.ssa,.txt,text/plain"
             className="hidden"
             onChange={(e) => {
               const f = e.target.files?.[0]
@@ -536,6 +565,12 @@ export function LyricsTab() {
       <div className="flex flex-wrap gap-2">
         <Button variant="outline" size="sm" onClick={() => startAlign(linesRef.current.map((l) => l.text))} disabled={!curve || tapping}>
           重新自动对齐
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => apply(shiftAll(linesRef.current, -NUDGE_MS))} disabled={tapping} title="所有歌词一起提前 0.1 秒（歌词文件和这个录音的版本前奏长度不同时用）">
+          全部提前 0.1 秒
+        </Button>
+        <Button variant="outline" size="sm" onClick={() => apply(shiftAll(linesRef.current, NUDGE_MS))} disabled={tapping} title="所有歌词一起推后 0.1 秒">
+          全部推后 0.1 秒
         </Button>
         <Button variant="outline" size="sm" onClick={exportLrc}>
           导出 LRC

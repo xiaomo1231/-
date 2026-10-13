@@ -10,6 +10,7 @@ import { getDb } from '@/infrastructure/db/database'
 import type { LibraryFolder, LibrarySong } from '@/entities/types'
 import { HEAD_BYTES, TAIL_BYTES, parseTags } from '@/audio/library/tags'
 import { artistKey, cleanFileName, decideName, tidyFileName, type SongTags } from '@/songs/libraryNames'
+import { LYRIC_EXT, decodeLyricBytes, findLyricMatches, lrcHeader, parseLyricFile, type LyricFileEntry, type LyricMatch, type ParsedLyricFile } from '@/songs/lyricFiles'
 
 export const AUDIO_EXT = /\.(mp3|flac|m4a|aac|wav|ogg|opus|webm)$/i
 /** Folders deeper than this are not searched (keeps a scan of a whole drive from running forever). */
@@ -58,6 +59,24 @@ async function walk(dir: DirHandle, prefix: string, depth: number, out: Array<{ 
   }
 }
 
+async function walkLyrics(dir: DirHandle, prefix: string, depth: number, out: Array<{ path: string; handle: FileHandle }>): Promise<void> {
+  if (depth > MAX_DEPTH || out.length >= MAX_FILES) return
+  for await (const entry of dir.values()) {
+    if (out.length >= MAX_FILES) return
+    if (entry.kind === 'file') {
+      if (LYRIC_EXT.test(entry.name)) out.push({ path: prefix + entry.name, handle: entry })
+    } else if (!entry.name.startsWith('.')) {
+      await walkLyrics(entry, `${prefix}${entry.name}/`, depth + 1, out)
+    }
+  }
+}
+
+/** Lyrics found for a song: the files that could fit, best first, and whether the best is certain. */
+export interface LyricsLookup {
+  matches: Array<LyricMatch & { folderId: string }>
+  sure: boolean
+}
+
 async function readEnds(file: File): Promise<{ head: Uint8Array; tail: Uint8Array }> {
   const head = new Uint8Array(await file.slice(0, HEAD_BYTES).arrayBuffer())
   const tail = file.size > HEAD_BYTES ? new Uint8Array(await file.slice(Math.max(HEAD_BYTES, file.size - TAIL_BYTES)).arrayBuffer()) : head
@@ -79,27 +98,28 @@ export const LibraryService = {
   },
 
   /** Ask the student for a folder (the browser's own picker). Null when they cancel. */
-  async pickFolder(): Promise<LibraryFolder | null> {
+  async pickFolder(kind: 'songs' | 'lyrics' = 'songs'): Promise<LibraryFolder | null> {
     const picker = (window as unknown as { showDirectoryPicker(o?: unknown): Promise<DirHandle> }).showDirectoryPicker
     let handle: DirHandle
     try {
-      handle = await picker({ id: 'groovelab-library', mode: 'read' })
+      handle = await picker({ id: kind === 'lyrics' ? 'groovelab-lyrics' : 'groovelab-library', mode: 'read' })
     } catch (e) {
       if (e instanceof DOMException && e.name === 'AbortError') return null
       throw e
     }
-    return this.addFolder(handle)
+    return this.addFolder(handle, kind)
   },
 
   /** Keep a folder (the same folder twice is kept once). */
-  async addFolder(handle: DirHandle): Promise<LibraryFolder> {
+  async addFolder(handle: DirHandle, kind: 'songs' | 'lyrics' = 'songs'): Promise<LibraryFolder> {
     for (const f of await this.folders()) {
+      if ((f.kind ?? 'songs') !== kind) continue
       if (await handleOf(f).isSameEntry?.(handle).catch(() => false)) {
         live.set(f.id, handle)
         return f
       }
     }
-    const row: LibraryFolder = { id: uuid(), name: handle.name, handle: handle as unknown as FileSystemDirectoryHandle, addedAt: Date.now() }
+    const row: LibraryFolder = { id: uuid(), name: handle.name, handle: handle as unknown as FileSystemDirectoryHandle, addedAt: Date.now(), ...(kind === 'lyrics' ? { kind, lyricFiles: [] } : {}) }
     live.set(row.id, handle)
     try {
       await getDb().libraryFolders.put(row)
@@ -135,6 +155,7 @@ export const LibraryService = {
    * student edited stay.
    */
   async scan(folder: LibraryFolder, onProgress?: (done: number, total: number) => void): Promise<ScanResult> {
+    if (folder.kind === 'lyrics') return this.scanLyrics(folder)
     const db = getDb()
     const files: Array<{ path: string; handle: FileHandle; parent: string }> = []
     await walk(handleOf(folder), '', 0, files)
@@ -227,6 +248,84 @@ export const LibraryService = {
     })
     onProgress?.(files.length, files.length)
     return { added, updated, removed: gone.length, total: files.length }
+  },
+
+  /**
+   * Bring a lyrics folder's list up to date. Only names, sizes and the
+   * `[ti:]` / `[ar:]` lines at the top of LRC files are kept; a file's lyrics
+   * are read when they are used.
+   */
+  async scanLyrics(folder: LibraryFolder): Promise<ScanResult> {
+    const db = getDb()
+    const files: Array<{ path: string; handle: FileHandle }> = []
+    await walkLyrics(handleOf(folder), '', 0, files)
+    const stored = await db.libraryFolders.get(folder.id)
+    const old = new Map((stored?.lyricFiles ?? folder.lyricFiles ?? []).map((e) => [e.path, e]))
+    const next: LyricFileEntry[] = []
+    let added = 0
+    let updated = 0
+    for (const f of files) {
+      const file = await f.handle.getFile()
+      const prev = old.get(f.path)
+      if (prev && prev.size === file.size && prev.lastModified === file.lastModified) {
+        next.push(prev)
+        continue
+      }
+      const entry: LyricFileEntry = { path: f.path, fileName: file.name, size: file.size, lastModified: file.lastModified }
+      if (/\.lrc$/i.test(file.name)) {
+        try {
+          const head = lrcHeader(decodeLyricBytes(new Uint8Array(await file.slice(0, 2048).arrayBuffer())))
+          if (head.title) entry.title = head.title
+          if (head.artist) entry.artist = head.artist
+        } catch {
+          // the name is enough
+        }
+      }
+      next.push(entry)
+      if (prev) updated++
+      else added++
+    }
+    const paths = new Set(next.map((e) => e.path))
+    const removed = [...old.keys()].filter((p) => !paths.has(p)).length
+    await db.libraryFolders.update(folder.id, { lyricFiles: next, lastScanAt: Date.now() })
+    return { added, updated, removed, total: next.length }
+  },
+
+  /** Lyric files in the lyrics folders that could belong to this song. */
+  async findLyrics(song: { title: string; artist?: string }): Promise<LyricsLookup> {
+    const all: Array<LyricMatch & { folderId: string }> = []
+    for (const f of (await this.folders()).filter((x) => x.kind === 'lyrics')) {
+      all.push(...findLyricMatches(song, f.lyricFiles ?? []).matches.map((m) => ({ ...m, folderId: f.id })))
+    }
+    all.sort((a, b) => b.score - a.score)
+    const top = all[0]
+    const tied = all.filter((m) => top && m.score === top.score)
+    const names = new Set(tied.map((m) => m.entry.fileName.replace(LYRIC_EXT, '')))
+    return { matches: all.slice(0, 8), sure: !!top && top.score >= 70 && names.size === 1 }
+  },
+
+  /** A lyric file's lines (the lyrics folder must be allowed). */
+  async readLyrics(folderId: string, entry: LyricFileEntry): Promise<ParsedLyricFile> {
+    const folder = await getDb().libraryFolders.get(folderId)
+    if (!folder) throw new Error('这个歌词文件夹已经从歌曲库移除。')
+    if ((await this.access(folder)) !== 'granted') throw new Error('浏览器还没允许读取歌词文件夹。请点「允许读取歌词文件夹」。')
+    let dir = handleOf(folder)
+    const parts = entry.path.split('/')
+    try {
+      for (const p of parts.slice(0, -1)) dir = await dir.getDirectoryHandle(p)
+      const file = await (await dir.getFileHandle(parts[parts.length - 1]!)).getFile()
+      return parseLyricFile(file.name, decodeLyricBytes(new Uint8Array(await file.arrayBuffer())))
+    } catch (e) {
+      if (e instanceof DOMException && e.name === 'NotFoundError') throw new Error('找不到这个歌词文件了，可能被移动或删除。请在歌曲库里重新扫描歌词文件夹。')
+      throw e
+    }
+  },
+
+  /** Lyrics folders that need a click to be read again (after the browser restarted). */
+  async lyricFoldersNeedingAccess(): Promise<LibraryFolder[]> {
+    const out: LibraryFolder[] = []
+    for (const f of (await this.folders()).filter((x) => x.kind === 'lyrics')) if ((await this.access(f).catch(() => 'denied' as const)) !== 'granted') out.push(f)
+    return out
   },
 
   /** The student's own name for a song (never overwritten by a rescan). */

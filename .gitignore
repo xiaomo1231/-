@@ -24,3 +24,6 @@ public/ort/
 public/alphatab/
 # vocals model (half precision, made by scripts/make-vocal-model.py; shipped in the release zip)
 public/models/
+
+# LDDC (the student's own lyric downloader and lyrics, never committed)
+LDDC-*/

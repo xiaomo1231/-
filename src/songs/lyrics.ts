@@ -303,6 +303,17 @@ export function setLineStart(lines: LyricLine[], i: number, ms: number): LyricLi
   return sortLines(lines.map((l, k) => (k === i ? moved : l)))
 }
 
+/** Moves every line (and its end and word timings) by `deltaMs`; times stop at 0. */
+export function shiftAll(lines: LyricLine[], deltaMs: number): LyricLine[] {
+  const at = (ms: number) => Math.max(0, Math.round(ms + deltaMs))
+  return lines.map((l) => {
+    const moved: LyricLine = { ...l, startMs: at(l.startMs) }
+    if (l.endMs !== undefined) moved.endMs = at(l.endMs)
+    if (l.words) moved.words = l.words.map((w) => ({ startMs: at(w.startMs), text: w.text }))
+    return moved
+  })
+}
+
 /**
  * Swaps the text of line i with its neighbour (-1 = previous, 1 = next) and
  * keeps both timings in place. Word timings are dropped on both lines, since

@@ -6,7 +6,9 @@ import { LibraryService } from '@/services/libraryService'
 import { getDb } from '@/infrastructure/db/database'
 import type { LibrarySong } from '@/entities/types'
 import { SeparateDialog } from '@/widgets/separation/SeparateDialog'
-import { SingService, SingError, cleanSongTitle } from '@/services/singService'
+import { SingService, SingError, cleanSongTitle, singKey } from '@/services/singService'
+import { LyricFileList, type LyricChoice } from '@/widgets/sing/LyricFileMatch'
+import { useLyricLookup } from '@/features/sing/useLyricLookup'
 import { STEM_LABEL, detectStem } from '@/songs/backingSync'
 import { toast } from '@/features/toast/toastStore'
 import { Button } from '@/shared/ui/Button'
@@ -29,10 +31,21 @@ export function SingImportPanel() {
   const [error, setError] = useState<string | null>(null)
   const [picking, setPicking] = useState(false)
   const location = useLocation()
+  const lyr = useLyricLookup(title, artist)
+  const [lyricChoice, setLyricChoice] = useState<LyricChoice | null>(null)
+  const [lyricTouched, setLyricTouched] = useState(false)
+
+  // The certain match is chosen by itself until the student picks something else.
+  useEffect(() => {
+    if (lyricTouched) return
+    const best = lyr.lookup?.sure ? lyr.lookup.matches[0] : undefined
+    setLyricChoice(best ? { folderId: best.folderId, entry: best.entry } : null)
+  }, [lyr.lookup, lyricTouched])
 
   /** A song from 歌曲库: its name, then the separation dialog (vocals only). */
   const fromLibrary = (song: LibrarySong, file: File) => {
     setPicking(false)
+    setLyricTouched(false)
     setTitle(song.title)
     setArtist(song.artist)
     setSepFile(file)
@@ -84,7 +97,19 @@ export function SingImportPanel() {
     setError(null)
     try {
       const song = await SingService.create({ title, artist, files })
-      toast({ title: '已添加', variant: 'success' })
+      let lyricNote = ''
+      if (lyricChoice) {
+        try {
+          const parsed = await LibraryService.readLyrics(lyricChoice.folderId, lyricChoice.entry)
+          if (parsed.lines.length) {
+            await SingService.updateMeta(singKey('song', song.id), { lyrics: parsed.lines, lyricsTimed: true })
+            lyricNote = `，歌词已配上（${lyricChoice.entry.fileName}）`
+          } else lyricNote = '，但歌词文件里没有带时间的歌词'
+        } catch (e) {
+          lyricNote = `，但歌词没能读取：${e instanceof Error ? e.message : String(e)}`
+        }
+      }
+      toast({ title: `已添加${lyricNote}`, variant: 'success' })
       navigate(`/sing/song/${song.id}`)
     } catch (err) {
       if (err instanceof SingError) setError(err.message)
@@ -115,6 +140,24 @@ export function SingImportPanel() {
               <Input id="sing-artist" value={artist} maxLength={40} placeholder="可不填" onChange={(e) => setArtist(e.target.value)} />
             </div>
           </div>
+
+          {lyr.hasFolders && title.trim() !== '' && lyr.lookup && (
+            <div className="space-y-1 rounded-xl border border-border/70 bg-background/40 p-3">
+              <p className="text-xs font-medium">歌词（来自你的歌词文件夹）</p>
+              <LyricFileList
+                lookup={lyr.lookup}
+                locked={lyr.locked}
+                onAllow={() => void lyr.allow()}
+                value={lyricChoice}
+                onChange={(c) => {
+                  setLyricTouched(true)
+                  setLyricChoice(c)
+                }}
+                compact
+              />
+              {lyricChoice && <p className="text-[11px] text-muted-foreground">保存时会一起配上，跟唱按歌词分句。不对的话之后在「歌词」里可以调整或清空。</p>}
+            </div>
+          )}
 
           <div
             onDragOver={onDragOver}

@@ -72,7 +72,9 @@ export function useLibrary(opts: { watch?: boolean; onNew?: (r: ScanResult, fold
       if (!quiet) setScanning(folder.id)
       try {
         const r = await LibraryService.scan(folder)
-        if (r.added + r.updated + r.removed > 0 || !quiet) setSongs(await LibraryService.songs())
+        if (folder.kind === 'lyrics') {
+          if (r.added + r.updated + r.removed > 0 || !quiet) setFolders(await LibraryService.folders())
+        } else if (r.added + r.updated + r.removed > 0 || !quiet) setSongs(await LibraryService.songs())
         if (r.added > 0) onNew.current?.(r, folder)
         return r
       } finally {
@@ -94,8 +96,8 @@ export function useLibrary(opts: { watch?: boolean; onNew?: (r: ScanResult, fold
     [scan],
   )
 
-  const addFolder = useCallback(async () => {
-    const f = await LibraryService.pickFolder()
+  const addFolder = useCallback(async (kind: 'songs' | 'lyrics' = 'songs') => {
+    const f = await LibraryService.pickFolder(kind)
     if (!f) return null
     await reload()
     await scan(f)
