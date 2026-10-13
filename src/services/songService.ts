@@ -1,5 +1,5 @@
 import { uuid } from '@/infrastructure/crypto/crypto'
-import { loadScoreDecoded } from '@/audio/alphatabEncoding'
+import { garbleScore, loadScoreDecoded } from '@/audio/alphatabEncoding'
 import { getDb } from '@/infrastructure/db/database'
 import type { SheetFile, SongSheet } from '@/entities/types'
 import type { Score } from '@/music/score'
@@ -202,6 +202,42 @@ export const SongService = {
   },
 
   /** Edit what the student can change: title, singer, version name, tags, practice defaults. */
+  /**
+   * Sheets imported before 0.21.2 kept garbled names (GBK read as UTF-8) and
+   * tab-site adverts. Given the score as now read correctly, replace what is
+   * still broken in the stored track names, title and artist. Returns the
+   * updated sheet, or undefined when nothing needed fixing.
+   */
+  async repairTexts(id: string, score: { title: string; artist: string; tracks: ReadonlyArray<{ index: number; name: string }> }): Promise<SongSheet | undefined> {
+    const db = getDb()
+    const s = await db.songSheets.get(id)
+    if (!s) return undefined
+    const broken = (t: string | undefined) => !!t && garbleScore([t]) > 0
+    let changed = false
+    const next: SongSheet = { ...s }
+    if (s.tracks?.some((t) => broken(t.name))) {
+      next.tracks = s.tracks.map((t) => {
+        const fresh = score.tracks.find((x) => x.index === t.index)?.name
+        return broken(t.name) && fresh && !broken(fresh) ? { ...t, name: fresh } : t
+      })
+      changed = true
+    }
+    const title = stripSiteAds(score.title ?? '')
+    if (broken(s.title) && title && !broken(title)) {
+      next.title = title.slice(0, 60)
+      changed = true
+    }
+    const artist = stripSiteAds(score.artist ?? '')
+    if ((broken(s.artist) || (s.artist && stripSiteAds(s.artist) !== s.artist)) && !broken(artist)) {
+      next.artist = (artist || stripSiteAds(s.artist ?? '')).slice(0, 40)
+      changed = true
+    }
+    if (!changed) return undefined
+    next.updatedAt = Date.now()
+    await db.songSheets.put(next)
+    return next
+  },
+
   async update(id: string, patch: Partial<Pick<SongSheet, 'title' | 'pattern' | 'bpm' | 'notes' | 'artist' | 'versionLabel' | 'tags' | 'defaultTrack' | 'transpose' | 'transposeWay'>>): Promise<SongSheet | undefined> {
     const db = getDb()
     const s = await db.songSheets.get(id)

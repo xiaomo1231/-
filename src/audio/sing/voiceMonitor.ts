@@ -47,19 +47,33 @@ export class VoiceMonitor {
     if (this.out) return this.update(s)
     const bus = inputManager.bus
     const ctx = bus.context
+    // Many interfaces and guitar cables arrive as two channels with the signal on
+    // one side only: fold to mono first (L+R), so both ears hear the voice.
+    const mono = ctx.createGain()
+    mono.channelCount = 1
+    mono.channelCountMode = 'explicit'
+    mono.channelInterpretation = 'speakers'
     // A gentle low cut keeps breath pops and handling noise out of the ears.
     const hp = ctx.createBiquadFilter()
     hp.type = 'highpass'
     hp.frequency.value = 90
+    hp.channelCount = 1
+    hp.channelCountMode = 'explicit'
+    // The fold halves a one-sided signal: bring it back up (+6 dB); the volume slider does the rest.
+    mono.gain.value = 2
+    // out is stereo (explicit), so the mono voice is copied to both ears.
     const out = ctx.createGain()
+    out.channelCount = 2
+    out.channelCountMode = 'explicit'
+    out.channelInterpretation = 'speakers'
     const wet = ctx.createGain()
     const conv = ctx.createConvolver()
     conv.buffer = reverbImpulse(ctx, 0.35, 1.2, 'plate')
-    bus.connect(hp)
+    bus.connect(mono).connect(hp)
     hp.connect(out)
     hp.connect(conv).connect(wet).connect(out)
     out.connect(ctx.destination)
-    this.nodes = [hp, conv]
+    this.nodes = [mono, hp, conv]
     this.out = out
     this.wet = wet
     this.update(s)

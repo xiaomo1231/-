@@ -164,6 +164,12 @@ function WrittenSheet({ sheet, header }: { sheet: SongSheet; header: React.React
   const theme = useThemeStore((s) => s.mode)
   const [bytes, setBytes] = useState<Uint8Array | null | 'missing'>(null)
   const [score, setScore] = useState<model.Score | null>(null)
+  const [repaired, setRepaired] = useState<SongSheet | null>(null)
+  // Names stored by an older import may be garbled: fix them from the score as read now.
+  useEffect(() => {
+    if (!score) return
+    void SongService.repairTexts(sheet.id, score).then((s) => s && setRepaired(s))
+  }, [score, sheet.id])
   const [api, setApi] = useState<AlphaTabApi | null>(null)
   const [backing, setBacking] = useState(sheet.backing)
   const [track, setTrack] = useState(sheet.defaultTrack ?? 0)
@@ -195,7 +201,7 @@ function WrittenSheet({ sheet, header }: { sheet: SongSheet; header: React.React
     [from, length, bars],
   )
   const tracks =
-    sheet.tracks ??
+    (repaired ?? sheet).tracks ??
     score?.tracks.map((t) => ({
       index: t.index,
       name: t.name,
