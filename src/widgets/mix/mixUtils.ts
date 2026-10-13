@@ -107,15 +107,38 @@ export function mixEqual(a: MixSettings, b: MixSettings): boolean {
 }
 
 export type ModuleId = 'lowcut' | 'eq' | 'comp' | 'deess' | 'reverb' | 'delay' | 'balance'
+/** Modules added in 0.21.0 (no old-style lesson card; they link to 后期课堂). */
+export type ExtraModuleId = 'gate' | 'dynEq' | 'comp2' | 'parallel' | 'saturation' | 'mod' | 'duck' | 'pocket' | 'autoLevel' | 'tune' | 'multiband' | 'width'
+export type AnyModuleId = ModuleId | ExtraModuleId
 
 /**
  * 旁通某个模块（用于「听听看」的对比）：有开关的模块关闭开关；
  * 平衡没有开关，则把人声增益与声像、伴奏增益恢复到 0。
  */
-export function bypassModule(m: MixSettings, id: ModuleId): MixSettings {
+export function bypassModule(m: MixSettings, id: AnyModuleId): MixSettings {
   const out = cloneMix(m)
   const v = out.vocal
   switch (id) {
+    case 'gate':
+    case 'dynEq':
+    case 'comp2':
+    case 'parallel':
+    case 'saturation':
+    case 'mod':
+    case 'autoLevel':
+    case 'tune':
+      v[id].on = false
+      break
+    case 'duck':
+    case 'pocket':
+      out.backing[id].on = false
+      break
+    case 'multiband':
+      out.master.multiband.on = false
+      break
+    case 'width':
+      out.master.width.on = false
+      break
     case 'lowcut':
       v.lowCut.on = false
       break

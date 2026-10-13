@@ -370,7 +370,7 @@ export interface EarDrillStats {
 export interface UserMixPreset {
   id: string
   name: string
-  mix: import('@/songs/singTypes').MixSettings
+  mix: MixSettings
   createdAt: number
 }
 
@@ -472,6 +472,8 @@ export interface SingMeta {
   phraseCuts?: Array<{ startMs: number; endMs: number }>
   comp?: CompPlan
   mix?: MixSettings
+  /** Saved versions of the mix for A/B comparison (0.21.0). */
+  mixSnapshots?: Array<{ name: string; mix: MixSettings }>
   updatedAt: number
 }
 

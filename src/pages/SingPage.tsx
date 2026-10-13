@@ -52,6 +52,7 @@ function SingWorkspace({ source }: { source: SingSource }) {
   const [editing, setEditing] = useState<SingSong | null>(null)
   const [voice, setVoice] = useState<{ buffer: AudioBuffer; label: string } | null>(null)
   const [backing, setBacking] = useState<AudioBuffer[] | null>(null)
+  const [backingNames, setBackingNames] = useState<string[]>([])
   const kinds = source.stems.map((s) => s.stem)
   const usesMix = backingStems(kinds).includes('mix')
 
@@ -61,7 +62,9 @@ function SingWorkspace({ source }: { source: SingSource }) {
     void (async () => {
       const ctx = Tone.getContext().rawContext as AudioContext
       const want = backingStems(kinds)
-      const bufs = await Promise.all(session.stems.current.filter((s) => want.includes(s.stem)).map(async (s) => ctx.decodeAudioData(await s.blob.arrayBuffer())))
+      const stems = session.stems.current.filter((s) => want.includes(s.stem))
+      const bufs = await Promise.all(stems.map(async (s) => ctx.decodeAudioData(await s.blob.arrayBuffer())))
+      setBackingNames(stems.map((s) => s.stem))
       setBacking(bufs)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -142,7 +145,19 @@ function SingWorkspace({ source }: { source: SingSource }) {
                     {usesMix && ' 注意：这首歌只有完整原曲、没有伴奏轨，原唱会混在背景里；用「自动分轨」得到伴奏效果更好。'}
                   </p>
                   {backing ? (
-                    <MixDesk voice={voice?.buffer ?? null} backing={backing} mix={session.meta?.mix ?? DEFAULT_MIX} onMix={(m) => void session.setMeta({ mix: m })} songKey={source.key} title={title} artist={artist} />
+                    <MixDesk
+                      voice={voice?.buffer ?? null}
+                      backing={backing}
+                      backingNames={backingNames}
+                      phrases={session.phrases.map((p) => ({ startMs: p.startMs, endMs: p.endMs, ...(p.lyric ? { lyric: p.lyric } : {}) }))}
+                      mix={session.meta?.mix ?? DEFAULT_MIX}
+                      onMix={(m) => void session.setMeta({ mix: m })}
+                      snapshots={session.meta?.mixSnapshots ?? []}
+                      onSnapshots={(s) => void session.setMeta({ mixSnapshots: s })}
+                      songKey={source.key}
+                      title={title}
+                      artist={artist}
+                    />
                   ) : (
                     <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
                       <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> 正在准备伴奏…

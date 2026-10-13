@@ -3,6 +3,8 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderMix } from '@/audio/sing/mixChain'
 import { toast } from '@/features/toast/toastStore'
 import { encodeWav } from '@/export/wav'
+import { encodeMp3 } from '@/export/mp3'
+import { prepareVoice, needsPrep } from '@/audio/fx/voicePrep'
 import { SingService } from '@/services/singService'
 import { Button, Slider } from '@/shared/ui'
 import { GUIDE_STEPS } from '@/songs/mixLessons'
@@ -11,6 +13,7 @@ import type { EqBand, EqBandType, MixPresetId, MixSettings } from '@/songs/singT
 import { EarQuiz } from './EarQuiz'
 import { EqCurve } from './EqCurve'
 import { ModulePanel, NumField, OnSwitch, selectClass } from './controls'
+import { Controls, LearnLinks, LoudnessReadout, LoudnessTarget, OrderEditor, PhraseOffsets, SpectrumView, StemLevels, SuggestionsPanel, TuneControls, UserPresets, Snapshots, type Snapshot } from './DeskExtras'
 import { Meters } from './Meters'
 import { MixPlayer, type Region } from './mixPlayer'
 import {
@@ -21,15 +24,22 @@ import {
   formatPan,
   mixEqual,
   previewRegion,
+  type AnyModuleId,
   type ModuleId,
 } from './mixUtils'
 
 export interface MixDeskProps {
   voice: AudioBuffer | null
   backing: AudioBuffer[]
+  /** Stem names of the backing buffers (per-stem levels). */
+  backingNames?: string[]
+  /** Phrases of the song (level riding), with their lyric when known. */
+  phrases?: Array<{ startMs: number; endMs: number; lyric?: string }>
   bpm?: number
   mix: MixSettings
   onMix: (m: MixSettings) => void
+  snapshots?: Snapshot[]
+  onSnapshots?: (s: Snapshot[]) => void
   songKey: string
   title: string
   artist?: string
@@ -85,9 +95,29 @@ const formatClock = (sec: number): string => {
  * 均衡曲线、电平表、第一次使用的引导、耳朵训练、导出与保存到作品集。
  */
 export function MixDesk(props: MixDeskProps): JSX.Element {
-  const { voice, backing, bpm = 100, onMix, songKey, title, artist } = props
+  const { voice: rawVoice, backing, bpm = 100, onMix, songKey, title, artist } = props
+  const backingNames = useMemo(() => props.backingNames ?? [], [props.backingNames])
+  const phrases = useMemo(() => props.phrases ?? [], [props.phrases])
   // The working copy: values clamped and EQ fitted to four bands, the same as what the audio chain reads.
   const mix = useMemo(() => fitMix(props.mix), [props.mix])
+  // The voice after level riding / pitch correction (computed off the chain, cached).
+  const [voice, setVoice] = useState<AudioBuffer | null>(rawVoice)
+  const [prepping, setPrepping] = useState(false)
+  useEffect(() => {
+    if (!rawVoice || !needsPrep(mix)) {
+      setVoice(rawVoice)
+      return
+    }
+    let dead = false
+    setPrepping(true)
+    void prepareVoice(rawVoice, mix, phrases)
+      .then((v) => !dead && setVoice(v))
+      .finally(() => !dead && setPrepping(false))
+    return () => {
+      dead = true
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawVoice, phrases, mix.vocal.autoLevel, mix.vocal.tune])
   const total = useMemo(
     () => Math.max(voice?.duration ?? 0, ...backing.map((b) => b.duration), 0),
     [voice, backing],
@@ -109,15 +139,17 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
   const [busy, setBusy] = useState<string | null>(null)
   const [guideStep, setGuideStep] = useState<number | null>(null)
   const [spotlight, setSpotlight] = useState<string | null>(null)
+  const [mp3Kbps, setMp3Kbps] = useState(256)
   const panelEls = useRef<Record<string, HTMLElement | null>>({})
 
   // Keep the audio graph in step with the props.
   useEffect(() => {
-    player.setBuffers(voice, backing)
+    player.setBuffers(voice, backing, backingNames)
+  }, [player, voice, backing, backingNames])
+  useEffect(() => {
     setPos(0)
-    setPlaying(false)
     setRange(null)
-  }, [player, voice, backing])
+  }, [rawVoice, backing])
   useEffect(() => {
     player.setMix(mix)
   }, [player, mix])
@@ -253,7 +285,7 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
 
   // ---- audition (「听听看」) -----------------------------------------------
 
-  const audition = async (id: ModuleId, label: string) => {
+  const audition = async (id: AnyModuleId, label: string) => {
     if (total <= 0) return
     const region = previewRegion(total, range, AUDITION_MAX_SEC)
     const passes = [
@@ -273,14 +305,19 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
   // ---- export ---------------------------------------------------------------
 
   const render = async (part: 'all' | 'voice' | 'backing') => {
-    const channels = await renderMix({ voice, backing, mix, bpm, part, sampleRate: SAMPLE_RATE })
+    const channels = await renderMix({ voice, backing, backingNames, mix, bpm, part, sampleRate: SAMPLE_RATE })
     return { channels, wav: encodeWav(channels, SAMPLE_RATE) }
   }
 
-  const runExport = async (part: 'all' | 'voice' | 'backing', label: string, suffix: string) => {
+  const runExport = async (part: 'all' | 'voice' | 'backing', label: string, suffix: string, format: 'wav' | 'mp3' = 'wav') => {
     setBusy(label)
     try {
-      const { wav } = await render(part)
+      const { channels, wav } = await render(part)
+      if (format === 'mp3') {
+        setBusy(`${label}（MP3 编码中）`)
+        downloadBlob(await encodeMp3(channels, SAMPLE_RATE, mp3Kbps), `${safeName(title)}-${suffix}.mp3`)
+        return
+      }
       downloadBlob(
         new Blob([wav as BlobPart], { type: 'audio/wav' }),
         `${safeName(title)}-${suffix}.wav`,
@@ -344,6 +381,24 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
     },
   })
 
+  /** Panel props for a 0.21 module: switch at a path, 「听听看」 inside the body. */
+  const extraPanel = (id: AnyModuleId, title: string, on: boolean, setOn: (on: boolean) => void, summary: string) => ({
+    ...panelProps(id),
+    title,
+    summary: on ? summary : '已关闭',
+    on,
+    onToggle: setOn,
+  })
+  const listenButton = (id: AnyModuleId, label: string) => (
+    <div className="flex flex-wrap items-center gap-2">
+      <Button size="sm" variant="ghost" onClick={() => void audition(id, label)} disabled={total <= 0 || busy !== null}>
+        听听看（关 / 开各放一遍）
+      </Button>
+      {listen && listen.id === id && <span className="text-xs text-amber">正在播放：{listen.label}</span>}
+    </div>
+  )
+  const setVocal = <K extends keyof MixSettings['vocal']>(k: K, patch: Partial<MixSettings['vocal'][K]>) => vocal({ [k]: { ...(mix.vocal[k] as object), ...patch } } as Partial<MixSettings['vocal']>)
+
   const v = mix.vocal
   const bands = v.eq.bands
   const guide = guideStep !== null ? GUIDE_STEPS[guideStep] : undefined
@@ -355,7 +410,7 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
         <div>
           <h2 className="text-lg font-semibold text-foreground">后期工作台</h2>
           <p className="text-xs text-muted-foreground">
-            信号链从上到下：低切 → 均衡 → 压缩 → 齿音消除 → 混响 / 延迟 → 平衡 → 母线。
+            人声先经过「效果顺序」里的插入效果，再送去混响 / 延迟，最后和伴奏一起进入母线。每个效果下面都有对应的后期课堂链接。
           </p>
         </div>
         <Button size="sm" variant="ghost" onClick={() => setGuideStep(0)}>
@@ -473,6 +528,8 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
             ? activePreset.description
             : '当前是自定义设置；点一个预设可以回到它的起点。'}
         </p>
+        <UserPresets mix={mix} onMix={apply} />
+        {props.onSnapshots && <Snapshots snapshots={props.snapshots ?? []} mix={mix} onMix={apply} onChange={props.onSnapshots} />}
       </section>
 
       {/* Curve and meters */}
@@ -485,9 +542,28 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
         />
         <Meters getMeters={getMeters} getReduction={getReduction} />
       </section>
+      <section className="space-y-3 rounded-3xl border border-border/80 bg-card p-5">
+        <SpectrumView getMeters={getMeters} live={playing} />
+        <LoudnessReadout getMeters={getMeters} live={playing} />
+      </section>
+      {prepping && (
+        <p className="flex items-center gap-2 text-sm text-muted-foreground" role="status">
+          <Loader2 className="size-4 animate-spin" /> 正在处理人声（逐句音量平衡 / 音高修正）…
+        </p>
+      )}
 
       {/* Module chain */}
       <div className="space-y-3">
+        <ModulePanel {...panelProps('order')} title="效果顺序" summary={v.order.filter((id) => (id === 'lowCut' ? v.lowCut.on : v[id].on)).length + ' 个打开'} on={null}>
+          <OrderEditor mix={mix} onMix={apply} />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('gate', '噪声门', v.gate.on, (on) => setVocal('gate', { on }), `${formatDb(v.gate.thresholdDb)} 以下压低 ${v.gate.rangeDb} dB`)}>
+          <Controls paths={['vocal.gate.thresholdDb', 'vocal.gate.rangeDb', 'vocal.gate.releaseMs']} mix={mix} onMix={apply} cols={3} />
+          <p className="text-xs text-muted-foreground">句子之间的底噪、呼吸、耳机漏音会被压低；阈值要比最轻的唱声低，否则字尾会被切掉。</p>
+          {listenButton('gate', '噪声门')}
+          <LearnLinks module="gate" />
+        </ModulePanel>
         <ModulePanel
           {...panelProps('lowcut', 'lowcut')}
           title="低切"
@@ -667,7 +743,53 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
               disabled={!v.deEss.on}
               onChange={(amountDb) => vocal({ deEss: { ...v.deEss, amountDb } })}
             />
+            <NumField
+              label="阈值（齿音超过它才压）"
+              value={v.deEss.thresholdDb}
+              min={-60}
+              max={0}
+              step={0.5}
+              unit="dB"
+              disabled={!v.deEss.on}
+              onChange={(thresholdDb) => vocal({ deEss: { ...v.deEss, thresholdDb } })}
+            />
           </div>
+          <LearnLinks module="deess" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('dynEq', '动态 EQ', v.dynEq.on, (on) => setVocal('dynEq', { on }), `${formatHz(v.dynEq.freq)} 最多 −${v.dynEq.maxCutDb} dB`)}>
+          <Controls paths={['vocal.dynEq.freq', 'vocal.dynEq.q', 'vocal.dynEq.thresholdDb', 'vocal.dynEq.ratio', 'vocal.dynEq.maxCutDb']} mix={mix} onMix={apply} cols={3} />
+          <p className="text-xs text-muted-foreground">只在某个频段"冒出来"的时候才衰减它（比如低音时的轰、高音时的刺），平时不动。</p>
+          {listenButton('dynEq', '动态 EQ')}
+          <LearnLinks module="dynEq" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('comp2', '第二级压缩', v.comp2.on, (on) => setVocal('comp2', { on }), `${formatDb(v.comp2.thresholdDb)} · ${v.comp2.ratio}:1`)}>
+          <Controls paths={['vocal.comp2.thresholdDb', 'vocal.comp2.ratio', 'vocal.comp2.attackMs', 'vocal.comp2.releaseMs', 'vocal.comp2.makeupDb']} mix={mix} onMix={apply} cols={3} />
+          <p className="text-xs text-muted-foreground">两台压缩各压一点（例如第一台慢、整体平稳，第二台快、只抓峰值），比一台压很多更自然。</p>
+          {listenButton('comp2', '第二级压缩')}
+          <LearnLinks module="comp2" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('parallel', '并行压缩', v.parallel.on, (on) => setVocal('parallel', { on }), `混入 ${Math.round(v.parallel.blend * 100)}%`)}>
+          <Controls paths={['vocal.parallel.thresholdDb', 'vocal.parallel.ratio', 'vocal.parallel.blend']} mix={mix} onMix={apply} cols={3} />
+          <p className="text-xs text-muted-foreground">把一份压得很扁的人声混在原声下面：轻的地方被托起来、更有密度，响的地方仍保留原来的冲击。</p>
+          {listenButton('parallel', '并行压缩')}
+          <LearnLinks module="parallel" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('saturation', '饱和', v.saturation.on, (on) => setVocal('saturation', { on }), `${{ tape: '磁带', tube: '电子管', hard: '硬削波' }[v.saturation.type]} · ${Math.round(v.saturation.drive * 100)}%`)}>
+          <Controls paths={['vocal.saturation.type', 'vocal.saturation.drive', 'vocal.saturation.mix']} mix={mix} onMix={apply} cols={3} />
+          <p className="text-xs text-muted-foreground">加一点谐波：声音更暖、更密、在伴奏里更容易听到；开大就是失真效果。</p>
+          {listenButton('saturation', '饱和')}
+          <LearnLinks module="saturation" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('mod', '调制', v.mod.on, (on) => setVocal('mod', { on }), `${{ chorus: '合唱', flanger: '镶边', phaser: '移相', doubler: '加倍' }[v.mod.type]} · ${Math.round(v.mod.mix * 100)}%`)}>
+          <Controls paths={['vocal.mod.type', 'vocal.mod.rate', 'vocal.mod.depth', 'vocal.mod.mix']} mix={mix} onMix={apply} />
+          <p className="text-xs text-muted-foreground">加倍让人声更宽、像唱了两遍；合唱更梦幻；镶边和移相是明显的"扫动"特效，适合点缀。</p>
+          {listenButton('mod', '调制')}
+          <LearnLinks module="mod" />
         </ModulePanel>
 
         <ModulePanel
@@ -726,6 +848,8 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
               onChange={(mix) => vocal({ reverb: { ...v.reverb, mix } })}
             />
           </div>
+          <Controls paths={['vocal.reverb.type', 'vocal.reverb.lowCut', 'vocal.reverb.highCut']} mix={mix} onMix={apply} cols={3} />
+          <LearnLinks module="reverb" />
         </ModulePanel>
 
         <ModulePanel
@@ -822,6 +946,22 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
               />
             </div>
           </div>
+          <Controls paths={['vocal.delay.pingPong', 'vocal.delay.highCut']} mix={mix} onMix={apply} />
+          <LearnLinks module="delay" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('autoLevel', '逐句音量平衡', v.autoLevel.on, (on) => setVocal('autoLevel', { on }), `力度 ${Math.round(v.autoLevel.strength * 100)}%`)}>
+          <Controls paths={['vocal.autoLevel.strength']} mix={mix} onMix={apply} />
+          <p className="text-xs text-muted-foreground">像录音师"推推子"一样：把太轻的句子推上来、太响的拉下去，让压缩不用那么重。</p>
+          <PhraseOffsets mix={mix} onMix={apply} phrases={phrases} />
+          {listenButton('autoLevel', '逐句音量平衡')}
+          <LearnLinks module="autoLevel" />
+        </ModulePanel>
+
+        <ModulePanel {...extraPanel('tune', '音高修正（实验）', v.tune.on, (on) => setVocal('tune', { on }), `力度 ${Math.round(v.tune.amount * 100)}%`)}>
+          <TuneControls mix={mix} onMix={apply} />
+          {listenButton('tune', '音高修正')}
+          <LearnLinks module="tune" />
         </ModulePanel>
 
         <ModulePanel
@@ -903,6 +1043,19 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
               />
             </div>
           </div>
+          <div className="space-y-3 rounded-xl bg-muted/30 p-3">
+            <p className="text-sm font-medium">给人声让位置</p>
+            <Controls paths={['backing.duck.on', 'backing.duck.amountDb', 'backing.duck.releaseMs']} mix={mix} onMix={apply} cols={3} />
+            <Controls paths={['backing.pocket.on', 'backing.pocket.freq', 'backing.pocket.amountDb']} mix={mix} onMix={apply} cols={3} />
+            <div className="flex flex-wrap gap-2">
+              {listenButton('duck', '伴奏让位')}
+              {listenButton('pocket', '中频凹陷')}
+            </div>
+            <LearnLinks module="duck" />
+            <LearnLinks module="pocket" />
+          </div>
+          <StemLevels names={backingNames} mix={mix} onMix={apply} />
+          <LearnLinks module="balance" />
         </ModulePanel>
 
         <ModulePanel
@@ -928,8 +1081,24 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
             unit="dB"
             onChange={(gainDb) => masterPatch({ gainDb })}
           />
+          <Controls paths={['master.ceilingDb']} mix={mix} onMix={apply} />
+          <LoudnessTarget mix={mix} onMix={apply} />
+          <div className="space-y-3 rounded-xl bg-muted/30 p-3">
+            <Controls paths={['master.multiband.on', 'master.multiband.lowHz', 'master.multiband.highHz']} mix={mix} onMix={apply} cols={3} />
+            {mix.master.multiband.on && (
+              <Controls paths={['master.multiband.bands.0.thresholdDb', 'master.multiband.bands.0.ratio', 'master.multiband.bands.1.thresholdDb', 'master.multiband.bands.1.ratio', 'master.multiband.bands.2.thresholdDb', 'master.multiband.bands.2.ratio']} mix={mix} onMix={apply} />
+            )}
+            {listenButton('multiband', '多段压缩')}
+          </div>
+          <div className="space-y-3 rounded-xl bg-muted/30 p-3">
+            <Controls paths={['master.width.on', 'master.width.amount']} mix={mix} onMix={apply} />
+            {listenButton('width', '立体声宽度')}
+          </div>
+          <LearnLinks module="master" />
         </ModulePanel>
       </div>
+
+      <SuggestionsPanel voice={voice} backing={backing} mix={mix} onMix={apply} />
 
       <EarQuiz
         player={player}
@@ -953,6 +1122,21 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
             <Download />
             导出完整版 WAV
           </Button>
+          <Button
+            variant="outline"
+            onClick={() => runExport('all', '正在导出完整版', '完整版', 'mp3')}
+            disabled={!canExport || busy !== null}
+          >
+            <Download />
+            导出完整版 MP3
+          </Button>
+          <select value={mp3Kbps} onChange={(e) => setMp3Kbps(Number(e.target.value))} className={selectClass} aria-label="MP3 码率">
+            {[128, 192, 256, 320].map((k) => (
+              <option key={k} value={k}>
+                MP3 {k} kbps
+              </option>
+            ))}
+          </select>
           <Button
             variant="outline"
             onClick={() => runExport('voice', '正在导出人声', '人声')}

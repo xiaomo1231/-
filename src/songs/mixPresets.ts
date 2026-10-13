@@ -260,7 +260,11 @@ export function fixOrder(order: unknown): InsertId[] {
   const given = Array.isArray(order) ? (order.filter((x) => INSERTS.has(x as InsertId)) as InsertId[]) : []
   const seen = new Set<InsertId>()
   const out: InsertId[] = []
-  for (const id of given) if (!seen.has(id)) (seen.add(id), out.push(id))
+  for (const id of given) {
+    if (seen.has(id)) continue
+    seen.add(id)
+    out.push(id)
+  }
   for (const id of DEFAULT_ORDER) if (!seen.has(id)) out.splice(Math.min(out.length, DEFAULT_ORDER.indexOf(id)), 0, id)
   return out
 }
