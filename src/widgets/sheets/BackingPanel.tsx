@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { Link } from 'react-router-dom'
-import { AudioLines, Crosshair, FileAudio, Loader2, Scissors, Trash2, Volume2, VolumeX, Wand2 } from 'lucide-react'
+import { AudioLines, Crosshair, FileAudio, Loader2, Scissors, Trash2, Volume2, VolumeX, Wand2, Library } from 'lucide-react'
 import { SeparateDialog } from '@/widgets/separation/SeparateDialog'
+import { LibraryPicker } from '@/widgets/library/LibraryPicker'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import type { SheetBacking, SongSheet } from '@/entities/types'
 import { BackingError, BackingService } from '@/services/backingService'
@@ -48,6 +49,8 @@ export function BackingPanel({ sheet, score, api, track, onChange, transpose = 0
   const input = useRef<HTMLInputElement>(null)
   const sepInput = useRef<HTMLInputElement>(null)
   const [sepFile, setSepFile] = useState<File | null>(null)
+  const [libOpen, setLibOpen] = useState(false)
+  const [libPick, setLibPick] = useState<{ title: string; file: File } | null>(null)
   const timeline = useMemo(() => barTimeline(score), [score])
   const player = useRef<StemPlayer | null>(null)
   const [ready, setReady] = useState(false)
@@ -149,6 +152,42 @@ export function BackingPanel({ sheet, score, api, track, onChange, transpose = 0
 
   const separator = (
     <>
+      <LibraryPicker
+        open={libOpen}
+        onClose={() => setLibOpen(false)}
+        title="从歌曲库选原曲"
+        onPick={(song, file) => {
+          setLibOpen(false)
+          setLibPick({ title: song.title, file })
+        }}
+      />
+      {libPick && (
+        <div className="mt-3 flex flex-wrap items-center gap-2 rounded-xl border border-cyan/40 bg-cyan-soft/10 px-3 py-2 text-sm">
+          <span className="min-w-0 flex-1 truncate">已选「{libPick.title}」</span>
+          <Button
+            size="sm"
+            onClick={() => {
+              setSepFile(libPick.file)
+              setLibPick(null)
+            }}
+          >
+            <Scissors /> 自动分轨后使用
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            onClick={() => {
+              void add([libPick.file])
+              setLibPick(null)
+            }}
+          >
+            直接用作原曲
+          </Button>
+          <Button size="sm" variant="ghost" onClick={() => setLibPick(null)}>
+            取消
+          </Button>
+        </div>
+      )}
       <input ref={sepInput} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg" className="hidden" aria-label="选择要自动分轨的原曲" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setSepFile(f) }} />
       <SeparateDialog
         file={sepFile}
@@ -189,6 +228,9 @@ export function BackingPanel({ sheet, score, api, track, onChange, transpose = 0
           </Button>
           <Button onClick={() => sepInput.current?.click()} disabled={busy !== null}>
             <Scissors /> 上传原曲，自动分轨
+          </Button>
+          <Button variant="outline" onClick={() => setLibOpen(true)} disabled={busy !== null}>
+            <Library /> 从歌曲库选
           </Button>
           <span className="text-xs text-muted-foreground">已经分好的几轨可以一次选多个，也可以拖进这里；只有原曲就点「自动分轨」。</span>
         </div>

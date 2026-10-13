@@ -126,7 +126,7 @@ export function SeparateDialog({
               title="在浏览器里分轨"
               text={
                 mode === 'vocals'
-                  ? `不用安装任何东西，人声模型随网站自带。${hasWebGpu() ? '有显卡加速，一首歌通常一两分钟。' : crossOriginIsolated ? '没有显卡加速，用处理器多线程计算，会慢一些。' : '没有显卡加速，会比较慢。'}`
+                  ? `不用安装任何东西，人声模型随网站自带。${hasWebGpu() ? '有显卡加速，一首歌通常一分钟以内（看显卡）。' : crossOriginIsolated ? '没有显卡加速，用处理器多线程计算，会慢一些。' : '没有显卡加速，会比较慢。'}`
                   : `不用安装任何东西。${cached ? '模型已下载。' : `第一次要从 Hugging Face 下载约 ${BROWSER_MODEL_MB} MB 的模型（之后缓存）。`}${hasWebGpu() ? '有显卡加速，一首歌大约几分钟。' : '这个浏览器不支持显卡加速，会很慢。'}`
               }
             />

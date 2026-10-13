@@ -121,6 +121,13 @@ tests/          music / drills / services / p2（YIN、分析、新模块）/ p3
 ## 6. 已知边界
 
 - 除钢琴外都是合成音色。
+- **歌曲库（0.18.0，/library，Dexie v11 `libraryFolders` / `librarySongs`）**：
+  - 用户自己选文件夹（`showDirectoryPicker`，只读；Chrome / Edge），目录句柄存 IndexedDB，浏览器重开后要点「允许访问」（`requestPermission` 必须由点击触发）。**只列出、不复制、不上传**；用到哪首才读那个文件。网站不提供任何下载功能（用户要求逆向第三方音乐下载站，已拒绝；歌曲库指向下载文件夹即可）。
+  - 扫描（`LibraryService.scan`）：最多 6 层、5000 个文件，按 路径 + 大小 + 修改时间 增量；新 / 改过的文件读头尾各 512 KB 解析标签（`audio/library/tags.ts`：ID3v2.2–2.4、ID3v1、FLAC / Ogg Vorbis comment、MP4 ilst）；文件消失则删行；**用户改过的名字（source 'manual'）不会被覆盖**。页面打开时每 8 秒静默扫描一次（只扫已允许的文件夹），有新歌弹提示。
+  - 歌名（`songs/libraryNames.ts`，纯函数）：标签优先；乱码修复（Latin-1 误读的 UTF-8 / GBK / Big5，必须能干净解码且出现汉字才采用；ID3 编码 0 与 ID3v1 先按 GBK 试）；文件名清理（扩展名、开头序号、[无损] / 320k / mqms2 / 咪咕 等标记、长 id、下划线）；「A - B」拆歌手和歌名：全库投票（标签和手改的名字 +3，每个「a - b」文件名 a +1、b −1），**同一对名字（任一顺序）的文件不互相投票**——顺序互相矛盾时按常见的「歌手 - 歌名」并标「待整理」；歌手一侧的「(Live)」移到歌名；子文件夹名是已知歌手时作为歌手。认不出的标「待整理」。
+  - 页面：按演唱者分组、同名不同文件作为版本下拉；搜索、待整理筛选、试听、改名（对话框）、批量设演唱者、「写回文件名」（`FileSystemHandle.move`，先 confirm、再要写权限，改成「歌手 - 歌名.ext」）、「跟唱」→ `/sing`（`location.state.librarySongId`）自动带歌名 / 歌手并打开「只分人声」的分轨对话框。`LibraryPicker` 对话框供跟唱导入与「原曲伴奏」使用（原曲伴奏可选「自动分轨后使用」或「直接用作原曲」）。
+  - 人声模型缺失（git 克隆后没跑转换脚本）时，`vocalsModelPresent()`（HEAD，排除 SPA 回退的 text/html）为假，跟唱分轨自动改用六轨模型。
+  - UVR 模型仓库（`TRvlvr/model_repo`）没有声明许可证：**公开的 GitHub Release 不附模型**，带模型的压缩包只在本地 `release/` 给用户私下转发。
 - **管理员模式（0.17.0，`services/adminMode.ts`）**：昵称为 `admin`（忽略大小写和首尾空格）时，`effectiveProfile` 把 `unlockedStage` 视为最高阶段——profileStore 给页面的是这个视图，`CourseService.status`、`GraduationService.unlocked`、`ModuleProgressService.setLevel`、ModulePage 的级别按钮都按它判断。**数据库里的进度不改**（ProfileService.update 读的是库里的行），改回别的昵称即恢复。侧边栏显示「管理员模式」，设置页多一个「管理员」区（分轨耗时、只用处理器的测试开关）。只是本地方便开关，不是安全边界。
 - **跟唱分句与回听（0.16.2）**：
   - 分句来源（`songs/phrasing.ts`，`useSingSession.phraseSource`）：手动 `SingMeta.phraseCuts`（并入上一句 / 在最长停顿处拆开 / 恢复自动）> 时间可信的歌词 `SingMeta.lyricsTimed`（每行一句，收紧到行内实际有声的范围）> `autoPhrases`（300 ms 内换气不切，<550 ms 停顿且合并后 ≤8 s 的连起来，<1.5 s 的碎片并到近邻）。旧的 `phrasesOf` 保留（测试用），会话不再使用。

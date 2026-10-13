@@ -1,6 +1,10 @@
-import { useRef, useState, type DragEvent } from 'react'
-import { useNavigate } from 'react-router-dom'
-import { AlertTriangle, FileUp, Loader2, Save, Scissors, X } from 'lucide-react'
+import { useEffect, useRef, useState, type DragEvent } from 'react'
+import { useLocation, useNavigate } from 'react-router-dom'
+import { AlertTriangle, FileUp, Library, Loader2, Save, Scissors, X } from 'lucide-react'
+import { LibraryPicker } from '@/widgets/library/LibraryPicker'
+import { LibraryService } from '@/services/libraryService'
+import { getDb } from '@/infrastructure/db/database'
+import type { LibrarySong } from '@/entities/types'
 import { SeparateDialog } from '@/widgets/separation/SeparateDialog'
 import { SingService, SingError, cleanSongTitle } from '@/services/singService'
 import { STEM_LABEL, detectStem } from '@/songs/backingSync'
@@ -23,6 +27,34 @@ export function SingImportPanel() {
   const [saving, setSaving] = useState(false)
   const [dragging, setDragging] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [picking, setPicking] = useState(false)
+  const location = useLocation()
+
+  /** A song from 歌曲库: its name, then the separation dialog (vocals only). */
+  const fromLibrary = (song: LibrarySong, file: File) => {
+    setPicking(false)
+    setTitle(song.title)
+    setArtist(song.artist)
+    setSepFile(file)
+  }
+
+  // Arriving from 歌曲库 with a song chosen there.
+  useEffect(() => {
+    const id = (location.state as { librarySongId?: string } | null)?.librarySongId
+    if (!id) return
+    navigate(location.pathname, { replace: true, state: null })
+    void (async () => {
+      const song = await getDb().librarySongs.get(id)
+      if (!song) return
+      try {
+        fromLibrary(song, await LibraryService.file(song))
+      } catch (e) {
+        setError(e instanceof Error ? e.message : String(e))
+        setPicking(true)
+      }
+    })()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [location.state])
 
   const hasVocals = files.some((f) => detectStem(f.name) === 'vocals')
 
@@ -97,6 +129,10 @@ export function SingImportPanel() {
             <Button variant="ghost" size="sm" onClick={() => sepInput.current?.click()} disabled={saving}>
               <Scissors /> 只有原曲？自动分出人声和伴奏
             </Button>
+            <Button variant="ghost" size="sm" onClick={() => setPicking(true)} disabled={saving}>
+              <Library /> 从歌曲库选一首（自动分出人声和伴奏）
+            </Button>
+            <LibraryPicker open={picking} onClose={() => setPicking(false)} onPick={fromLibrary} title="从歌曲库选一首来跟唱" />
             <input ref={sepInput} type="file" accept="audio/*,.mp3,.wav,.flac,.m4a,.ogg" className="hidden" aria-label="选择要自动分轨的原曲" onChange={(e) => { const f = e.target.files?.[0]; e.target.value = ''; if (f) setSepFile(f) }} />
             <SeparateDialog
               file={sepFile}

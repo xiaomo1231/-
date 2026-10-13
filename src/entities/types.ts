@@ -335,6 +335,37 @@ export interface SheetBacking {
   synthVolume?: number
 }
 
+/**
+ * 歌曲库 (0.18.0, Dexie v11): a folder on this computer the student chose.
+ * The handle is the browser's permission to read it (asked again after a
+ * restart); songs are never copied, only listed.
+ */
+export interface LibraryFolder {
+  id: string
+  name: string
+  handle: FileSystemDirectoryHandle
+  addedAt: number
+  lastScanAt?: number
+}
+
+/** A song file in a library folder, with its cleaned-up name. Id = folderId + '/' + path. */
+export interface LibrarySong {
+  id: string
+  folderId: string
+  /** Path inside the folder, '/'-separated. */
+  path: string
+  fileName: string
+  size: number
+  lastModified: number
+  title: string
+  artist: string
+  album?: string
+  /** Where the name came from; 'manual' names are never overwritten by a rescan. */
+  source: 'tags' | 'filename' | 'manual'
+  needsReview: boolean
+  addedAt: number
+}
+
 /** 跟唱 (0.14.0): a song the student sings along to (Dexie v9). Its audio lives in audioFiles (sheetId = this id). */
 export interface SingSong {
   id: string

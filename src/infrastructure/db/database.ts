@@ -1,5 +1,7 @@
 import Dexie, { type Table } from 'dexie'
 import type {
+  LibraryFolder,
+  LibrarySong,
   AISettingsRow,
   Badge,
   ConfusionPair,
@@ -66,6 +68,8 @@ export class GrooveLabDB extends Dexie {
   singTakes!: Table<SingTake, string>
   singMeta!: Table<SingMeta, string>
   covers!: Table<CoverWork, string>
+  libraryFolders!: Table<LibraryFolder, string>
+  librarySongs!: Table<LibrarySong, string>
 
   constructor(name = DB_NAME) {
     super(name)
@@ -137,6 +141,11 @@ export class GrooveLabDB extends Dexie {
             delete s.phraseBests
           })
       })
+    // v11: 歌曲库 — folders the student picked (directory handles) and the songs found in them.
+    this.version(11).stores({
+      libraryFolders: 'id',
+      librarySongs: 'id, folderId, artist, addedAt',
+    })
   }
 }
 
@@ -185,6 +194,8 @@ export async function clearAllData(): Promise<void> {
       db.singTakes,
       db.singMeta,
       db.covers,
+      db.libraryFolders,
+      db.librarySongs,
     ],
     async () => {
       await Promise.all([
@@ -215,6 +226,8 @@ export async function clearAllData(): Promise<void> {
         db.singTakes.clear(),
         db.singMeta.clear(),
         db.covers.clear(),
+        db.libraryFolders.clear(),
+        db.librarySongs.clear(),
       ])
     },
   )

@@ -30,6 +30,7 @@ import { SheetsPage } from '@/pages/SheetsPage'
 import { SheetDetailPage } from '@/pages/SheetDetailPage'
 import { SingListPage } from '@/pages/SingListPage'
 import { SingPage } from '@/pages/SingPage'
+import { LibraryPage } from '@/pages/LibraryPage'
 import { RunService } from '@/services/runService'
 
 /** Loads the profile once; children render after it is available. */
@@ -84,6 +85,7 @@ const router = createBrowserRouter([
               { path: '/songs/:kind/:id', element: <SongDetailPage /> },
               { path: '/sheets', element: <SheetsPage /> },
               { path: '/sheets/:id', element: <SheetDetailPage /> },
+              { path: '/library', element: <LibraryPage /> },
               { path: '/sing', element: <SingListPage /> },
               { path: '/sing/:kind/:id', element: <SingPage /> },
               { path: '/guitar', element: <GuitarPage /> },

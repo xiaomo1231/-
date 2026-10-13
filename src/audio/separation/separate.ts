@@ -118,6 +118,23 @@ async function decodeStereo(file: File, rate: number): Promise<{ left: Float32Ar
   }
 }
 
+/**
+ * The vocals model ships in public/models (made by scripts/make-vocal-model.py,
+ * not in git). Without it the six-stem model is used instead (slower, but it
+ * downloads from Hugging Face on its own).
+ */
+export async function vocalsModelPresent(): Promise<boolean> {
+  const base = new URL((import.meta.env?.BASE_URL as string | undefined) ?? '/', window.location.href).href
+  try {
+    const res = await fetch(`${base}${VOCALS_MODEL_PATH}`, { method: 'HEAD' })
+    const type = res.headers.get('content-type') ?? ''
+    // A missing file can come back as the app's index.html.
+    return res.ok && !type.includes('text/html')
+  } catch {
+    return false
+  }
+}
+
 /** Workers that separate side by side on the CPU (each single-threaded; ~150–300 MB each). */
 export function cpuWorkers(cores = navigator.hardwareConcurrency || 4): number {
   return Math.max(1, Math.min(6, Math.floor(cores / 3)))
@@ -315,6 +332,7 @@ export async function separateFile(file: File, opts: { engine?: Engine; mode?: S
     recordTiming({ at: Date.now(), mode: opts.mode ?? 'stems', engine, seconds: (performance.now() - t0) / 1000, audioSeconds: 0 })
     return { files, engine }
   }
-  const files = opts.mode === 'vocals' ? await vocalsInBrowser(file, opts.onProgress, opts.signal) : await viaBrowser(file, opts.onProgress, opts.signal)
+  const vocals = opts.mode === 'vocals' && (await vocalsModelPresent())
+  const files = vocals ? await vocalsInBrowser(file, opts.onProgress, opts.signal) : await viaBrowser(file, opts.onProgress, opts.signal)
   return { files, engine }
 }
