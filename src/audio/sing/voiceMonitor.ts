@@ -233,10 +233,15 @@ export class VoiceMonitor {
   }
 
   private stopBrowser(): void {
-    try {
-      inputManager.bus.disconnect(this.nodes[0]!)
-    } catch {
-      // already disconnected
+    // Only our own connection: disconnect() without a node would cut the input bus off from
+    // everything (pitch detection and recording too) — opening the low-latency monitor did that.
+    const first = this.nodes[0]
+    if (first) {
+      try {
+        inputManager.bus.disconnect(first)
+      } catch {
+        // already disconnected
+      }
     }
     for (const n of this.nodes) n.disconnect()
     this.wet?.disconnect()
