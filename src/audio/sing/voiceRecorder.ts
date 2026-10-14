@@ -23,7 +23,11 @@ export class VoiceRecorder {
     if (this.tap) return true
     const ctx = Tone.getContext().rawContext as AudioContext
     if (!(await ensureWorklets(ctx))) return false
-    const tap = createWorkletNode('groove-tap', { numberOfInputs: 1, numberOfOutputs: 1, outputChannelCount: [1] })
+    const tap = createWorkletNode('groove-tap', {
+      numberOfInputs: 1,
+      numberOfOutputs: 1,
+      outputChannelCount: [1],
+    })
     const sink = ctx.createGain()
     sink.gain.value = 0
     inputManager.bus.connect(tap)
@@ -31,7 +35,11 @@ export class VoiceRecorder {
     tap.port.onmessage = (e: MessageEvent<{ frame: number; samples: Float32Array }>) => {
       this.chunks.push({ frame: e.data.frame, samples: e.data.samples.slice() })
       const keepFrom = e.data.frame - this.maxSeconds * this.sampleRate
-      while (this.chunks.length && this.chunks[0]!.frame + this.chunks[0]!.samples.length < keepFrom) this.chunks.shift()
+      while (
+        this.chunks.length &&
+        this.chunks[0]!.frame + this.chunks[0]!.samples.length < keepFrom
+      )
+        this.chunks.shift()
     }
     this.tap = tap
     this.sink = sink
@@ -82,22 +90,35 @@ export class SongClock {
   mark(ctxTime: number, songMs: number): void {
     const last = this.pairs[this.pairs.length - 1]
     // A jump (seek / loop) starts a new segment: drop pairs that would interpolate across it.
-    if (last && (songMs < last.ms - 50 || songMs - last.ms > (ctxTime - last.t) * 1000 * 2 + 200)) this.pairs = []
+    if (last && (songMs < last.ms - 50 || songMs - last.ms > (ctxTime - last.t) * 1000 * 2 + 200))
+      this.pairs = []
+    const prev = this.pairs[this.pairs.length - 1]
+    // Sparse (every 250 ms): a whole song fits, so the start of a full-song take is never forgotten.
+    if (prev && ctxTime - prev.t < 0.25) return
     this.pairs.push({ t: ctxTime, ms: songMs })
-    if (this.pairs.length > 4000) this.pairs.splice(0, 1000)
+    if (this.pairs.length > 40000) this.pairs.splice(0, 10000)
   }
 
   reset(): void {
     this.pairs = []
   }
 
-  /** AudioContext time at which the song was at `songMs` (null when unknown). */
+  /**
+   * AudioContext time at which the song was at `songMs` (null when unknown):
+   * between two marks by interpolation; outside them from the first and last
+   * mark (the longest baseline — two neighbouring marks would turn their tiny
+   * timing jitter into seconds of error over a long stretch).
+   */
   timeAt(songMs: number): number | null {
     const p = this.pairs
     if (p.length < 2) return null
-    let i = p.findIndex((x) => x.ms >= songMs)
-    if (i === -1) i = p.length - 1
-    if (i === 0) i = 1
+    const first = p[0]!
+    const last = p[p.length - 1]!
+    if (songMs <= first.ms || songMs >= last.ms) {
+      if (last.ms === first.ms) return first.t
+      return first.t + ((songMs - first.ms) / (last.ms - first.ms)) * (last.t - first.t)
+    }
+    const i = p.findIndex((x) => x.ms >= songMs)
     const a = p[i - 1]!
     const b = p[i]!
     if (b.ms === a.ms) return a.t
@@ -106,7 +127,10 @@ export class SongClock {
 }
 
 /** Mono WAV (16-bit) of a recording; 48 kHz input is halved to 24 kHz (integer factors only, so 44.1 kHz stays). */
-export function encodeTake(samples: Float32Array, sampleRate: number): { blob: Blob; sampleRate: number } {
+export function encodeTake(
+  samples: Float32Array,
+  sampleRate: number,
+): { blob: Blob; sampleRate: number } {
   const factor = Math.max(1, Math.floor(sampleRate / 24000))
   const rate = sampleRate / factor
   const n = Math.floor(samples.length / factor)
@@ -118,7 +142,8 @@ export function encodeTake(samples: Float32Array, sampleRate: number): { blob: B
   }
   const header = new ArrayBuffer(44)
   const v = new DataView(header)
-  const w = (o: number, str: string) => [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)))
+  const w = (o: number, str: string) =>
+    [...str].forEach((c, i) => v.setUint8(o + i, c.charCodeAt(0)))
   w(0, 'RIFF')
   v.setUint32(4, 36 + pcm.byteLength, true)
   w(8, 'WAVE')

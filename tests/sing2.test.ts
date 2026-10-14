@@ -141,7 +141,8 @@ describe('encodeTake', () => {
     expect(blob.type).toBe('audio/wav')
     const buf = await readBytes(blob)
     const v = new DataView(buf)
-    const tag = (o: number) => String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3))
+    const tag = (o: number) =>
+      String.fromCharCode(v.getUint8(o), v.getUint8(o + 1), v.getUint8(o + 2), v.getUint8(o + 3))
     expect(tag(0)).toBe('RIFF')
     expect(tag(8)).toBe('WAVE')
     expect(tag(12)).toBe('fmt ')
@@ -166,7 +167,8 @@ describe('encodeTake', () => {
 
 describe('leakHint', () => {
   const N = 4096
-  const sine = (f: number, phase = 0) => Float32Array.from({ length: N }, (_, i) => Math.sin((2 * Math.PI * f * i) / N + phase))
+  const sine = (f: number, phase = 0) =>
+    Float32Array.from({ length: N }, (_, i) => Math.sin((2 * Math.PI * f * i) / N + phase))
 
   it('is about 1 for identical signals', () => {
     const s = sine(5)
@@ -179,5 +181,21 @@ describe('leakHint', () => {
 
   it('is 0 for empty input', () => {
     expect(leakHint(new Float32Array(0), new Float32Array(0))).toBe(0)
+  })
+})
+
+describe('SongClock over a whole song', () => {
+  it('still knows where a 5-minute take started (marks every animation frame, with jitter)', () => {
+    const c = new SongClock()
+    // 60 marks a second for 300 s; the <audio> position jitters by ±4 ms.
+    let seed = 5
+    const jitter = () => ((seed = (seed * 16807) % 2147483647) / 2147483647 - 0.5) * 8
+    for (let k = 0; k <= 300 * 60; k++) {
+      const t = 100 + k / 60
+      c.mark(t, Math.max(0, (t - 100) * 1000 + jitter()))
+    }
+    expect(Math.abs(c.timeAt(0)! - 100)).toBeLessThan(0.02)
+    expect(Math.abs(c.timeAt(150000)! - 250)).toBeLessThan(0.02)
+    expect(Math.abs(c.timeAt(300000)! - 400)).toBeLessThan(0.02)
   })
 })
