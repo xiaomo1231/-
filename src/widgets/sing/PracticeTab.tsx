@@ -462,7 +462,19 @@ export function PracticeTab() {
         <Button size="sm" onClick={toggle} disabled={!s.ready}>
           {s.playing ? <Pause /> : <Play />} {s.playing ? '暂停' : '播放'}
         </Button>
-        <Button size="sm" variant="ghost" onClick={() => goTo(0, true)} disabled={!s.ready} aria-label="从头">
+        <Button
+          size="sm"
+          variant="ghost"
+          onClick={() => {
+            // Back to the very start, stopped: playing is the student's next click.
+            if (player.current?.isPlaying) s.pause()
+            goTo(0)
+            player.current?.seek(0)
+          }}
+          disabled={!s.ready}
+          aria-label="回到开头"
+          title="回到开头（不自动播放）"
+        >
           <SkipBack />
         </Button>
         <span className="num w-24 text-xs text-muted-foreground">
