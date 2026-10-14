@@ -3,6 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { renderMix } from '@/audio/sing/mixChain'
 import { graphFromMix, type ModGraph } from '@/songs/mixGraph'
 import { ModularWorkspace } from './ModularWorkspace'
+import { AutoMixPanel } from './AutoMixPanel'
 import { toast } from '@/features/toast/toastStore'
 import { encodeWav } from '@/export/wav'
 import { encodeMp3 } from '@/export/mp3'
@@ -62,6 +63,8 @@ export interface MixDeskProps {
   songKey: string
   title: string
   artist?: string
+  /** The original singer's separated vocals, decoded when 自动后期 needs them (null = none). */
+  loadReference?: () => Promise<AudioBuffer | null>
   /** 模块模式 (0.25.0): the workspace wiring (kept even while in the quick mode). */
   graph?: ModGraph | null
   onGraph?: (g: ModGraph) => void
@@ -603,6 +606,25 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
           )}
         </section>
       )}
+
+      <AutoMixPanel
+        voice={voice}
+        backing={backing}
+        backingNames={backingNames}
+        bpm={bpm}
+        {...(props.refNotes?.length
+          ? { lowestMidi: Math.min(...props.refNotes.map((n) => n.midi)) }
+          : {})}
+        mix={mix}
+        onApply={(m) => {
+          apply(m)
+          if (modular) props.onGraph?.(graphFromMix(fitMix(m)))
+        }}
+        {...(props.loadReference ? { loadReference: props.loadReference } : {})}
+        player={player}
+        previewRegion={() => previewRegion(total, range, AUDITION_MAX_SEC)}
+        modular={modular}
+      />
 
       {modular ? (
         <>

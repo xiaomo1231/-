@@ -33,7 +33,8 @@ export function SingPage() {
     void SingService.source(kind, id).then((s) => setSource(s ?? 'missing'))
   }, [kind, id])
   if (source === 'missing') return <Navigate to="/sing" replace />
-  if (!source) return <div className="py-20 text-center text-sm text-muted-foreground">正在载入…</div>
+  if (!source)
+    return <div className="py-20 text-center text-sm text-muted-foreground">正在载入…</div>
   return <SingWorkspace key={source.key} source={source} />
 }
 
@@ -66,17 +67,30 @@ function SingWorkspace({ source }: { source: SingSource }) {
       const ctx = Tone.getContext().rawContext as AudioContext
       const want = backingStems(kinds)
       const stems = session.stems.current.filter((s) => want.includes(s.stem))
-      const bufs = await Promise.all(stems.map(async (s) => ctx.decodeAudioData(await s.blob.arrayBuffer())))
+      const bufs = await Promise.all(
+        stems.map(async (s) => ctx.decodeAudioData(await s.blob.arrayBuffer())),
+      )
       setBackingNames(stems.map((s) => s.stem))
       setBacking(bufs)
     })()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [tab, session.ready])
 
+  /** The original singer's vocals (for 自动后期 「参考原唱」). */
+  const loadReference = async (): Promise<AudioBuffer | null> => {
+    const v = session.stems.current.find((s) => s.stem === 'vocals')
+    if (!v) return null
+    const ctx = Tone.getContext().rawContext as AudioContext
+    return ctx.decodeAudioData(await v.blob.arrayBuffer())
+  }
+
   return (
     <SingSessionContext.Provider value={session}>
       <div className="space-y-6">
-        <Link to="/sing" className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground">
+        <Link
+          to="/sing"
+          className="inline-flex items-center gap-1 text-sm text-muted-foreground hover:text-foreground"
+        >
           <ArrowLeft className="h-4 w-4" /> 跟唱
         </Link>
         <header className="flex flex-wrap items-end justify-between gap-3">
@@ -88,7 +102,15 @@ function SingWorkspace({ source }: { source: SingSource }) {
             </p>
           </div>
           {source.kind === 'song' && (
-            <Button size="sm" variant="outline" onClick={() => void SingService.list().then((all) => setEditing(all.find((x) => x.id === source.id) ?? null))}>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() =>
+                void SingService.list().then((all) =>
+                  setEditing(all.find((x) => x.id === source.id) ?? null),
+                )
+              }
+            >
               <Pencil /> 改名
             </Button>
           )}
@@ -103,26 +125,49 @@ function SingWorkspace({ source }: { source: SingSource }) {
         />
 
         {session.error && (
-          <p role="alert" className="rounded-2xl border border-destructive/40 p-4 text-sm text-destructive">
+          <p
+            role="alert"
+            className="rounded-2xl border border-destructive/40 p-4 text-sm text-destructive"
+          >
             {session.error}
           </p>
         )}
         {!session.curve && !session.error && (
           <div className="rounded-2xl border border-border/80 bg-card p-5 text-sm text-muted-foreground">
             <div className="flex items-center gap-2">
-              <Loader2 className="h-4 w-4 animate-spin" aria-hidden /> 正在分析原唱的音高（只在第一次需要）… {Math.round(session.progress * 100)}%
+              <Loader2 className="h-4 w-4 animate-spin" aria-hidden />{' '}
+              正在分析原唱的音高（只在第一次需要）… {Math.round(session.progress * 100)}%
             </div>
             <div className="mt-3 h-1.5 overflow-hidden rounded-full bg-muted">
-              <div className="h-full bg-cyan transition-[width]" style={{ width: `${Math.round(session.progress * 100)}%` }} />
+              <div
+                className="h-full bg-cyan transition-[width]"
+                style={{ width: `${Math.round(session.progress * 100)}%` }}
+              />
             </div>
           </div>
         )}
 
         {session.curve && (
           <>
-            <nav className="flex gap-1 rounded-2xl border border-border/80 bg-card p-1" role="tablist" aria-label="跟唱页签">
+            <nav
+              className="flex gap-1 rounded-2xl border border-border/80 bg-card p-1"
+              role="tablist"
+              aria-label="跟唱页签"
+            >
               {TABS.map((t) => (
-                <button key={t.id} type="button" role="tab" aria-selected={tab === t.id} onClick={() => setTab(t.id)} className={cn('focus-ring flex-1 rounded-xl px-3 py-2 text-sm transition-colors', tab === t.id ? 'bg-amber-soft/50 font-medium text-foreground' : 'text-muted-foreground hover:text-foreground')}>
+                <button
+                  key={t.id}
+                  type="button"
+                  role="tab"
+                  aria-selected={tab === t.id}
+                  onClick={() => setTab(t.id)}
+                  className={cn(
+                    'focus-ring flex-1 rounded-xl px-3 py-2 text-sm transition-colors',
+                    tab === t.id
+                      ? 'bg-amber-soft/50 font-medium text-foreground'
+                      : 'text-muted-foreground hover:text-foreground',
+                  )}
+                >
                   {t.label}
                 </button>
               ))}
@@ -144,15 +189,22 @@ function SingWorkspace({ source }: { source: SingSource }) {
               {tab === 'mix' && (
                 <div className="space-y-3">
                   <p className="text-sm text-muted-foreground">
-                    {voice ? `人声：${voice.label}（${Math.round(voice.buffer.duration)} 秒）。` : '还没有合成人声：先到「完整版」里合成；现在可以先听伴奏、调伴奏。'}
-                    {usesMix && ' 注意：这首歌只有完整原曲、没有伴奏轨，原唱会混在背景里；用「自动分轨」得到伴奏效果更好。'}
+                    {voice
+                      ? `人声：${voice.label}（${Math.round(voice.buffer.duration)} 秒）。`
+                      : '还没有合成人声：先到「完整版」里合成；现在可以先听伴奏、调伴奏。'}
+                    {usesMix &&
+                      ' 注意：这首歌只有完整原曲、没有伴奏轨，原唱会混在背景里；用「自动分轨」得到伴奏效果更好。'}
                   </p>
                   {backing ? (
                     <MixDesk
                       voice={voice?.buffer ?? null}
                       backing={backing}
                       backingNames={backingNames}
-                      phrases={session.phrases.map((p) => ({ startMs: p.startMs, endMs: p.endMs, ...(p.lyric ? { lyric: p.lyric } : {}) }))}
+                      phrases={session.phrases.map((p) => ({
+                        startMs: p.startMs,
+                        endMs: p.endMs,
+                        ...(p.lyric ? { lyric: p.lyric } : {}),
+                      }))}
                       mix={session.meta?.mix ?? DEFAULT_MIX}
                       onMix={(m) => void session.setMeta({ mix: m })}
                       snapshots={session.meta?.mixSnapshots ?? []}
@@ -162,9 +214,12 @@ function SingWorkspace({ source }: { source: SingSource }) {
                       title={title}
                       artist={artist}
                       graph={mixGraph}
+                      loadReference={loadReference}
                       onGraph={(g) => void session.setMeta({ mixGraph: g })}
                       mode={session.meta?.mixMode ?? 'quick'}
-                      onMode={(m, g) => void session.setMeta({ mixMode: m, ...(g ? { mixGraph: g } : {}) })}
+                      onMode={(m, g) =>
+                        void session.setMeta({ mixMode: m, ...(g ? { mixGraph: g } : {}) })
+                      }
                     />
                   ) : (
                     <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">
