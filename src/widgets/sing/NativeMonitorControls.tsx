@@ -54,7 +54,7 @@ export function NativeMonitorControls({
           <option value="wasapi">WASAPI（推荐）</option>
           {asio.map((n) => (
             <option key={n} value={`asio:${n}`}>
-              ASIO：{n}（最低延迟；可能占用声卡，录音和评分可能停）
+              ASIO：{n}（延迟最低；声卡由应用独占，录音也改走 ASIO）
             </option>
           ))}
         </select>

@@ -8,6 +8,7 @@
 import { inputManager } from '@/audio/input/inputManager'
 import { reverbImpulse } from '@/audio/sing/mixChain'
 import { desktop, type NativeMonitorInfo } from '@/app/desktop'
+import { nativeInputNode } from '@/audio/input/nativeInput'
 
 export interface MonitorSettings {
   on: boolean
@@ -20,15 +21,27 @@ export interface MonitorSettings {
   nativeApi: string
 }
 
-export const MONITOR_DEFAULTS: MonitorSettings = { on: false, volume: 0.8, reverb: true, native: true, nativeApi: 'wasapi' }
+export const MONITOR_DEFAULTS: MonitorSettings = {
+  on: false,
+  volume: 0.8,
+  reverb: true,
+  native: true,
+  nativeApi: 'wasapi',
+}
 
 /** What the monitor is doing now (shown under the monitor controls). */
-export type MonitorStatus = { kind: 'browser' } | { kind: 'native'; info: NativeMonitorInfo } | { kind: 'fallback'; reason: string }
+export type MonitorStatus =
+  | { kind: 'browser' }
+  | { kind: 'native'; info: NativeMonitorInfo }
+  | { kind: 'fallback'; reason: string }
 const STORE = 'groovelab:sing-monitor'
 
 export function loadMonitorSettings(): MonitorSettings {
   try {
-    return { ...MONITOR_DEFAULTS, ...(JSON.parse(localStorage.getItem(STORE) ?? '{}') as Partial<MonitorSettings>) }
+    return {
+      ...MONITOR_DEFAULTS,
+      ...(JSON.parse(localStorage.getItem(STORE) ?? '{}') as Partial<MonitorSettings>),
+    }
   } catch {
     return { ...MONITOR_DEFAULTS }
   }
@@ -49,6 +62,8 @@ export class VoiceMonitor {
   /** Settings the native monitor was started with ('' = not running natively). */
   private nativeKey = ''
   private starting: Promise<void> | null = null
+  /** With ASIO: the driver's microphone feeding recording and scoring. */
+  private feed: { stop: () => void } | null = null
 
   constructor(private readonly onStatus: (s: MonitorStatus) => void = () => undefined) {}
 
@@ -80,21 +95,37 @@ export class VoiceMonitor {
     this.starting = (async () => {
       try {
         if (this.nativeKey) await app.monitor.stop()
+        await this.endFeed()
         const asio = key.startsWith('asio:') ? key.slice(5) : ''
         const info = await app.monitor.start({
           api: asio ? 'asio' : 'wasapi',
-          ...(asio ? { asioName: asio } : {}),
+          // ASIO keeps the sound card's own rate (changing it would disturb other programs); the page converts.
+          ...(asio ? { asioName: asio, feed: true } : {}),
           inputName: inputManager.current?.label ?? '',
           outputName: await inputManager.outputLabel().catch(() => ''),
           volume: s.volume,
           reverb: s.reverb,
         })
+        // ASIO holds the whole sound card: recording and scoring read the driver's microphone too.
+        if (asio) {
+          const src = await nativeInputNode(inputManager.bus.context)
+          this.feed = src
+          await inputManager.useExternal(src.node, `${asio}（ASIO）`)
+        }
         this.nativeKey = key
         this.onStatus({ kind: 'native', info })
       } catch (e) {
         this.nativeKey = ''
+        await app.monitor.stop().catch(() => undefined)
+        await this.endFeed()
         this.startBrowser(s)
-        this.onStatus({ kind: 'fallback', reason: e instanceof Error ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '') : String(e) })
+        this.onStatus({
+          kind: 'fallback',
+          reason:
+            e instanceof Error
+              ? e.message.replace(/^Error invoking remote method '[^']+': (Error: )?/, '')
+              : String(e),
+        })
       } finally {
         this.starting = null
       }
@@ -104,7 +135,19 @@ export class VoiceMonitor {
 
   private stopNative(): void {
     this.nativeKey = ''
-    void desktop()?.monitor.stop().catch(() => undefined)
+    void desktop()
+      ?.monitor.stop()
+      .catch(() => undefined)
+      .then(() => this.endFeed())
+  }
+
+  /** Back to the browser microphone (after ASIO let go of the sound card). */
+  private async endFeed(): Promise<void> {
+    if (!this.feed) return
+    const f = this.feed
+    this.feed = null
+    f.stop()
+    await inputManager.useExternal(null).catch(() => undefined)
   }
 
   private startBrowser(s: MonitorSettings): void {

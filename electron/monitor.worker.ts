@@ -28,6 +28,8 @@ export type MonitorRequest =
       outputName: string
       volume: number
       reverb: boolean
+      feed?: boolean
+      sampleRate?: number
     }
   | { id: number; type: 'update'; volume: number; reverb: boolean }
   | { id: number; type: 'stop' }
@@ -164,8 +166,12 @@ function start(req: Extract<MonitorRequest, { type: 'start' }>) {
   if (!output) throw new Error('没有找到输出设备。')
   const outInfo = all.find((d) => d.id === output!.id)!
   const inInfo = all.find((d) => d.id === input!.id)!
+  const devRate = req.api === 'asio' ? inInfo : outInfo
+  // The page's rate when the device can do it (no conversion for recording), else the device's own.
   const rate =
-    req.api === 'asio' ? inInfo.preferredSampleRate || 48000 : outInfo.preferredSampleRate || 48000
+    req.sampleRate && devRate.sampleRates.includes(req.sampleRate)
+      ? req.sampleRate
+      : devRate.preferredSampleRate || 48000
   const inCh = Math.min(2, inInfo.inputChannels)
   const outCh = Math.min(2, outInfo.outputChannels)
   const reverb = new Reverb(rate)
@@ -177,6 +183,10 @@ function start(req: Extract<MonitorRequest, { type: 'start' }>) {
   wet = wetTarget = req.reverb ? 0.25 : 0
   const step = 1 / (rate * 0.02)
   let frames = 0
+  // Microphone for the page (feed): mono chunks of ~10 ms.
+  const FEED = 512
+  let feed = req.feed ? new Float32Array(FEED) : null
+  let fed = 0
   const onInput = (buf: Buffer) => {
     const x = new Float32Array(buf.buffer, buf.byteOffset, buf.byteLength / 4)
     const n = x.length / inCh
@@ -186,6 +196,16 @@ function start(req: Extract<MonitorRequest, { type: 'start' }>) {
       let m = 0
       for (let c = 0; c < inCh; c++) m += x[i * inCh + c]!
       if (Math.abs(m) > peak) peak = Math.abs(m)
+      if (feed) {
+        feed[fed++] = m
+        if (fed === FEED) {
+          parentPort!.postMessage({ event: 'input', data: feed, rate }, [
+            feed.buffer as ArrayBuffer,
+          ])
+          feed = new Float32Array(FEED)
+          fed = 0
+        }
+      }
       hpY = a * (hpY + m - hpX)
       hpX = m
       gain += Math.max(-step, Math.min(step, target - gain))

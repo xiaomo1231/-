@@ -46,6 +46,8 @@ class InputManager {
   private preferredInput: string | undefined
   private preferredOutput: string | undefined
   private opening: Promise<void> | null = null
+  /** The app's sound card driver feeding the bus instead of the browser stream (ASIO monitoring). */
+  private external: AudioNode | null = null
 
   /** Stable node to connect consumers to. */
   get bus(): GainNode {
@@ -77,10 +79,15 @@ class InputManager {
 
   /** Audio inputs and outputs. Labels are only available after permission was granted once. */
   async listDevices(): Promise<{ inputs: DeviceInfo[]; outputs: OutputInfo[]; labelled: boolean }> {
-    if (!navigator.mediaDevices?.enumerateDevices) return { inputs: [], outputs: [], labelled: false }
+    if (!navigator.mediaDevices?.enumerateDevices)
+      return { inputs: [], outputs: [], labelled: false }
     const all = await navigator.mediaDevices.enumerateDevices()
-    const inputs = all.filter((d) => d.kind === 'audioinput').map((d) => ({ id: d.deviceId, label: d.label, kind: inputKindOf(d.label) }))
-    const outputs = all.filter((d) => d.kind === 'audiooutput').map((d) => ({ id: d.deviceId, label: d.label }))
+    const inputs = all
+      .filter((d) => d.kind === 'audioinput')
+      .map((d) => ({ id: d.deviceId, label: d.label, kind: inputKindOf(d.label) }))
+    const outputs = all
+      .filter((d) => d.kind === 'audiooutput')
+      .map((d) => ({ id: d.deviceId, label: d.label }))
     return { inputs, outputs, labelled: inputs.some((d) => d.label) }
   }
 
@@ -95,7 +102,10 @@ class InputManager {
   }
 
   private async applyOutput(): Promise<void> {
-    const ctx = rawContext() as AudioContext & { setSinkId?: (id: string) => Promise<void>; sinkId?: string }
+    const ctx = rawContext() as AudioContext & {
+      setSinkId?: (id: string) => Promise<void>
+      sinkId?: string
+    }
     if (typeof ctx.setSinkId !== 'function') return
     const target = this.preferredOutput ?? ''
     if ((ctx.sinkId ?? '') === target) return
@@ -110,7 +120,48 @@ class InputManager {
   async outputLabel(): Promise<string> {
     const { outputs } = await this.listDevices()
     const id = this.preferredOutput ?? 'default'
-    return outputs.find((o) => o.id === id)?.label ?? outputs.find((o) => o.id === 'default')?.label ?? ''
+    return (
+      outputs.find((o) => o.id === id)?.label ??
+      outputs.find((o) => o.id === 'default')?.label ??
+      ''
+    )
+  }
+
+  /**
+   * 应用版: feed the bus from another node (the driver's microphone while ASIO
+   * holds the sound card) and let go of the browser stream; null switches back
+   * and opens the browser stream again.
+   */
+  async useExternal(node: AudioNode | null, label = ''): Promise<void> {
+    if (node) {
+      if (this.external && this.external !== node) this.external.disconnect()
+      this.closeStream()
+      this.external = node
+      node.connect(this.bus)
+      this.info = {
+        deviceId: undefined,
+        label: label || this.info?.label || '声卡',
+        kind: this.info?.kind ?? inputKindOf(label),
+        trackLatency: 0,
+        sampleRate: rawContext().sampleRate,
+      }
+      this.emit()
+      return
+    }
+    if (!this.external) return
+    try {
+      this.external.disconnect(this.bus)
+    } catch {
+      // already disconnected
+    }
+    this.external = null
+    if (this.holders.size) await this.reopen()
+    else this.close()
+  }
+
+  /** Open the browser stream again (after the device was taken away or came back). */
+  async restart(): Promise<void> {
+    if (this.holders.size && !this.external) await this.reopen()
   }
 
   /** Start using the input. Returns a release function. */
@@ -119,7 +170,7 @@ class InputManager {
     const before = this.wantedPurpose()
     this.holders.set(token, purpose)
     try {
-      if (!this.stream || before !== this.wantedPurpose()) await this.reopen()
+      if (!this.external && (!this.stream || before !== this.wantedPurpose())) await this.reopen()
     } catch (e) {
       this.holders.delete(token)
       throw e
@@ -128,7 +179,7 @@ class InputManager {
       const prev = this.wantedPurpose()
       if (!this.holders.delete(token)) return
       if (this.holders.size === 0) this.close()
-      else if (prev !== this.wantedPurpose()) void this.reopen()
+      else if (prev !== this.wantedPurpose() && !this.external) void this.reopen()
     }
   }
 
@@ -150,7 +201,10 @@ class InputManager {
 
   private async open(): Promise<void> {
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new MicError('这个浏览器不能读取音频输入。请使用电脑版 Chrome，并通过 http://localhost 打开。', 'MIC_UNSUPPORTED')
+      throw new MicError(
+        '这个浏览器不能读取音频输入。请使用电脑版 Chrome，并通过 http://localhost 打开。',
+        'MIC_UNSUPPORTED',
+      )
     }
     await Tone.start()
     const purpose = this.wantedPurpose() ?? 'voice'
@@ -169,12 +223,26 @@ class InputManager {
     } catch (err) {
       const name = (err as DOMException)?.name
       if (name === 'NotAllowedError' || name === 'SecurityError') {
-        throw new MicError('音频输入权限被拒绝。点击地址栏左侧的锁形图标，把「麦克风」改为允许，然后刷新页面。', 'MIC_DENIED', err)
+        throw new MicError(
+          '音频输入权限被拒绝。点击地址栏左侧的锁形图标，把「麦克风」改为允许，然后刷新页面。',
+          'MIC_DENIED',
+          err,
+        )
       }
       if (name === 'NotFoundError' || name === 'OverconstrainedError') {
-        throw new MicError(deviceId ? '选中的输入设备找不到了，可能已经拔出。请在“吉他工坊 → 设备检查”里重新选择。' : '没有找到音频输入设备。请插上麦克风或吉他线，检查系统声音设置。', 'MIC_NOT_FOUND', err)
+        throw new MicError(
+          deviceId
+            ? '选中的输入设备找不到了，可能已经拔出。请在“吉他工坊 → 设备检查”里重新选择。'
+            : '没有找到音频输入设备。请插上麦克风或吉他线，检查系统声音设置。',
+          'MIC_NOT_FOUND',
+          err,
+        )
       }
-      throw new MicError('无法打开音频输入：可能被其他程序占用（例如摇滚史密斯或会议软件）。关闭后重试。', 'MIC_FAILED', err)
+      throw new MicError(
+        '无法打开音频输入：可能被其他程序占用（例如摇滚史密斯或会议软件）。关闭后重试。',
+        'MIC_FAILED',
+        err,
+      )
     }
     this.closeStream()
     this.stream = stream
@@ -192,11 +260,22 @@ class InputManager {
       sampleRate: settings.sampleRate,
     }
     track?.addEventListener('ended', () => {
-      if (this.stream === stream) {
-        this.closeStream()
-        this.info = null
-        this.emit()
+      if (this.stream !== stream) return
+      this.closeStream()
+      // Taken away (another program, ASIO) or unplugged: try to open it again while it is still wanted.
+      if (this.holders.size && !this.external) {
+        setTimeout(
+          () =>
+            void this.reopen().catch(() => {
+              this.info = null
+              this.emit()
+            }),
+          600,
+        )
+        return
       }
+      this.info = null
+      this.emit()
     })
     this.emit()
   }

@@ -19,6 +19,10 @@ export interface NativeMonitorStart {
   outputName: string
   volume: number
   reverb: boolean
+  /** Also send the microphone to the page (ASIO takes the whole sound card: recording reads from here). */
+  feed?: boolean
+  /** Sample rate to ask for (the page's), when the device supports it. */
+  sampleRate?: number
 }
 
 export interface NativeMonitorInfo {
@@ -54,6 +58,8 @@ export interface DesktopBridge {
     /** Buffers handled and the loudest input since the last call (checks that sound arrives). */
     stats(): Promise<{ buffers: number; peak: number }>
     stop(): Promise<void>
+    /** The microphone from the driver (when started with `feed`), mono chunks. Returns an unsubscribe. */
+    onInput(cb: (data: Float32Array, rate: number) => void): () => void
   }
 }
 

@@ -19,5 +19,12 @@ contextBridge.exposeInMainWorld('groovelab', {
     update: (s: unknown) => ipcRenderer.invoke('monitor:update', s),
     stats: () => ipcRenderer.invoke('monitor:stats'),
     stop: () => ipcRenderer.invoke('monitor:stop'),
+    onInput: (cb: (data: Float32Array, rate: number) => void) => {
+      const h = (_e: unknown, data: Float32Array, rate: number) => cb(data, rate)
+      ipcRenderer.on('monitor:input', h)
+      return () => {
+        ipcRenderer.removeListener('monitor:input', h)
+      }
+    },
   },
 })

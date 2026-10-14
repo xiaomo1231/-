@@ -36,7 +36,11 @@ protocol.registerSchemesAsPrivileged([
 ])
 app.commandLine.appendSwitch('autoplay-policy', 'no-user-gesture-required')
 // Same data folder however the app is started (%APPDATA%\GrooveLab).
-app.setPath('userData', path.join(app.getPath('appData'), 'GrooveLab'))
+// GROOVELAB_USER_DATA: a separate data folder (testing next to the copy in daily use).
+app.setPath(
+  'userData',
+  process.env.GROOVELAB_USER_DATA ?? path.join(app.getPath('appData'), 'GrooveLab'),
+)
 
 const TYPES: Record<string, string> = {
   '.html': 'text/html; charset=utf-8',
@@ -90,6 +94,8 @@ class Port {
     number,
     { resolve: (v: Record<string, unknown>) => void; reject: (e: Error) => void }
   >()
+  /** Messages the worker sends by itself (no id), e.g. microphone chunks. */
+  onEvent: ((m: Record<string, unknown>) => void) | null = null
   constructor(
     private readonly script: string,
     private readonly data: unknown = undefined,
@@ -98,7 +104,10 @@ class Port {
     if (this.worker) return this.worker
     const w = new Worker(path.join(here, this.script), { workerData: this.data })
     w.on('message', (m: { id?: number; ok?: boolean; message?: string }) => {
-      if (m.id === undefined) return
+      if (m.id === undefined) {
+        this.onEvent?.(m as Record<string, unknown>)
+        return
+      }
       const p = this.waiting.get(m.id)
       if (!p) return
       this.waiting.delete(m.id)
@@ -135,6 +144,10 @@ class Port {
 const modelPath = path.join(webRoot, 'models', 'vocals-mdx-fp16.onnx')
 let separator: Port | null = null
 const monitor = new Port('monitor.cjs')
+monitor.onEvent = (m) => {
+  if (m.event !== 'input') return
+  for (const w of BrowserWindow.getAllWindows()) w.webContents.send('monitor:input', m.data, m.rate)
+}
 
 ipcMain.handle('mdx:init', async () => {
   if (!existsSync(modelPath)) throw new Error('应用里没有找到人声模型文件。')
@@ -144,10 +157,9 @@ ipcMain.handle('mdx:init', async () => {
 })
 ipcMain.handle('mdx:run', async (_e, left: Float32Array[], right: Float32Array[]) => {
   if (!separator) throw new Error('分轨模型还没准备好。')
-  const r = await separator.ask(
-    { type: 'run', left, right },
-    [...new Set([...left, ...right].map((x) => x.buffer as ArrayBuffer))],
-  )
+  const r = await separator.ask({ type: 'run', left, right }, [
+    ...new Set([...left, ...right].map((x) => x.buffer as ArrayBuffer)),
+  ])
   return { left: r.left, right: r.right }
 })
 ipcMain.handle('mdx:dispose', async () => {
