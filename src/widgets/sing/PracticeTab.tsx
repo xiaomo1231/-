@@ -15,6 +15,27 @@ import { uuid } from '@/infrastructure/crypto/crypto'
 import { lyricsInPhrase as lyricOf } from '@/songs/phrasing'
 import { LyricsDisplay } from './LyricsDisplay'
 import { NativeMonitorControls } from './NativeMonitorControls'
+
+interface LaneView {
+  /** Semitones shown above the highest and below the lowest note. */
+  pad: number
+  height: 'normal' | 'tall' | 'xl'
+}
+const LANE_VIEW_KEY = 'groovelab:sing-lane-view'
+const LANE_HEIGHT: Record<LaneView['height'], string> = { normal: 'h-64', tall: 'h-96', xl: 'h-[34rem]' }
+function loadLaneView(): LaneView {
+  try {
+    const v = JSON.parse(localStorage.getItem(LANE_VIEW_KEY) ?? '{}') as Partial<LaneView>
+    return { pad: typeof v.pad === 'number' ? Math.max(0, Math.min(12, v.pad)) : 2, height: v.height === 'tall' || v.height === 'xl' ? v.height : 'tall' }
+  } catch {
+    return { pad: 2, height: 'tall' }
+  }
+}
+const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
+const midiName = (m: number) => {
+  const r = Math.round(m)
+  return `${NOTE_NAMES[((r % 12) + 12) % 12]}${Math.floor(r / 12) - 1}`
+}
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
 
@@ -190,12 +211,35 @@ export function PracticeTab() {
     setPhraseIdx((i) => Math.max(0, Math.min(i, phrases.length - 1)))
   }, [phrases])
 
+  // 音域: the whole song's lowest to highest note, plus room the student can widen; lane height too.
+  const [laneView, setLaneView] = useState<LaneView>(loadLaneView)
+  const changeLaneView = (patch: Partial<LaneView>) =>
+    setLaneView((v) => {
+      const next = { ...v, ...patch }
+      try {
+        localStorage.setItem(LANE_VIEW_KEY, JSON.stringify(next))
+      } catch {
+        // per visit only
+      }
+      return next
+    })
+  const extremes = useMemo(() => {
+    const ms = notes.map((n) => n.midi).filter((m) => Number.isFinite(m))
+    return ms.length ? { low: Math.min(...ms), high: Math.max(...ms) } : null
+  }, [notes])
   const range = useMemo(() => {
-    if (!phrases.length) return { low: 48, high: 72 }
-    const meds = phrases.map((p) => p.medianMidi)
-    const mid = (Math.min(...meds) + Math.max(...meds)) / 2
-    return { low: Math.floor(mid - 12), high: Math.ceil(mid + 12) }
-  }, [phrases])
+    if (!extremes) return { low: 48, high: 72 }
+    const pad = laneView.pad
+    let low = Math.floor(extremes.low - pad)
+    let high = Math.ceil(extremes.high + pad)
+    // At least an octave and a half, so a narrow song is not stretched.
+    const short = 18 - (high - low)
+    if (short > 0) {
+      low -= Math.floor(short / 2)
+      high += Math.ceil(short / 2)
+    }
+    return { low, high }
+  }, [extremes, laneView.pad])
 
   const restartPhrase = useCallback(
     (p: Phrase) => {
@@ -501,7 +545,28 @@ export function PracticeTab() {
         </p>
       )}
 
-      <PitchLane curve={curve} notes={notes} positionMs={positionMs} sung={getSung} overlay={getOverlay} shift={shift} low={range.low} high={range.high} />
+      <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+        {extremes && (
+          <span>
+            整首音域 {midiName(extremes.low)}–{midiName(extremes.high)}（{Math.round(extremes.high - extremes.low)} 个半音）
+          </span>
+        )}
+        <span className="ml-2">上下留白</span>
+        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={laneView.pad <= 0} onClick={() => changeLaneView({ pad: Math.max(0, laneView.pad - 2) })} aria-label="缩小音域显示">
+          −
+        </button>
+        <span className="num w-10 text-center">{laneView.pad} 半音</span>
+        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={laneView.pad >= 12} onClick={() => changeLaneView({ pad: Math.min(12, laneView.pad + 2) })} aria-label="扩大音域显示">
+          ＋
+        </button>
+        <span className="ml-2">高度</span>
+        {(['normal', 'tall', 'xl'] as const).map((h) => (
+          <button key={h} type="button" aria-pressed={laneView.height === h} onClick={() => changeLaneView({ height: h })} className={cn('focus-ring rounded-md border px-2 py-0.5', laneView.height === h ? 'border-amber/60 bg-amber-soft/40 text-foreground' : 'border-border/80 hover:text-foreground')}>
+            {h === 'normal' ? '标准' : h === 'tall' ? '高' : '更高'}
+          </button>
+        ))}
+      </div>
+      <PitchLane curve={curve} notes={notes} positionMs={positionMs} sung={getSung} overlay={getOverlay} shift={shift} low={range.low} high={range.high} extremes={extremes} heightClass={LANE_HEIGHT[laneView.height]} />
       {lyrics.length > 0 && <LyricsDisplay lines={lyrics} positionMs={positionMs} {...((loop || preview) && phrase ? { lockLine: lyrics.findIndex((l) => l.startMs >= phrase.startMs - 500 && l.startMs <= phrase.endMs) } : {})} />}
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Headphones className="h-3.5 w-3.5" /> 请戴耳机唱，否则伴奏会被录进去。灰色横条是原唱的音（颤音、滑音已经去掉，不打分），彩色是你，淡蓝是你选中的那一次。任何舒服的八度都可以。

@@ -28,6 +28,10 @@ export interface PitchLaneProps {
   shift: () => number
   low: number
   high: number
+  /** The song's lowest and highest notes (marked with dashed lines). */
+  extremes?: { low: number; high: number } | null
+  /** Tailwind height class of the lane. */
+  heightClass?: string
   windowMs?: number
 }
 
@@ -36,7 +40,19 @@ export interface PitchLaneProps {
  * behind), the student's line on top (green within ±50 cents of the note,
  * amber otherwise), a faded earlier take, and a playhead at 30 %.
  */
-export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low, high, windowMs = 6000 }: PitchLaneProps) {
+export function PitchLane({
+  curve,
+  notes,
+  positionMs,
+  sung,
+  overlay,
+  shift,
+  low,
+  high,
+  extremes = null,
+  heightClass = 'h-64',
+  windowMs = 6000,
+}: PitchLaneProps) {
   const canvas = useRef<HTMLCanvasElement>(null)
 
   useEffect(() => {
@@ -50,6 +66,7 @@ export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low,
       ok: resolve('hsl(var(--success))'),
       off: resolve('hsl(var(--amber))'),
       ghost: resolve('hsl(var(--cyan) / 0.45)'),
+      edge: resolve('hsl(var(--amber) / 0.7)'),
       head: resolve('hsl(var(--cyan))'),
     }
     let raf = 0
@@ -84,12 +101,39 @@ export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low,
         }
       }
       g.globalAlpha = 1
+      // The song's highest and lowest notes.
+      if (extremes) {
+        g.setLineDash([5, 5])
+        g.strokeStyle = colors.edge
+        g.fillStyle = colors.edge
+        g.lineWidth = 1
+        for (const [m, word] of [
+          [extremes.high, '最高'],
+          [extremes.low, '最低'],
+        ] as const) {
+          g.beginPath()
+          g.moveTo(0, y(m))
+          g.lineTo(w, y(m))
+          g.stroke()
+          const text = `${word} ${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`
+          g.fillText(
+            text,
+            w - g.measureText(text).width - 6,
+            m === extremes.high ? y(m) + 12 : y(m) - 4,
+          )
+        }
+        g.setLineDash([])
+      }
       // Singer: faint raw line, then note bars.
       g.strokeStyle = colors.raw
       g.lineWidth = 2
       g.beginPath()
       let pen = false
-      for (let i = Math.max(0, Math.floor(t0 / hopMs)); i * hopMs <= t0 + windowMs && i < curve.midi.length; i++) {
+      for (
+        let i = Math.max(0, Math.floor(t0 / hopMs));
+        i * hopMs <= t0 + windowMs && i < curve.midi.length;
+        i++
+      ) {
         const m = curve.midi[i]!
         if (Number.isNaN(m)) {
           pen = false
@@ -111,7 +155,12 @@ export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low,
         g.fill()
       }
       const k = shift()
-      const line = (pts: readonly SungSample[], color: (ok: boolean) => string, width: number, until: number) => {
+      const line = (
+        pts: readonly SungSample[],
+        color: (ok: boolean) => string,
+        width: number,
+        until: number,
+      ) => {
         g.lineWidth = width
         let prev: { x: number; y: number; ms: number; m: number } | null = null
         for (const s of pts) {
@@ -147,7 +196,14 @@ export function PitchLane({ curve, notes, positionMs, sung, overlay, shift, low,
     }
     raf = requestAnimationFrame(draw)
     return () => cancelAnimationFrame(raf)
-  }, [curve, notes, positionMs, sung, overlay, shift, low, high, windowMs])
+  }, [curve, notes, positionMs, sung, overlay, shift, low, high, extremes, windowMs])
 
-  return <canvas ref={canvas} className="h-64 w-full rounded-2xl border border-border/80 bg-card" role="img" aria-label="音高对比：灰色横条是原唱的音，彩色线是你唱的（绿色表示在半音以内），淡蓝线是你选中的那一次" />
+  return (
+    <canvas
+      ref={canvas}
+      className={`${heightClass} w-full rounded-2xl border border-border/80 bg-card`}
+      role="img"
+      aria-label="音高对比：灰色横条是原唱的音，彩色线是你唱的（绿色表示在半音以内），淡蓝线是你选中的那一次"
+    />
+  )
 }

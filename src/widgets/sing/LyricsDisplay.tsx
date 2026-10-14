@@ -27,7 +27,8 @@ function stateAt(lines: LyricLine[], ms: number, lockLine: number | undefined): 
     text: line.text,
     endMs: lineEnd(lines, lockLine) - line.startMs,
   }
-  if (line.words?.length) local.words = line.words.map((w) => ({ startMs: w.startMs - line.startMs, text: w.text }))
+  if (line.words?.length)
+    local.words = line.words.map((w) => ({ startMs: w.startMs - line.startMs, text: w.text }))
   return { ...karaokeState([local], ms - line.startMs), index: lockLine }
 }
 
@@ -87,9 +88,20 @@ export function LyricsDisplay({ lines, positionMs, lockLine }: LyricsDisplayProp
   return (
     <div className="space-y-2 text-center">
       <p aria-live="polite" className="min-h-[2.75rem] text-2xl font-semibold leading-snug">
-        {current ? <Sung text={current.text} progress={view.progress} /> : <span className="text-muted-foreground">…</span>}
+        {current ? (
+          // Line-level lyrics cannot tell where in the line the singer is: show the line, no progress.
+          current.words?.length ? (
+            <Sung text={current.text} progress={view.progress} />
+          ) : (
+            <span>{current.text}</span>
+          )
+        ) : (
+          <span className="text-muted-foreground">…</span>
+        )}
       </p>
-      {current?.translation && <p className="-mt-1 text-sm text-muted-foreground">{current.translation}</p>}
+      {current?.translation && (
+        <p className="-mt-1 text-sm text-muted-foreground">{current.translation}</p>
+      )}
       {next && <p className="text-sm text-muted-foreground">{next.text}</p>}
     </div>
   )
