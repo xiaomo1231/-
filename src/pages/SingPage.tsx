@@ -1,4 +1,5 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
+import { sanitizeGraph } from '@/songs/mixGraph'
 import { Link, Navigate, useParams } from 'react-router-dom'
 import * as Tone from 'tone'
 import { ArrowLeft, Loader2, Pencil } from 'lucide-react'
@@ -46,6 +47,8 @@ function backingStems(kinds: StemKind[]): StemKind[] {
 
 function SingWorkspace({ source }: { source: SingSource }) {
   const session = useSingSession(source)
+  const savedGraph = session.meta?.mixGraph
+  const mixGraph = useMemo(() => sanitizeGraph(savedGraph ?? null), [savedGraph])
   const [tab, setTab] = useState<Tab>('practice')
   const [title, setTitle] = useState(source.title)
   const [artist, setArtist] = useState(source.artist)
@@ -158,6 +161,10 @@ function SingWorkspace({ source }: { source: SingSource }) {
                       songKey={source.key}
                       title={title}
                       artist={artist}
+                      graph={mixGraph}
+                      onGraph={(g) => void session.setMeta({ mixGraph: g })}
+                      mode={session.meta?.mixMode ?? 'quick'}
+                      onMode={(m, g) => void session.setMeta({ mixMode: m, ...(g ? { mixGraph: g } : {}) })}
                     />
                   ) : (
                     <div className="flex items-center gap-2 py-10 text-sm text-muted-foreground">

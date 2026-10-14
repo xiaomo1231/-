@@ -99,9 +99,9 @@ export function LearnLinks({ module }: { module: string }) {
 }
 
 /** A panel body made of registry controls (the panel header lives in MixDesk). */
-export function Controls({ paths, mix, onMix, cols = 2 }: { paths: string[]; mix: MixSettings; onMix: (m: MixSettings) => void; cols?: 2 | 3 }) {
+export function Controls({ paths, mix, onMix, cols = 2 }: { paths: string[]; mix: MixSettings; onMix: (m: MixSettings) => void; cols?: 1 | 2 | 3 }) {
   return (
-    <div className={cn('grid gap-4', cols === 3 ? 'sm:grid-cols-3' : 'sm:grid-cols-2')}>
+    <div className={cn('grid gap-4', cols === 3 ? 'sm:grid-cols-3' : cols === 2 ? 'sm:grid-cols-2' : '')}>
       {paths.map((p) => (
         <ControlField key={p} path={p} mix={mix} onChange={onMix} />
       ))}

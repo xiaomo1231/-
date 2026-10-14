@@ -4,6 +4,8 @@
  */
 import * as Tone from 'tone'
 import { buildMixGraph, stemGain, structureKey, type MixGraph } from '@/audio/sing/mixChain'
+import { buildModularGraph, type ModularGraph } from '@/audio/mix/modularGraph'
+import { topologyKey, type ModGraph } from '@/songs/mixGraph'
 import { ensureMixWorklet } from '@/audio/fx/mixWorklet'
 import type { MixSettings } from '@/songs/singTypes'
 
@@ -15,6 +17,8 @@ export interface Region {
 export interface Pass {
   mix: MixSettings
   label: string
+  /** The workspace wiring for this pass (modular mode). */
+  graph?: ModGraph | null
 }
 
 const GAP_SEC = 0.4
@@ -25,7 +29,9 @@ export class MixPlayer {
   private ctx: AudioContext | null = null
   private voiceIn: GainNode | null = null
   private backingIn: GainNode | null = null
-  private graph: MixGraph | null = null
+  private graph: MixGraph | ModularGraph | null = null
+  /** The modular workspace's wiring (null = the quick desk's chain). */
+  private modGraph: ModGraph | null = null
   private sources: AudioBufferSourceNode[] = []
   private voice: AudioBuffer | null = null
   private backing: AudioBuffer[] = []
@@ -74,6 +80,16 @@ export class MixPlayer {
     this.applyMix()
   }
 
+  /** Use the workspace's wiring (or null for the quick desk). */
+  setGraph(g: ModGraph | null): void {
+    this.modGraph = g
+    if (!this.excerptActive) this.applyMix()
+  }
+
+  private keyOf(mix: MixSettings, g: ModGraph | null): string {
+    return g ? `g:${topologyKey(g)}` : structureKey(mix)
+  }
+
   /** Update the live chain. Safe before the graph exists; applied when it is built. */
   setMix(m: MixSettings): void {
     this.mix = m
@@ -82,7 +98,7 @@ export class MixPlayer {
 
   private applyMix(): void {
     if (!this.graph || !this.mix) return
-    if (structureKey(this.mix) !== this.builtKey && this.ctx) {
+    if (this.keyOf(this.mix, this.modGraph) !== this.builtKey && this.ctx) {
       // The insert order changed: a new graph (playback continues from the same place).
       const wasPlaying = this.playing
       const at = this.position()
@@ -98,14 +114,32 @@ export class MixPlayer {
       return
     }
     this.graph.update(this.mix, this.bpm)
-    this.graph.stemGains.forEach((g, i) => (g.gain.value = stemGain(this.mix!, this.backingNames[i])))
+    if (this.modGraph && 'updateGraph' in this.graph)
+      this.graph.updateGraph(this.modGraph, this.bpm)
+    this.graph.stemGains.forEach(
+      (g, i) => (g.gain.value = stemGain(this.mix!, this.backingNames[i])),
+    )
   }
 
   private build(ctx: AudioContext): void {
     if (!this.voiceIn || !this.backingIn || !this.mix) return
-    this.graph = buildMixGraph(ctx, this.voiceIn, this.backingIn, ctx.destination, this.mix, this.bpm, { worklets: this.worklets, stems: this.backing.length })
-    this.builtKey = structureKey(this.mix)
-    this.graph.stemGains.forEach((g, i) => (g.gain.value = stemGain(this.mix!, this.backingNames[i])))
+    const opts = { worklets: this.worklets, stems: this.backing.length }
+    this.graph = this.modGraph
+      ? buildModularGraph(
+          ctx,
+          this.voiceIn,
+          this.backingIn,
+          ctx.destination,
+          this.modGraph,
+          this.mix,
+          this.bpm,
+          opts,
+        )
+      : buildMixGraph(ctx, this.voiceIn, this.backingIn, ctx.destination, this.mix, this.bpm, opts)
+    this.builtKey = this.keyOf(this.mix, this.modGraph)
+    this.graph.stemGains.forEach(
+      (g, i) => (g.gain.value = stemGain(this.mix!, this.backingNames[i])),
+    )
   }
 
   /** Builds the audio graph on first use. Must run from a user gesture. */
@@ -246,15 +280,21 @@ export class MixPlayer {
         if (my !== this.gen) return
         const pass = passes[i]!
         onPass?.(i)
-        if (structureKey(pass.mix) !== this.builtKey && this.ctx) {
+        const passGraph = pass.graph === undefined ? this.modGraph : pass.graph
+        if (this.keyOf(pass.mix, passGraph) !== this.builtKey && this.ctx) {
           this.graph?.dispose()
           this.graph = null
           const live = this.mix
+          const liveGraph = this.modGraph
           this.mix = pass.mix
+          this.modGraph = passGraph
           this.build(this.ctx)
           this.mix = live
+          this.modGraph = liveGraph
         }
         this.graph?.update(pass.mix, this.bpm)
+        if (passGraph && this.graph && 'updateGraph' in this.graph)
+          this.graph.updateGraph(passGraph, this.bpm)
         this.stopSources()
         this.spawn(ctx, ctx.currentTime + 0.05, region.start, dur, null)
         await sleep((dur + 0.05 + GAP_SEC) * 1000)
@@ -282,6 +322,16 @@ export class MixPlayer {
 
   dynReduction(): ReturnType<MixGraph['dynReduction']> | null {
     return this.graph?.dynReduction() ?? null
+  }
+
+  /** Peak level at each workspace module (modular mode). */
+  levels(): Record<string, number> {
+    return this.graph && 'levels' in this.graph ? this.graph.levels() : {}
+  }
+
+  /** Listen at one workspace module (null = the output). */
+  solo(id: string | null): void {
+    if (this.graph && 'solo' in this.graph) this.graph.solo(id)
   }
 
   meters(): MixGraph['meters'] | null {

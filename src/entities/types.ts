@@ -2,6 +2,7 @@ import type { SheetFormat, SheetTrackInfo } from '@/import/gpImport'
 import type { PracticeRole, StemKind, StemMix, SyncMap } from '@/songs/backingSync'
 import type { CompPlan, LyricLine, MixSettings } from '@/songs/singTypes'
 import type { LyricFileEntry } from '@/songs/lyricFiles'
+import type { ModGraph } from '@/songs/mixGraph'
 import type { ModuleId } from '@/drills/types'
 import type { Score } from '@/music/score'
 import type { RigPreset, RigSettings } from '@/audio/guitar/rigSettings'
@@ -500,6 +501,9 @@ export interface SingMeta {
   mix?: MixSettings
   /** Earlier takes put away to start fresh (0.21.6). */
   drafts?: SingDraft[]
+  /** 模块模式 (0.25.0): the workspace wiring, and which mode the desk is in. */
+  mixGraph?: ModGraph
+  mixMode?: 'quick' | 'modular'
   /** Saved versions of the mix for A/B comparison (0.21.0). */
   mixSnapshots?: Array<{ name: string; mix: MixSettings }>
   updatedAt: number
