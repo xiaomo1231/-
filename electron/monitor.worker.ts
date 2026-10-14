@@ -267,7 +267,7 @@ parentPort!.on('message', (req: MonitorRequest) => {
       buffers = 0
       peak = 0
     } else if (req.type === 'update') {
-      target = Math.max(0, Math.min(1.5, req.volume))
+      target = Math.max(0, Math.min(32, req.volume))
       wetTarget = req.reverb ? 0.25 : 0
     } else stop()
     parentPort!.postMessage({ id: req.id, ok: true, value })

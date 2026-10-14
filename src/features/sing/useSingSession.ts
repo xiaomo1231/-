@@ -9,10 +9,35 @@ import { loadPitchCurve } from '@/audio/backing/pitchCurve'
 import { detector } from '@/audio/pitch/detector'
 import { rawTime } from '@/audio/engine'
 import { SongClock, VoiceRecorder, encodeTake } from '@/audio/sing/voiceRecorder'
-import { VoiceMonitor, loadMonitorSettings, saveMonitorSettings, type MonitorSettings, type MonitorStatus } from '@/audio/sing/voiceMonitor'
-import { notesOf, scoreNotes, steadyLag, toTakeScore, type NoteScore, type Phrase, type PitchCurve, type RefNote, type SungSample } from '@/songs/singAlong'
+import {
+  VoiceMonitor,
+  loadMonitorSettings,
+  saveMonitorSettings,
+  type MonitorSettings,
+  type MonitorStatus,
+} from '@/audio/sing/voiceMonitor'
+import {
+  notesOf,
+  scoreNotes,
+  steadyLag,
+  toTakeScore,
+  type NoteScore,
+  type Phrase,
+  type PitchCurve,
+  type RefNote,
+  type SungSample,
+} from '@/songs/singAlong'
 import type { StemKind } from '@/songs/backingSync'
-import { autoPhrases, groupTakes, phrasesFromLyrics, phrasesFromRanges, sameStretch, takeFitsPhrase, type PhraseRange, type PhraseSource } from '@/songs/phrasing'
+import {
+  autoPhrases,
+  groupTakes,
+  phrasesFromLyrics,
+  phrasesFromRanges,
+  sameStretch,
+  takeFitsPhrase,
+  type PhraseRange,
+  type PhraseSource,
+} from '@/songs/phrasing'
 import { useProfileStore } from '@/features/profile/profileStore'
 
 /** Takes kept per phrase in this session (the store keeps best / latest / pinned). */
@@ -39,7 +64,9 @@ export interface SessionTake extends SingTake {
  * takes per phrase and the per-source metadata (lyrics, full version, mix).
  */
 export function useSingSession(source: SingSource) {
-  const latencyMs = useProfileStore((s) => s.profile?.singLatencyMs ?? s.profile?.deviceLatencyMs ?? 0)
+  const latencyMs = useProfileStore(
+    (s) => s.profile?.singLatencyMs ?? s.profile?.deviceLatencyMs ?? 0,
+  )
   const vocals = source.stems.find((s) => s.stem === 'vocals')!
   const [curve, setCurve] = useState<PitchCurve | null>(null)
   const [progress, setProgress] = useState(0)
@@ -79,7 +106,14 @@ export function useSingSession(source: SingSource) {
   useEffect(() => {
     let dead = false
     void (async () => {
-      const stems = (await Promise.all(source.stems.map(async (s) => ({ stem: s.stem, blob: await BackingService.blob(s.fileId) })))).filter((s): s is { stem: StemKind; blob: Blob } => s.blob !== null)
+      const stems = (
+        await Promise.all(
+          source.stems.map(async (s) => ({
+            stem: s.stem,
+            blob: await BackingService.blob(s.fileId),
+          })),
+        )
+      ).filter((s): s is { stem: StemKind; blob: Blob } => s.blob !== null)
       if (dead) return
       stemsRef.current = stems
       player.current = new StemPlayer(stems)
@@ -99,7 +133,8 @@ export function useSingSession(source: SingSource) {
       const mix: Partial<Record<StemKind, { volume: number; muted: boolean }>> = {}
       for (const k of stemKinds) {
         if (k === 'vocals') mix[k] = { volume: guideVolume, muted: guideVolume === 0 }
-        else if (k === 'mix') mix[k] = { volume: 1, muted: separated || stemKinds.includes('instrumental') }
+        else if (k === 'mix')
+          mix[k] = { volume: 1, muted: separated || stemKinds.includes('instrumental') }
         else if (k === 'instrumental') mix[k] = { volume: 1, muted: separated }
         else mix[k] = { volume: 1, muted: false }
       }
@@ -115,7 +150,11 @@ export function useSingSession(source: SingSource) {
   }, [ready, speed])
 
   // 分句: the student's own cuts, else the lyric lines (when their times are trusted), else the singer's pauses.
-  const phraseSource: PhraseSource = meta?.phraseCuts?.length ? 'manual' : meta?.lyricsTimed && meta.lyrics?.length ? 'lyrics' : 'auto'
+  const phraseSource: PhraseSource = meta?.phraseCuts?.length
+    ? 'manual'
+    : meta?.lyricsTimed && meta.lyrics?.length
+      ? 'lyrics'
+      : 'auto'
   const phrases = useMemo<Phrase[]>(() => {
     if (!curve) return []
     if (phraseSource === 'manual') return phrasesFromRanges(curve, meta!.phraseCuts!)
@@ -132,7 +171,8 @@ export function useSingSession(source: SingSource) {
   const bests = useMemo(() => {
     const out: Record<number, number> = {}
     phrases.forEach((p, i) => {
-      for (const t of takes[i] ?? []) if (t.score && takeFitsPhrase(t, p)) out[i] = Math.max(out[i] ?? 0, t.score.score)
+      for (const t of takes[i] ?? [])
+        if (t.score && takeFitsPhrase(t, p)) out[i] = Math.max(out[i] ?? 0, t.score.score)
     })
     return out
   }, [phrases, takes])
@@ -171,11 +211,18 @@ export function useSingSession(source: SingSource) {
       monitorRef.current?.stop()
       return
     }
-    monitorRef.current ??= new VoiceMonitor(setMonitorStatus)
+    monitorRef.current ??= new VoiceMonitor((st) => {
+      setMonitorStatus(st)
+      if (st.kind === 'fallback' && st.switchTo)
+        setMonitorState((m) => ({ ...m, nativeApi: st.switchTo! }))
+    })
     monitorRef.current.start(monitor)
   }, [mic, monitor])
   useEffect(() => () => monitorRef.current?.stop(), [])
-  const setMonitor = useCallback((patch: Partial<MonitorSettings>) => setMonitorState((m) => ({ ...m, ...patch })), [])
+  const setMonitor = useCallback(
+    (patch: Partial<MonitorSettings>) => setMonitorState((m) => ({ ...m, ...patch })),
+    [],
+  )
 
   const startMic = useCallback(async () => {
     setMic('starting')
@@ -199,13 +246,20 @@ export function useSingSession(source: SingSource) {
 
   /** Cut the recording for a stretch of the song: samples, rate, and where it starts in the song (latency removed). */
   const cutRecording = useCallback(
-    (fromMs: number, toMs: number): { samples: Float32Array; sampleRate: number; startMs: number } | null => {
+    (
+      fromMs: number,
+      toMs: number,
+    ): { samples: Float32Array; sampleRate: number; startMs: number } | null => {
       const r = recorder.current
       if (!r) return null
       const a = clock.current.timeAt(fromMs)
       const b = clock.current.timeAt(toMs)
       if (a === null || b === null || b <= a) return null
-      return { samples: r.clip(a, b), sampleRate: r.sampleRate, startMs: fromMs - latencyMs * speed }
+      return {
+        samples: r.clip(a, b),
+        sampleRate: r.sampleRate,
+        startMs: fromMs - latencyMs * speed,
+      }
     },
     [latencyMs, speed],
   )
@@ -213,7 +267,8 @@ export function useSingSession(source: SingSource) {
   const addTake = useCallback((t: SessionTake) => {
     setAllTakes((all) => {
       // Session: per stretch of the song the newest SESSION_TAKES, plus anything pinned.
-      const same = (x: SessionTake) => (t.phrase < 0 ? x.phrase < 0 : x.phrase >= 0 && sameStretch(x, t))
+      const same = (x: SessionTake) =>
+        t.phrase < 0 ? x.phrase < 0 : x.phrase >= 0 && sameStretch(x, t)
       let n = 0
       const keep = all.filter((x) => !same(x) || x.kept || ++n < SESSION_TAKES)
       return [t, ...keep]
@@ -224,7 +279,9 @@ export function useSingSession(source: SingSource) {
   const finishPhrase = useCallback(
     async (p: Phrase): Promise<SessionTake | null> => {
       // Only the latest pass over this phrase (singing it again appends a second run of samples).
-      const window = latestPass(samples.current.filter((s) => s.ms >= p.startMs - PAD_MS && s.ms <= p.endMs + PAD_MS))
+      const window = latestPass(
+        samples.current.filter((s) => s.ms >= p.startMs - PAD_MS && s.ms <= p.endMs + PAD_MS),
+      )
       const detail = scoreNotes(notes, p, window)
       if (!window.length) return null
       const cut = cutRecording(p.startMs - PAD_MS, p.endMs + PAD_MS)
@@ -247,7 +304,17 @@ export function useSingSession(source: SingSource) {
       const { detail: _d, ...stored } = take
       await SingService.saveTake(stored)
       if (detail) {
-        setMetaState((m) => (m ? { ...m, phraseBests: { ...m.phraseBests, [p.index]: Math.max(detail.score, m.phraseBests[p.index] ?? 0) } } : m))
+        setMetaState((m) =>
+          m
+            ? {
+                ...m,
+                phraseBests: {
+                  ...m.phraseBests,
+                  [p.index]: Math.max(detail.score, m.phraseBests[p.index] ?? 0),
+                },
+              }
+            : m,
+        )
         lags.current.push(detail.lagMs)
         setLagNotice(steadyLag(lags.current))
       }
@@ -293,7 +360,10 @@ export function useSingSession(source: SingSource) {
     },
     [source.key, afterReset],
   )
-  const clearAllTakes = useCallback(async () => afterReset(await SingService.clearTakes(source.key)), [source.key, afterReset])
+  const clearAllTakes = useCallback(
+    async () => afterReset(await SingService.clearTakes(source.key)),
+    [source.key, afterReset],
+  )
   const clearPhraseTakes = useCallback(
     async (ids: string[]) => {
       setMetaState(await SingService.clearTakes(source.key, ids))
@@ -301,22 +371,38 @@ export function useSingSession(source: SingSource) {
     },
     [source.key],
   )
-  const restoreDraft = useCallback(async (id: string) => afterReset(await SingService.restoreDraft(source.key, id)), [source.key, afterReset])
-  const deleteDraft = useCallback(async (id: string) => setMetaState(await SingService.deleteDraft(source.key, id)), [source.key])
+  const restoreDraft = useCallback(
+    async (id: string) => afterReset(await SingService.restoreDraft(source.key, id)),
+    [source.key, afterReset],
+  )
+  const deleteDraft = useCallback(
+    async (id: string) => setMetaState(await SingService.deleteDraft(source.key, id)),
+    [source.key],
+  )
 
-  const updateTake = useCallback(async (t: SessionTake, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs' | 'alignAuto'>>) => {
-    await SingService.updateTake(t.id, patch)
-    setAllTakes((all) => all.map((x) => (x.id === t.id ? { ...x, ...patch } : x)))
-  }, [])
+  const updateTake = useCallback(
+    async (t: SessionTake, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs' | 'alignAuto'>>) => {
+      await SingService.updateTake(t.id, patch)
+      setAllTakes((all) => all.map((x) => (x.id === t.id ? { ...x, ...patch } : x)))
+    },
+    [],
+  )
 
   /**
    * Change how the song is cut (lyrics, hand cuts). The full-version picks are
    * per phrase, so they start over; the takes themselves follow by time.
    */
   const resegment = useCallback(
-    async (patch: { lyrics?: SingMeta['lyrics']; lyricsTimed?: boolean; phraseCuts?: PhraseRange[] }) => {
+    async (patch: {
+      lyrics?: SingMeta['lyrics']
+      lyricsTimed?: boolean
+      phraseCuts?: PhraseRange[]
+    }) => {
       const comp = meta?.comp
-      return setMeta({ ...patch, ...(comp ? { comp: { ...comp, picks: {}, phraseOffsets: {} } } : {}) })
+      return setMeta({
+        ...patch,
+        ...(comp ? { comp: { ...comp, picks: {}, phraseOffsets: {} } } : {}),
+      })
     },
     [meta?.comp, setMeta],
   )
@@ -326,7 +412,8 @@ export function useSingSession(source: SingSource) {
     if (!meta || !curve) return
     const a = JSON.stringify(meta.phraseBests)
     const b = JSON.stringify(bests)
-    if (a !== b && Object.keys(bests).length + Object.keys(meta.phraseBests).length > 0) void SingService.updateMeta(source.key, { phraseBests: bests }).then(setMetaState)
+    if (a !== b && Object.keys(bests).length + Object.keys(meta.phraseBests).length > 0)
+      void SingService.updateMeta(source.key, { phraseBests: bests }).then(setMetaState)
   }, [bests]) // eslint-disable-line react-hooks/exhaustive-deps
 
   const play = useCallback((fromMs?: number) => {

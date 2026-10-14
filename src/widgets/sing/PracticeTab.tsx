@@ -556,7 +556,7 @@ export function PracticeTab() {
         <p className="text-xs text-muted-foreground">
           监听已开：请一定戴耳机（用外放会啸叫）。
           {s.monitorStatus?.kind === 'native'
-            ? `低延迟监听（${s.monitorStatus.info.api}，${s.monitorStatus.info.input} → ${s.monitorStatus.info.output}），延迟约 ${s.monitorStatus.info.latencyMs} 毫秒${s.monitorStatus.info.api === 'ASIO' ? '；声卡由应用独占，录音也从 ASIO 读取' : ''}。`
+            ? `低延迟监听（${s.monitorStatus.info.api}，${s.monitorStatus.info.input} → ${s.monitorStatus.info.output}），延迟约 ${s.monitorStatus.info.latencyMs} 毫秒${s.monitorStatus.info.api === 'ASIO' ? '；声卡由应用独占，录音也从 ASIO 读取' : ''}。${s.monitorStatus.note ?? ''}`
             : s.monitorStatus?.kind === 'fallback'
               ? `低延迟监听没能打开（${s.monitorStatus.reason}），先用普通监听，会有一点延迟（通常 20–60 毫秒）。`
               : '普通监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；'}

@@ -32,8 +32,8 @@ export const MONITOR_DEFAULTS: MonitorSettings = {
 /** What the monitor is doing now (shown under the monitor controls). */
 export type MonitorStatus =
   | { kind: 'browser' }
-  | { kind: 'native'; info: NativeMonitorInfo }
-  | { kind: 'fallback'; reason: string }
+  | { kind: 'native'; info: NativeMonitorInfo; note?: string }
+  | { kind: 'fallback'; reason: string; switchTo?: string }
 const STORE = 'groovelab:sing-monitor'
 
 export function loadMonitorSettings(): MonitorSettings {
@@ -55,7 +55,14 @@ export function saveMonitorSettings(s: MonitorSettings): void {
   }
 }
 
+/** ASIO cannot be used for this setup (no inputs / no microphone signal there). */
+class AsioUnusable extends Error {}
+
 export class VoiceMonitor {
+  /** The real microphone's name (kept while ASIO feeds the input). */
+  private micLabel = ''
+  /** Why the monitor just switched away from ASIO (shown once with the next status). */
+  private note = ''
   private nodes: AudioNode[] = []
   private out: GainNode | null = null
   private wet: GainNode | null = null
@@ -88,7 +95,10 @@ export class VoiceMonitor {
     const key = s.nativeApi
     await this.starting
     if (this.nativeKey === key) {
-      void app.monitor.update({ volume: s.volume, reverb: s.reverb })
+      void app.monitor.update({
+        volume: Math.min(32, s.volume * inputManager.voiceGain),
+        reverb: s.reverb,
+      })
       return
     }
     this.stopBrowser()
@@ -97,27 +107,51 @@ export class VoiceMonitor {
         if (this.nativeKey) await app.monitor.stop()
         await this.endFeed()
         const asio = key.startsWith('asio:') ? key.slice(5) : ''
+        if (asio) {
+          // ASIO uses one sound card for both ways: it needs inputs there (a headphone DAC has none).
+          const dev = (await app.monitor.devices()).find((d) => d.api === 'ASIO' && d.name === asio)
+          if (!dev || dev.inputs === 0)
+            throw new AsioUnusable(`「${asio}」的 ASIO 没有输入（麦克风不在这块声卡上）`)
+        } else if (!this.feed) {
+          // Remember the real microphone (while ASIO feeds the page, the input shows the driver's name).
+          this.micLabel = inputManager.current?.label ?? this.micLabel
+        }
         const info = await app.monitor.start({
           api: asio ? 'asio' : 'wasapi',
           // ASIO keeps the sound card's own rate (changing it would disturb other programs); the page converts.
           ...(asio ? { asioName: asio, feed: true } : {}),
-          inputName: inputManager.current?.label ?? '',
+          inputName: (this.feed ? this.micLabel : inputManager.current?.label) ?? this.micLabel,
           outputName: await inputManager.outputLabel().catch(() => ''),
-          volume: s.volume,
+          volume: Math.min(32, s.volume * inputManager.voiceGain),
           reverb: s.reverb,
         })
         // ASIO holds the whole sound card: recording and scoring read the driver's microphone too.
         if (asio) {
+          this.micLabel = inputManager.current?.label ?? this.micLabel
+          await app.monitor.stats()
           const src = await nativeInputNode(inputManager.bus.context)
           this.feed = src
           await inputManager.useExternal(src.node, `${asio}（ASIO）`)
+          // A microphone always gives some signal (noise); digital silence means nothing is plugged in there.
+          await new Promise((r) => setTimeout(r, 1800))
+          if ((await app.monitor.stats()).peak < 1e-5)
+            throw new AsioUnusable(
+              `「${asio}」的 ASIO 没有收到麦克风的声音（麦克风可能接在别的声卡上）`,
+            )
         }
         this.nativeKey = key
-        this.onStatus({ kind: 'native', info })
+        this.onStatus({ kind: 'native', info, ...(this.note ? { note: this.note } : {}) })
+        this.note = ''
       } catch (e) {
         this.nativeKey = ''
         await app.monitor.stop().catch(() => undefined)
         await this.endFeed()
+        if (e instanceof AsioUnusable) {
+          // Back to the low-latency WASAPI monitor (it can listen on one card and play on another).
+          this.note = `${e.message}，已改用 WASAPI 低延迟监听（ASIO 要求麦克风和耳机接在同一块声卡上）。`
+          this.onStatus({ kind: 'fallback', reason: this.note, switchTo: 'wasapi' })
+          return
+        }
         this.startBrowser(s)
         this.onStatus({
           kind: 'fallback',

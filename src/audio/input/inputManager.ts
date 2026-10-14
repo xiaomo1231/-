@@ -198,6 +198,11 @@ class InputManager {
   }
 
   /** Instrument use wins: a guitar lesson and the tuner both need the cable. */
+  /** Extra gain of the singing microphone (linear), for monitors that bypass the bus. */
+  get voiceGain(): number {
+    return 10 ** (this.voiceGainDb / 20)
+  }
+
   /** The singing microphone's gain on the bus (instruments get none). */
   private applyGain(): void {
     if (!this.busNode) return

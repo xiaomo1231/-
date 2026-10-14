@@ -22,7 +22,11 @@ export function NativeMonitorControls({
       .devices()
       .then(
         (list) =>
-          !dead && setAsio([...new Set(list.filter((d) => d.api === 'ASIO').map((d) => d.name))]),
+          // Only drivers with inputs: ASIO records and plays through the same sound card.
+          !dead &&
+          setAsio([
+            ...new Set(list.filter((d) => d.api === 'ASIO' && d.inputs > 0).map((d) => d.name)),
+          ]),
       )
       .catch(() => undefined)
     return () => {
@@ -32,10 +36,7 @@ export function NativeMonitorControls({
   if (!app) return null
   return (
     <>
-      <label
-        className="flex items-center gap-1 text-xs"
-        title="通过声卡驱动直接监听，延迟更小"
-      >
+      <label className="flex items-center gap-1 text-xs" title="通过声卡驱动直接监听，延迟更小">
         <input
           type="checkbox"
           checked={monitor.native}
@@ -54,7 +55,7 @@ export function NativeMonitorControls({
           <option value="wasapi">WASAPI（推荐）</option>
           {asio.map((n) => (
             <option key={n} value={`asio:${n}`}>
-              ASIO：{n}（延迟最低；声卡由应用独占，录音也改走 ASIO）
+              ASIO：{n}（延迟最低；麦克风和耳机都要接在这块声卡上）
             </option>
           ))}
         </select>
