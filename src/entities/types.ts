@@ -524,6 +524,8 @@ export interface PitchCurveRow {
   /** MIDI per frame (fractional), NaN = unvoiced. */
   midi: Float32Array
   createdAt: number
+  /** How it was made (0.24.0): 'rmvpe' | 'swiftf0' | 'yin'. */
+  method?: string
 }
 
 /** A recording or stem attached to a sheet (Dexie v8). Kept as a Blob; not part of data export. */

@@ -1,14 +1,22 @@
 import { getDb } from '@/infrastructure/db/database'
-import { ANALYSIS_RATE, CURVE_VERSION, extractCurve, type PitchCurve } from '@/songs/singAlong'
+import { ANALYSIS_RATE, CURVE_VERSION, type PitchCurve } from '@/songs/singAlong'
+import { analyzeReference } from '@/audio/pitch/referenceCurve'
+import { desktop } from '@/app/desktop'
 
 /**
  * The singer's pitch line for a vocals stem: computed once (decode at 16 kHz,
- * mono, YIN) and cached in IndexedDB.
+ * mono; RMVPE / SwiftF0 / YIN, see audio/pitch/referenceCurve) and cached in IndexedDB.
+ * A line made without RMVPE is made again once the app can use RMVPE.
  */
-export async function loadPitchCurve(fileId: string, onProgress?: (done: number) => void): Promise<PitchCurve> {
+export async function loadPitchCurve(
+  fileId: string,
+  onProgress?: (done: number) => void,
+): Promise<PitchCurve> {
   const db = getDb()
   const cached = await db.pitchCurves.get(fileId)
-  if (cached && cached.version === CURVE_VERSION) return { hop: cached.hop, midi: cached.midi }
+  const method = cached?.method
+  if (cached && cached.version === CURVE_VERSION && (method === 'rmvpe' || !desktop()))
+    return { hop: cached.hop, midi: cached.midi }
   const row = await db.audioFiles.get(fileId)
   if (!row) throw new Error('找不到人声轨的音频，请重新导入。')
   const ctx = new OfflineAudioContext(1, 1, ANALYSIS_RATE)
@@ -23,7 +31,14 @@ export async function loadPitchCurve(fileId: string, onProgress?: (done: number)
     const d = buf.getChannelData(c)
     for (let i = 0; i < buf.length; i++) mono[i]! += d[i]! / buf.numberOfChannels
   }
-  const curve = await extractCurve(mono, onProgress, buf.sampleRate)
-  await db.pitchCurves.put({ fileId, version: CURVE_VERSION, hop: curve.hop, midi: curve.midi, createdAt: Date.now() })
+  const { curve, method: made } = await analyzeReference(mono, onProgress)
+  await db.pitchCurves.put({
+    fileId,
+    version: CURVE_VERSION,
+    hop: curve.hop,
+    midi: curve.midi,
+    createdAt: Date.now(),
+    method: made,
+  })
   return curve
 }

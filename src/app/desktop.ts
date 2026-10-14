@@ -48,6 +48,13 @@ export interface DesktopBridge {
     ): Promise<{ left: Float32Array[]; right: Float32Array[] }>
     dispose(): Promise<void>
   }
+  /** RMVPE in the app's pitch worker (0.24.0): log-mel [128][frames] (frames a multiple of 32) → salience [frames][360]. */
+  pitch: {
+    available(): Promise<{ rmvpe: boolean; swift: boolean }>
+    rmvpe(mel: Float32Array, frames: number): Promise<Float32Array>
+    /** SwiftF0 on 16 kHz audio → pitch (Hz) and confidence per 256-sample frame. */
+    swift(audio: Float32Array, fmin: number, fmax: number): Promise<{ pitch: Float32Array; conf: Float32Array }>
+  }
   monitor: {
     /** Sound card devices the driver sees (WASAPI and ASIO). */
     devices(): Promise<

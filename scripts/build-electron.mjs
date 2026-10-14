@@ -13,6 +13,7 @@ const entries = {
   preload: 'electron/preload.ts',
   separator: 'electron/separator.worker.ts',
   monitor: 'electron/monitor.worker.ts',
+  pitch: 'electron/pitch.worker.ts',
 }
 
 await Promise.all(

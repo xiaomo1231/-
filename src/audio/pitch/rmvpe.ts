@@ -43,6 +43,15 @@ export const melBasis: Float32Array[] = (() => {
   })
 })()
 
+/** Non-zero bins of each mel band [from, to): the sums only visit those (~8× faster). */
+const melSpan: Array<[number, number]> = melBasis.map((row) => {
+  let a = 0
+  while (a < BINS && row[a] === 0) a++
+  let b = BINS
+  while (b > a && row[b - 1] === 0) b--
+  return [a, b]
+})
+
 const window = (() => {
   const w = new Float64Array(N_FFT)
   for (let n = 0; n < N_FFT; n++) w[n] = 0.5 - 0.5 * Math.cos((2 * Math.PI * n) / N_FFT)
@@ -82,8 +91,9 @@ export function rmvpeMel(x: Float32Array, padTo = rmvpeFrames(x.length)): Float3
     for (let k = 0; k < BINS; k++) mag[k] = Math.hypot(re[k]!, im[k]!)
     for (let m = 0; m < N_MELS; m++) {
       const row = melBasis[m]!
+      const [a, b] = melSpan[m]!
       let s = 0
-      for (let k = 0; k < BINS; k++) s += row[k]! * mag[k]!
+      for (let k = a; k < b; k++) s += row[k]! * mag[k]!
       out[m * padTo + f] = Math.log(Math.max(s, 1e-5))
     }
   }

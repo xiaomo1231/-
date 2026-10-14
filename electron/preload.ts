@@ -13,6 +13,12 @@ contextBridge.exposeInMainWorld('groovelab', {
       ipcRenderer.invoke('mdx:run', left, right),
     dispose: () => ipcRenderer.invoke('mdx:dispose'),
   },
+  pitch: {
+    available: () => ipcRenderer.invoke('pitch:available'),
+    rmvpe: (mel: Float32Array, frames: number) => ipcRenderer.invoke('pitch:rmvpe', mel, frames),
+    swift: (audio: Float32Array, fmin: number, fmax: number) =>
+      ipcRenderer.invoke('pitch:swift', audio, fmin, fmax),
+  },
   monitor: {
     devices: () => ipcRenderer.invoke('monitor:devices'),
     start: (s: unknown) => ipcRenderer.invoke('monitor:start', s),

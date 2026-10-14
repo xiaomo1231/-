@@ -4,9 +4,9 @@ Makes the pitch models for GrooveLab (0.24.0).
     helper\\.venv\\Scripts\\python.exe -I scripts\\make-pitch-models.py <rmvpe.onnx> <swift_f0 model.onnx>
 
 1. RMVPE (vocal pitch in polyphonic music; code Apache-2.0, weights as
-   released by the RVC project under MIT): converts rmvpe.onnx (~362 MB,
-   https://huggingface.co/lj1995/VoiceConversionWebUI) to float16 compute
-   with float32 input / output → public/models/pitch-rmvpe-fp16.onnx.
+   released by the RVC project under MIT): rmvpe.onnx (~362 MB,
+   https://huggingface.co/lj1995/VoiceConversionWebUI) with its weights stored
+   as float16 (computed in float32) → public/models/pitch-rmvpe-fp16.onnx.
 2. SwiftF0 (MIT, https://github.com/lars76/swift-f0): copies its model.onnx
    (from the swift-f0 wheel) → public/models/pitch-swiftf0.onnx.
 3. Runs the original RMVPE on a test signal and writes tests/fixtures/rmvpe.json — the mel spectrogram and pitch the page's
@@ -23,7 +23,6 @@ import librosa
 import numpy as np
 import onnx
 import onnxruntime as ort
-from onnxruntime.transformers.float16 import convert_float_to_float16
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 OUT_RMVPE = os.path.join(ROOT, "public", "models", "pitch-rmvpe-fp16.onnx")
@@ -75,11 +74,36 @@ def decode(hidden: np.ndarray, thred: float = 0.03) -> np.ndarray:
     return out
 
 
+def fp16_weights(model: onnx.ModelProto) -> onnx.ModelProto:
+    """Store large float32 initializers as float16 and add a Cast back to float32 (compute stays float32)."""
+    from onnx import TensorProto, helper, numpy_helper
+
+    g = model.graph
+    casts = []
+    keep = []
+    for init in g.initializer:
+        if init.data_type == TensorProto.FLOAT and np.prod(init.dims) >= 1024:
+            arr = numpy_helper.to_array(init).astype(np.float16)
+            half_name = init.name + "__fp16"
+            keep.append(numpy_helper.from_array(arr, half_name))
+            casts.append(helper.make_node("Cast", [half_name], [init.name], to=TensorProto.FLOAT, name=init.name + "__cast"))
+        else:
+            keep.append(init)
+    del g.initializer[:]
+    g.initializer.extend(keep)
+    nodes = list(g.node)
+    del g.node[:]
+    g.node.extend(casts + nodes)
+    return model
+
+
 def main() -> int:
     src_rmvpe, src_swift = sys.argv[1], sys.argv[2]
     os.makedirs(os.path.dirname(OUT_RMVPE), exist_ok=True)
-    # The GRU stays in float32: onnxruntime has no half-precision GRU on the CPU (it crashes).
-    half = convert_float_to_float16(onnx.load(src_rmvpe), keep_io_types=True, op_block_list=["GRU"])
+    # Weights stored as float16 (half the size), computed in float32: every weight is
+    # cast back when the model loads. RMVPE's GRU runs ~10× faster on the processor than
+    # with DirectML, and onnxruntime has no float16 kernels on the processor.
+    half = fp16_weights(onnx.load(src_rmvpe))
     onnx.save(half, OUT_RMVPE)
     shutil.copyfile(src_swift, OUT_SWIFT)
     print("wrote", OUT_RMVPE, round(os.path.getsize(OUT_RMVPE) / 1e6, 1), "MB;", OUT_SWIFT, os.path.getsize(OUT_SWIFT), "bytes")

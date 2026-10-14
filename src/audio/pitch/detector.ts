@@ -2,11 +2,13 @@ import * as Tone from 'tone'
 import { rms, yin } from './yin'
 import { inputManager, MicError } from '@/audio/input/inputManager'
 import type { PitchFrame } from './analysis'
+import { SWIFT_HOP, SWIFT_RATE, swiftRun, swiftSession, to16k } from './swiftF0'
 
 /**
- * Microphone pitch detector. Runs YIN on an AnalyserNode buffer about 40
- * times a second on the main thread, which is plenty on a desktop CPU and
- * keeps everything on the same AudioContext clock as playback.
+ * Microphone pitch detector. Runs on an AnalyserNode buffer about 40 times a
+ * second on the main thread, on the same AudioContext clock as playback. The
+ * voice uses SwiftF0 (a small model: far fewer octave slips and dropouts,
+ * 0.24.0) once it has loaded; instruments, and the voice until then, use YIN.
  *
  * The microphone signal is never connected to the speakers and never
  * recorded or uploaded — only per-frame pitch numbers leave this module.
@@ -42,6 +44,9 @@ export class PitchDetector {
   private timer: ReturnType<typeof setInterval> | null = null
   private listeners = new Set<(f: PitchFrame) => void>()
   private preset: PresetConfig = PRESETS.voice
+  private presetName: DetectorPreset = 'voice'
+  private swift: Awaited<ReturnType<typeof swiftSession>> = null
+  private swiftBusy = false
   gate = DEFAULT_GATE
 
   get running(): boolean {
@@ -50,6 +55,12 @@ export class PitchDetector {
 
   async start(preset: DetectorPreset = 'voice'): Promise<void> {
     this.preset = PRESETS[preset]
+    this.presetName = preset
+    if (preset === 'voice' && !this.swift)
+      void swiftSession().then((s) => {
+        this.swift = s
+        this.configureAnalyser()
+      })
     if (this.running) {
       this.configureAnalyser()
       return
@@ -65,9 +76,46 @@ export class PitchDetector {
 
   private configureAnalyser(): void {
     if (!this.analyser) return
-    this.analyser.fftSize = this.preset.fftSize
+    // SwiftF0 wants ~170 ms of context (about ten 16 ms frames).
+    this.analyser.fftSize = this.useSwift() ? 8192 : this.preset.fftSize
     this.analyser.smoothingTimeConstant = 0
-    this.buf = new Float32Array(new ArrayBuffer(this.preset.fftSize * 4))
+    this.buf = new Float32Array(new ArrayBuffer(this.analyser.fftSize * 4))
+  }
+
+  private useSwift(): boolean {
+    return this.presetName === 'voice' && this.swift !== null
+  }
+
+  /** SwiftF0 on the latest audio; reports the frame two hops before the end (it needs a little audio after a frame). */
+  private tickSwift(t: number, level: number, peak: number): void {
+    if (this.swiftBusy || !this.swift || !this.buf || !this.analyser) return
+    this.swiftBusy = true
+    const rate = this.analyser.context.sampleRate
+    const x = to16k(this.buf, rate)
+    void swiftRun(this.swift, x, this.preset.minFreq, this.preset.maxFreq)
+      .then(({ hz, conf }) => {
+        const i = Math.max(0, hz.length - 3)
+        const c = conf[i] ?? 0
+        const f = hz[i] ?? 0
+        // Time of that frame's centre.
+        const ft = t - (x.length - (i + 0.5) * SWIFT_HOP) / SWIFT_RATE
+        const frame: PitchFrame = {
+          t: ft,
+          hz: f > 0 ? f : null,
+          clarity: f > 0 ? Math.max(0.8, c) : Math.min(0.5, c),
+          rms: level,
+          peak,
+        }
+        this.listeners.forEach((l) => l(frame))
+      })
+      .catch(() => {
+        // a failed run: YIN from the next tick on
+        this.swift = null
+        this.configureAnalyser()
+      })
+      .finally(() => {
+        this.swiftBusy = false
+      })
   }
 
   private tick(): void {
@@ -80,6 +128,9 @@ export class PitchDetector {
     let frame: PitchFrame
     if (level < this.gate) {
       frame = { t, hz: null, clarity: 0, rms: level, peak }
+    } else if (this.useSwift()) {
+      this.tickSwift(t, level, peak)
+      return
     } else {
       const r = yin(this.buf, {
         sampleRate: this.analyser.context.sampleRate,

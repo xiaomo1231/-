@@ -10,7 +10,8 @@
 import { yin, rms } from '@/audio/pitch/yin'
 
 /** Bump when extraction changes: cached curves are recomputed. */
-export const CURVE_VERSION = 1
+/** 2 (0.24.0): lines from RMVPE / SwiftF0 instead of YIN — older cached lines are made again. */
+export const CURVE_VERSION = 2
 /** Seconds per frame. */
 export const HOP = 0.02
 /** Analysis sample rate (vocals need nothing above ~1 kHz fundamentals). */

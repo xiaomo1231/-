@@ -23,10 +23,19 @@ export interface NoteMeasure {
   stableMs: number
 }
 
-export const EMPTY_MEASURE: NoteMeasure = { medianCents: null, voicedRatio: 0, driftCents: null, stableMs: 0 }
+export const EMPTY_MEASURE: NoteMeasure = {
+  medianCents: null,
+  voicedRatio: 0,
+  driftCents: null,
+  stableMs: 0,
+}
 
 /** Signed cents from a target MIDI note; with octave equivalence folded into ±600. */
-export function centsFromTarget(hz: number, targetMidi: number, octaveEquivalence: boolean): number {
+export function centsFromTarget(
+  hz: number,
+  targetMidi: number,
+  octaveEquivalence: boolean,
+): number {
   const cents = 1200 * Math.log2(hz / midiToFrequency(targetMidi))
   if (!octaveEquivalence) return cents
   let c = ((cents % 1200) + 1200) % 1200
@@ -64,7 +73,10 @@ export function smoothFrames(frames: readonly PitchFrame[], k = 5): PitchFrame[]
  * Longest run of consecutive voiced frames whose pitch stays within
  * `toleranceCents` of the run's running median. Returns frame indices.
  */
-export function longestStableRun(frames: readonly PitchFrame[], toleranceCents = 60): { start: number; end: number } | null {
+export function longestStableRun(
+  frames: readonly PitchFrame[],
+  toleranceCents = 60,
+): { start: number; end: number } | null {
   let best: { start: number; end: number } | null = null
   let start = -1
   let anchor = 0
@@ -121,13 +133,22 @@ export function measureWindow(
 }
 
 /** Free-timing measurement: score the longest stable stretch anywhere in the take. */
-export function measureBestStretch(frames: readonly PitchFrame[], targetMidi: number, octaveEquivalence: boolean): NoteMeasure {
+export function measureBestStretch(
+  frames: readonly PitchFrame[],
+  targetMidi: number,
+  octaveEquivalence: boolean,
+): NoteMeasure {
   if (frames.length === 0) return EMPTY_MEASURE
   const voicedRatio = frames.filter((f) => f.hz !== null).length / frames.length
   return measureFrames(frames, targetMidi, octaveEquivalence, voicedRatio)
 }
 
-function measureFrames(frames: readonly PitchFrame[], targetMidi: number, octaveEquivalence: boolean, voicedRatio: number): NoteMeasure {
+function measureFrames(
+  frames: readonly PitchFrame[],
+  targetMidi: number,
+  octaveEquivalence: boolean,
+  voicedRatio: number,
+): NoteMeasure {
   const run = longestStableRun(frames)
   if (!run) return { ...EMPTY_MEASURE, voicedRatio }
   const stable = frames.slice(run.start, run.end + 1)
@@ -136,7 +157,8 @@ function measureFrames(frames: readonly PitchFrame[], targetMidi: number, octave
   return {
     medianCents: Math.round(median(cents)),
     voicedRatio,
-    driftCents: cents.length >= 3 ? Math.round(percentile(cents, 0.9) - percentile(cents, 0.1)) : null,
+    driftCents:
+      cents.length >= 3 ? Math.round(percentile(cents, 0.9) - percentile(cents, 0.1)) : null,
     stableMs: Math.round(stableMs),
   }
 }

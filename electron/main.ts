@@ -177,6 +177,35 @@ ipcMain.handle(
 )
 ipcMain.handle('monitor:stats', async () => (await monitor.ask({ type: 'stats' })).value)
 ipcMain.handle('monitor:stop', async () => void (await monitor.ask({ type: 'stop' })))
+// ---- Pitch (RMVPE and SwiftF0 on the processor) -------------------------------
+
+/** A model file: the built site's, or (developing against the dev server) the project's public/. */
+const modelFile = (name: string) =>
+  [path.join(webRoot, 'models', name), path.join(here, '..', 'public', 'models', name)].find((p) =>
+    existsSync(p),
+  ) ?? path.join(webRoot, 'models', name)
+const pitchModel = modelFile('pitch-rmvpe-fp16.onnx')
+const swiftModel = modelFile('pitch-swiftf0.onnx')
+const pitch = new Port('pitch.cjs', {
+  rmvpePath: pitchModel,
+  swiftPath: swiftModel,
+  cores: cpus().length,
+})
+const askPitch = (req: Record<string, unknown>) => pitch.ask(req)
+ipcMain.handle('pitch:available', () => ({
+  rmvpe: existsSync(pitchModel),
+  swift: existsSync(swiftModel),
+}))
+ipcMain.handle(
+  'pitch:rmvpe',
+  async (_e, mel: Float32Array, frames: number) =>
+    (await askPitch({ type: 'rmvpe', mel, frames })).hidden,
+)
+ipcMain.handle('pitch:swift', async (_e, audio: Float32Array, fmin: number, fmax: number) => {
+  const r = await askPitch({ type: 'swift', audio, fmin, fmax })
+  return { pitch: r.pitch, conf: r.conf }
+})
+
 ipcMain.on('app:version', (e) => {
   e.returnValue = app.getVersion()
 })
