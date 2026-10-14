@@ -11,6 +11,7 @@ import { prepareVoice, needsPrep, prepStats } from '@/audio/fx/voicePrep'
 import type { RefNote } from '@/songs/singAlong'
 import { SingService } from '@/services/singService'
 import { Button, Slider } from '@/shared/ui'
+import { ControlField } from '@/widgets/mixing/ControlField'
 import { GUIDE_STEPS } from '@/songs/mixLessons'
 import { cloneMix, delayMs, MIX_PRESETS } from '@/songs/mixPresets'
 import type { EqBand, EqBandType, MixPresetId, MixSettings } from '@/songs/singTypes'
@@ -80,6 +81,10 @@ const SAMPLE_RATE = 44100
 const PRESETS = Object.entries(MIX_PRESETS) as Array<
   [MixPresetId, (typeof MIX_PRESETS)[MixPresetId]]
 >
+const ENGINE_OPTIONS: ReadonlyArray<[MixSettings['engine'], string]> = [
+  ['airwindows', '新音色'],
+  ['classic', '经典'],
+]
 const DIVISIONS: MixSettings['vocal']['delay']['division'][] = ['1/4', '1/8', '1/8.', '1/16']
 const DEFAULT_OPEN: Record<string, boolean> = {
   lowcut: true,
@@ -116,6 +121,29 @@ const safeName = (s: string) => s.replace(/[\\/:*?"<>|]+/g, '_').trim() || '翻�
 const formatClock = (sec: number): string => {
   const s = Math.max(0, Math.floor(sec))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** Registry controls in one row; the `faded` paths stay editable but are drawn at reduced emphasis. */
+function Knobs({
+  paths,
+  faded,
+  mix,
+  onMix,
+}: {
+  paths: string[]
+  faded: string[]
+  mix: MixSettings
+  onMix: (m: MixSettings) => void
+}): JSX.Element {
+  return (
+    <div className="grid gap-4 sm:grid-cols-3">
+      {paths.map((p) => (
+        <div key={p} className={faded.includes(p) ? 'opacity-60' : undefined}>
+          <ControlField path={p} mix={mix} onChange={onMix} />
+        </div>
+      ))}
+    </div>
+  )
 }
 
 /**
@@ -253,7 +281,11 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
   const masterPatch = (p: Partial<MixSettings['master']>) =>
     apply({ ...mix, master: { ...mix.master, ...p } })
 
-  const activePreset = PRESETS.find(([, p]) => mixEqual(mix, fitMix(p.settings)))?.[1]
+  // Presets are compared and applied with the current engine: 音色 is a separate choice from the preset.
+  const withEngine = (s: MixSettings): MixSettings => ({ ...s, engine: mix.engine })
+  // 新音色 ignores some knobs (see mixing/airwindows/mapping.ts): kept editable, drawn fainter.
+  const aw = mix.engine === 'airwindows'
+  const activePreset = PRESETS.find(([, p]) => mixEqual(mix, fitMix(withEngine(p.settings))))?.[1]
 
   // ---- transport -----------------------------------------------------------
 
@@ -607,6 +639,34 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
         </section>
       )}
 
+      <section className="space-y-2 rounded-3xl border border-border/80 bg-card p-4">
+        <div className="flex flex-wrap items-center gap-3">
+          <span className="text-sm font-medium text-foreground">音色</span>
+          <div
+            className="flex rounded-xl border border-border/80 p-0.5 text-sm"
+            role="group"
+            aria-label="音色"
+          >
+            {ENGINE_OPTIONS.map(([id, label]) => (
+              <button
+                key={id}
+                type="button"
+                aria-pressed={mix.engine === id}
+                onClick={() => apply({ ...mix, engine: id })}
+                className={`focus-ring rounded-lg px-4 py-1.5 ${mix.engine === id ? 'bg-amber-soft/50 font-medium text-foreground' : 'text-muted-foreground'}`}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </div>
+        <p className="text-xs text-muted-foreground">
+          {mix.engine === 'airwindows'
+            ? '压缩、齿音消除、饱和与混响使用移植自 Airwindows（Chris Johnson，MIT 许可）的效果器；旋钮和经典版相同，可以来回切换对比。'
+            : '浏览器自带的效果器（0.27 及以前的声音）。'}
+        </p>
+      </section>
+
       <AutoMixPanel
         voice={voice}
         backing={backing}
@@ -657,14 +717,14 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
             <h3 className="text-sm font-semibold text-foreground">一键预设</h3>
             <div className="flex flex-wrap gap-2">
               {PRESETS.map(([id, p]) => {
-                const active = mixEqual(mix, fitMix(p.settings))
+                const active = mixEqual(mix, fitMix(withEngine(p.settings)))
                 return (
                   <button
                     key={id}
                     type="button"
                     title={p.description}
                     aria-pressed={active}
-                    onClick={() => apply(cloneMix(p.settings))}
+                    onClick={() => apply(withEngine(cloneMix(p.settings)))}
                     className={`focus-ring rounded-full border px-3 py-1.5 text-sm transition-colors ${
                       active
                         ? 'border-primary-strong bg-primary-strong text-primary-foreground'
@@ -862,18 +922,20 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
                   disabled={!v.comp.on}
                   onChange={(ratio) => vocal({ comp: { ...v.comp, ratio } })}
                 />
-                <NumField
-                  label="启动时间"
-                  value={v.comp.attackMs}
-                  min={0.1}
-                  max={200}
-                  step={0.1}
-                  unit="ms"
-                  log
-                  digits={1}
-                  disabled={!v.comp.on}
-                  onChange={(attackMs) => vocal({ comp: { ...v.comp, attackMs } })}
-                />
+                <div className={aw ? 'opacity-60' : undefined}>
+                  <NumField
+                    label="启动时间"
+                    value={v.comp.attackMs}
+                    min={0.1}
+                    max={200}
+                    step={0.1}
+                    unit="ms"
+                    log
+                    digits={1}
+                    disabled={!v.comp.on}
+                    onChange={(attackMs) => vocal({ comp: { ...v.comp, attackMs } })}
+                  />
+                </div>
                 <NumField
                   label="释放时间"
                   value={v.comp.releaseMs}
@@ -897,6 +959,11 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
                   onChange={(makeupDb) => vocal({ comp: { ...v.comp, makeupDb } })}
                 />
               </div>
+              {aw && (
+                <p className="text-xs text-muted-foreground">
+                  新音色的压缩器会按音乐自动决定起音，「起音」只在经典音色下起作用。
+                </p>
+              )}
             </ModulePanel>
 
             <ModulePanel
@@ -929,17 +996,24 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
                   disabled={!v.deEss.on}
                   onChange={(amountDb) => vocal({ deEss: { ...v.deEss, amountDb } })}
                 />
-                <NumField
-                  label="阈值（齿音超过它才压）"
-                  value={v.deEss.thresholdDb}
-                  min={-60}
-                  max={0}
-                  step={0.5}
-                  unit="dB"
-                  disabled={!v.deEss.on}
-                  onChange={(thresholdDb) => vocal({ deEss: { ...v.deEss, thresholdDb } })}
-                />
+                <div className={aw ? 'opacity-60' : undefined}>
+                  <NumField
+                    label="阈值（齿音超过它才压）"
+                    value={v.deEss.thresholdDb}
+                    min={-60}
+                    max={0}
+                    step={0.5}
+                    unit="dB"
+                    disabled={!v.deEss.on}
+                    onChange={(thresholdDb) => vocal({ deEss: { ...v.deEss, thresholdDb } })}
+                  />
+                </div>
               </div>
+              {aw && (
+                <p className="text-xs text-muted-foreground">
+                  新音色的齿音消除会自己找齿音，「阈值」只在经典音色下起作用。
+                </p>
+              )}
               <LearnLinks module="deess" />
             </ModulePanel>
 
@@ -980,7 +1054,7 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
                 `${formatDb(v.comp2.thresholdDb)} · ${v.comp2.ratio}:1`,
               )}
             >
-              <Controls
+              <Knobs
                 paths={[
                   'vocal.comp2.thresholdDb',
                   'vocal.comp2.ratio',
@@ -988,10 +1062,15 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
                   'vocal.comp2.releaseMs',
                   'vocal.comp2.makeupDb',
                 ]}
+                faded={aw ? ['vocal.comp2.attackMs', 'vocal.comp2.releaseMs'] : []}
                 mix={mix}
                 onMix={apply}
-                cols={3}
               />
+              {aw && (
+                <p className="text-xs text-muted-foreground">
+                  新音色的第二级压缩自动决定起音和释放，这两个旋钮只在经典音色下起作用。
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 两台压缩各压一点（例如第一台慢、整体平稳，第二台快、只抓峰值），比一台压很多更自然。
               </p>
@@ -1008,16 +1087,21 @@ export function MixDesk(props: MixDeskProps): JSX.Element {
                 `混入 ${Math.round(v.parallel.blend * 100)}%`,
               )}
             >
-              <Controls
+              <Knobs
                 paths={[
                   'vocal.parallel.thresholdDb',
                   'vocal.parallel.ratio',
                   'vocal.parallel.blend',
                 ]}
+                faded={aw ? ['vocal.parallel.thresholdDb', 'vocal.parallel.ratio'] : []}
                 mix={mix}
                 onMix={apply}
-                cols={3}
               />
+              {aw && (
+                <p className="text-xs text-muted-foreground">
+                  新音色用固定的强压缩做并行，「阈值」「比例」只在经典音色下起作用；混合比例照常。
+                </p>
+              )}
               <p className="text-xs text-muted-foreground">
                 把一份压得很扁的人声混在原声下面：轻的地方被托起来、更有密度，响的地方仍保留原来的冲击。
               </p>

@@ -13,12 +13,13 @@
  * Every module can be bypassed (its parameters go neutral). Gate, dynamic EQ,
  * de-esser and ducking need the 'groove-dyn' worklet (audio/fx/mixWorklet);
  * where it cannot load, the de-esser falls back to a static cut and the
- * others pass the signal through. A change of insert order needs a new graph
- * (`structureKey`).
+ * others pass the signal through. A change of insert order or of engine
+ * (Airwindows / classic) needs a new graph (`structureKey`).
  */
 import type { InsertId, MixSettings } from '@/songs/singTypes'
 import { clampMix, dbToGain } from '@/songs/mixPresets'
 import { ensureMixWorklet } from '@/audio/fx/mixWorklet'
+import { ensureAirwindows } from '@/audio/fx/airwindows/awNode'
 import { buildModularGraph } from '@/audio/mix/modularGraph'
 import { exportSettings, mixFor, type ModGraph } from '@/songs/mixGraph'
 import {
@@ -77,9 +78,12 @@ export interface MixGraph {
   dispose(): void
 }
 
-/** What makes a graph need rebuilding (rather than a parameter update). */
+/**
+ * What makes a graph need rebuilding (rather than a parameter update): the
+ * engine choice (Airwindows / classic modules) and the insert order.
+ */
 export function structureKey(m: MixSettings): string {
-  return m.vocal.order.join(',')
+  return `${m.engine}|${m.vocal.order.join(',')}`
 }
 
 export { reverbImpulse, saturationCurve } from '@/audio/mix/modules'
@@ -94,14 +98,14 @@ export function buildMixGraph(
   out: AudioNode,
   initial: MixSettings,
   bpm = 100,
-  opts: { worklets?: boolean; stems?: number } = {},
+  opts: { worklets?: boolean; airwindows?: boolean; stems?: number } = {},
 ): MixGraph {
   const first = clampMix(initial)
-  const k = makeKit(ctx, opts.worklets ?? false)
+  const k = makeKit(ctx, opts.worklets ?? false, opts.airwindows ?? false)
 
   // ---- voice inserts ----------------------------------------------------------
-  const comp1 = compModule(k, 'comp')
-  const comp2 = compModule(k, 'comp2')
+  const comp1 = compModule(k, 'comp', first)
+  const comp2 = compModule(k, 'comp2', first)
   const gate = gateModule(k, first)
   const dynEq = dynEqModule(k, first)
   const deEss = deEssModule(k, first)
@@ -112,9 +116,9 @@ export function buildMixGraph(
     dynEq: () => dynEq,
     comp: () => comp1,
     comp2: () => comp2,
-    parallel: () => parallelModule(k),
+    parallel: () => parallelModule(k, first),
     deEss: () => deEss,
-    saturation: () => saturationModule(k),
+    saturation: () => saturationModule(k, first),
     mod: () => modModule(k, first),
   }
   const inserts = first.vocal.order.map((id) => builders[id]())
@@ -134,7 +138,7 @@ export function buildMixGraph(
   const bus = k.gain()
   pan.output.connect(voiceMeter)
   pan.output.connect(bus)
-  const reverb = reverbModule(k, () => true)
+  const reverb = reverbModule(k, () => true, first)
   const delay = delayModule(k, () => true)
   pan.output.connect(reverb.inputs[0]!)
   reverb.output.connect(bus)
@@ -287,6 +291,7 @@ export async function renderMix(input: {
   const length = Math.ceil((span + tail) * sampleRate)
   const ctx = new OfflineAudioContext(2, Math.max(1, length), sampleRate)
   const worklets = await ensureMixWorklet(ctx)
+  const airwindows = await ensureAirwindows(ctx)
   const voiceIn = ctx.createGain()
   const backingIn = ctx.createGain()
   const part = input.part ?? 'all'
@@ -295,10 +300,12 @@ export async function renderMix(input: {
   const graph = g
     ? buildModularGraph(ctx, voiceIn, backingIn, ctx.destination, g, mix, input.bpm, {
         worklets,
+        airwindows,
         stems: input.backing.length,
       })
     : buildMixGraph(ctx, voiceIn, backingIn, ctx.destination, mix, input.bpm, {
         worklets,
+        airwindows,
         stems: input.backing.length,
       })
   const offset = r?.start ?? 0

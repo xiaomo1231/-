@@ -56,17 +56,17 @@ function build(k: Kit, node: ModNode, base: MixSettings): Module {
     case 'dynEq':
       return dynEqModule(k, first)
     case 'comp':
-      return compModule(k, 'comp')
+      return compModule(k, 'comp', first)
     case 'parallel':
-      return parallelModule(k)
+      return parallelModule(k, first)
     case 'deEss':
       return deEssModule(k, first)
     case 'saturation':
-      return saturationModule(k)
+      return saturationModule(k, first)
     case 'mod':
       return modModule(k, first)
     case 'reverb':
-      return reverbModule(k, send)
+      return reverbModule(k, send, first)
     case 'delay':
       return delayModule(k, send)
     case 'backEq':
@@ -102,9 +102,9 @@ export function buildModularGraph(
   graph: ModGraph,
   base: MixSettings,
   bpm = 100,
-  opts: { worklets?: boolean; stems?: number } = {},
+  opts: { worklets?: boolean; airwindows?: boolean; stems?: number } = {},
 ): ModularGraph {
-  const k = makeKit(ctx, opts.worklets ?? false)
+  const k = makeKit(ctx, opts.worklets ?? false, opts.airwindows ?? false)
   const mods = new Map<string, Module>()
   const meters = new Map<string, AnalyserNode>()
   let current = graph

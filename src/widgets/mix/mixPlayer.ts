@@ -7,6 +7,7 @@ import { buildMixGraph, stemGain, structureKey, type MixGraph } from '@/audio/si
 import { buildModularGraph, type ModularGraph } from '@/audio/mix/modularGraph'
 import { topologyKey, type ModGraph } from '@/songs/mixGraph'
 import { ensureMixWorklet } from '@/audio/fx/mixWorklet'
+import { ensureAirwindows } from '@/audio/fx/airwindows/awNode'
 import type { MixSettings } from '@/songs/singTypes'
 
 export interface Region {
@@ -38,6 +39,7 @@ export class MixPlayer {
   private backingNames: string[] = []
   private bpm = 100
   private worklets = false
+  private airwindows = false
   private builtKey = ''
   private mix: MixSettings | null = null
 
@@ -87,7 +89,7 @@ export class MixPlayer {
   }
 
   private keyOf(mix: MixSettings, g: ModGraph | null): string {
-    return g ? `g:${topologyKey(g)}` : structureKey(mix)
+    return g ? `g:${topologyKey(g)}|${mix.engine}` : structureKey(mix)
   }
 
   /** Update the live chain. Safe before the graph exists; applied when it is built. */
@@ -123,7 +125,11 @@ export class MixPlayer {
 
   private build(ctx: AudioContext): void {
     if (!this.voiceIn || !this.backingIn || !this.mix) return
-    const opts = { worklets: this.worklets, stems: this.backing.length }
+    const opts = {
+      worklets: this.worklets,
+      airwindows: this.airwindows,
+      stems: this.backing.length,
+    }
     this.graph = this.modGraph
       ? buildModularGraph(
           ctx,
@@ -147,6 +153,7 @@ export class MixPlayer {
     await Tone.start()
     const ctx = Tone.getContext().rawContext as AudioContext
     this.worklets = await ensureMixWorklet(ctx)
+    this.airwindows = await ensureAirwindows(ctx)
     if (!this.ctx || this.ctx !== ctx) {
       this.graph?.dispose()
       this.voiceIn?.disconnect()

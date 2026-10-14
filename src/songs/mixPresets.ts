@@ -10,6 +10,7 @@ import { DEFAULT_ORDER, type CompSettings, type EqBand, type InsertId, type MixP
 type DelayDivision = MixSettings['vocal']['delay']['division']
 
 const POP_SETTINGS: MixSettings = {
+  engine: 'airwindows',
   vocal: {
     gainDb: 0,
     pan: 0,
@@ -19,19 +20,19 @@ const POP_SETTINGS: MixSettings = {
       bands: [
         { type: 'lowshelf', freq: 120, gainDb: -1, q: 0.7 },
         { type: 'peaking', freq: 300, gainDb: -2, q: 1.0 },
-        { type: 'peaking', freq: 3000, gainDb: 2, q: 1.0 },
-        { type: 'highshelf', freq: 10000, gainDb: 2.5, q: 0.7 },
+        { type: 'peaking', freq: 3000, gainDb: 1.5, q: 1.0 },
+        { type: 'highshelf', freq: 10000, gainDb: 2, q: 0.7 },
       ],
     },
     comp: { on: true, thresholdDb: -18, ratio: 3, attackMs: 10, releaseMs: 120, makeupDb: 3 },
-    deEss: { on: true, freq: 6500, amountDb: 4, thresholdDb: -30 },
-    reverb: { on: true, type: 'plate', size: 0.4, decay: 1.6, preDelayMs: 20, mix: 0.18, lowCut: 200, highCut: 8000 },
+    deEss: { on: true, freq: 6500, amountDb: 5, thresholdDb: -30 },
+    reverb: { on: true, type: 'plate', size: 0.4, decay: 1.6, preDelayMs: 25, mix: 0.16, lowCut: 250, highCut: 7500 },
     delay: { on: false, timeMs: 250, sync: true, division: '1/8', feedback: 0.25, mix: 0.12, pingPong: false, highCut: 6000 },
     gate: { on: false, thresholdDb: -50, rangeDb: 15, releaseMs: 120 },
     dynEq: { on: false, freq: 300, q: 1.4, thresholdDb: -24, ratio: 3, maxCutDb: 6 },
-    comp2: { on: false, thresholdDb: -10, ratio: 2, attackMs: 3, releaseMs: 80, makeupDb: 0 },
+    comp2: { on: true, thresholdDb: -8, ratio: 1.5, attackMs: 3, releaseMs: 80, makeupDb: 0 },
     parallel: { on: false, thresholdDb: -35, ratio: 10, blend: 0.3 },
-    saturation: { on: false, type: 'tape', drive: 0.3, mix: 0.5 },
+    saturation: { on: true, type: 'tape', drive: 0.2, mix: 0.3 },
     mod: { on: false, type: 'doubler', rate: 0.6, depth: 0.4, mix: 0.35 },
     order: [...DEFAULT_ORDER],
     autoLevel: { on: false, strength: 0.6, phraseDb: {} },
@@ -85,12 +86,21 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
   },
   rock: {
     label: '摇滚',
-    description: '压缩更有力，加强 2–4 kHz 的临场感，混响短而明亮，能穿透电吉他。',
+    description: '压缩更有力、电子管带来密度，2.5 kHz 一带的临场感能穿透电吉他；高频不额外提亮、齿音压得更多，不刺耳。短房间混响加一点回声。',
     settings: derive((m) => {
-      m.vocal.eq.bands[2] = { type: 'peaking', freq: 3000, gainDb: 4, q: 1.2 }
-      m.vocal.comp = { on: true, thresholdDb: -16, ratio: 4, attackMs: 8, releaseMs: 100, makeupDb: 4 }
-      m.vocal.reverb = { ...m.vocal.reverb, type: 'room', size: 0.25, decay: 1.1, preDelayMs: 15, mix: 0.12 }
-      m.vocal.saturation = { on: true, type: 'tube', drive: 0.35, mix: 0.4 }
+      m.vocal.lowCut.freq = 110
+      m.vocal.eq.bands = [
+        { type: 'lowshelf', freq: 120, gainDb: -1, q: 0.7 },
+        { type: 'peaking', freq: 350, gainDb: -2.5, q: 1.0 },
+        { type: 'peaking', freq: 2500, gainDb: 2.5, q: 0.9 },
+        { type: 'highshelf', freq: 10000, gainDb: 0.5, q: 0.7 },
+      ]
+      m.vocal.comp = { on: true, thresholdDb: -20, ratio: 4, attackMs: 10, releaseMs: 90, makeupDb: 3 }
+      m.vocal.comp2 = { on: true, thresholdDb: -10, ratio: 2, attackMs: 3, releaseMs: 60, makeupDb: 0 }
+      m.vocal.deEss = { on: true, freq: 6000, amountDb: 7, thresholdDb: -32 }
+      m.vocal.saturation = { on: true, type: 'tube', drive: 0.3, mix: 0.35 }
+      m.vocal.reverb = { ...m.vocal.reverb, type: 'room', size: 0.3, decay: 1.0, preDelayMs: 15, mix: 0.1 }
+      m.vocal.delay = { ...m.vocal.delay, on: true, division: '1/8', feedback: 0.15, mix: 0.07 }
       m.backing.gainDb = -1
     }),
   },
@@ -101,8 +111,8 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
       m.vocal.lowCut.freq = 90
       m.vocal.eq.bands[3] = { type: 'highshelf', freq: 10000, gainDb: 0.5, q: 0.7 }
       m.vocal.comp = { on: true, thresholdDb: -20, ratio: 2, attackMs: 15, releaseMs: 150, makeupDb: 2 }
-      m.vocal.reverb = { ...m.vocal.reverb, type: 'hall', size: 0.55, decay: 2.4, preDelayMs: 25, mix: 0.25 }
-      m.vocal.saturation = { on: true, type: 'tape', drive: 0.2, mix: 0.4 }
+      m.vocal.reverb = { ...m.vocal.reverb, type: 'hall', size: 0.55, decay: 2.3, preDelayMs: 30, mix: 0.2, highCut: 6500 }
+      m.vocal.saturation = { on: true, type: 'tape', drive: 0.3, mix: 0.5 }
       m.backing.gainDb = -3
     }),
   },
@@ -113,27 +123,30 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
       m.vocal.eq.bands = [
         { type: 'lowshelf', freq: 120, gainDb: -1, q: 0.7 },
         { type: 'peaking', freq: 300, gainDb: -2, q: 1.0 },
-        { type: 'peaking', freq: 4500, gainDb: 2.5, q: 0.9 },
-        { type: 'highshelf', freq: 10000, gainDb: 4, q: 0.7 },
+        { type: 'peaking', freq: 4500, gainDb: 2, q: 0.9 },
+        { type: 'highshelf', freq: 11000, gainDb: 3.5, q: 0.7 },
       ]
-      m.vocal.reverb.mix = 0.15
+      m.vocal.deEss = { on: true, freq: 7000, amountDb: 6, thresholdDb: -32 }
+      m.vocal.reverb.mix = 0.14
     }),
   },
   radio: {
     label: '电台感',
-    description: '切除低频、突出中频，压缩很重，没有混响，听起来像收音机或老式电话。',
+    description: '只留下约 400 Hz–3.5 kHz 的窄频带（真实收音机 / 电话的频宽），中频鼻音突出，压缩很重、轻微削波，没有混响。',
     settings: derive((m) => {
-      m.vocal.lowCut = { on: true, freq: 300 }
+      m.vocal.lowCut = { on: true, freq: 450 }
       m.vocal.eq.bands = [
-        { type: 'lowshelf', freq: 200, gainDb: -3, q: 0.7 },
-        { type: 'peaking', freq: 1500, gainDb: 5, q: 1.2 },
-        { type: 'peaking', freq: 3500, gainDb: 0, q: 1.0 },
-        { type: 'highshelf', freq: 6000, gainDb: -6, q: 0.7 },
+        { type: 'lowshelf', freq: 300, gainDb: -9, q: 0.7 },
+        { type: 'peaking', freq: 1400, gainDb: 5, q: 1.0 },
+        { type: 'peaking', freq: 2800, gainDb: 2, q: 1.4 },
+        { type: 'highshelf', freq: 3800, gainDb: -15, q: 0.7 },
       ]
-      m.vocal.comp = { on: true, thresholdDb: -22, ratio: 6, attackMs: 5, releaseMs: 80, makeupDb: 5 }
+      m.vocal.comp = { on: true, thresholdDb: -24, ratio: 6, attackMs: 5, releaseMs: 80, makeupDb: 5 }
+      m.vocal.comp2.on = false
+      m.vocal.deEss.on = false
       m.vocal.reverb.on = false
       m.vocal.delay.on = false
-      m.vocal.saturation = { on: true, type: 'hard', drive: 0.4, mix: 0.5 }
+      m.vocal.saturation = { on: true, type: 'hard', drive: 0.35, mix: 0.4 }
     }),
   },
   raw: {
@@ -143,6 +156,8 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
       m.vocal.lowCut.on = false
       m.vocal.eq.on = false
       m.vocal.comp.on = false
+      m.vocal.comp2.on = false
+      m.vocal.saturation.on = false
       m.vocal.deEss.on = false
       m.vocal.reverb.on = false
       m.vocal.delay.on = false
@@ -155,7 +170,7 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
     description: '人声靠前、气息清楚：压缩温和平稳，大厅混响加较长预延迟，伴奏在人声出现时让一点。',
     settings: derive((m) => {
       m.vocal.comp = { on: true, thresholdDb: -22, ratio: 2.5, attackMs: 20, releaseMs: 180, makeupDb: 3 }
-      m.vocal.reverb = { ...m.vocal.reverb, type: 'hall', size: 0.7, decay: 2.8, preDelayMs: 40, mix: 0.24 }
+      m.vocal.reverb = { ...m.vocal.reverb, type: 'hall', size: 0.7, decay: 2.6, preDelayMs: 45, mix: 0.2, highCut: 7000 }
       m.vocal.delay = { ...m.vocal.delay, on: true, division: '1/4', feedback: 0.2, mix: 0.08 }
       m.vocal.autoLevel = { on: true, strength: 0.6, phraseDb: {} }
       m.backing.duck = { on: true, amountDb: 2, releaseMs: 300 }
@@ -173,7 +188,9 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
         { type: 'highshelf', freq: 12000, gainDb: 2, q: 0.7 },
       ]
       m.vocal.comp = { on: true, thresholdDb: -20, ratio: 2, attackMs: 15, releaseMs: 150, makeupDb: 2 }
-      m.vocal.reverb = { ...m.vocal.reverb, type: 'room', size: 0.3, decay: 1.2, preDelayMs: 10, mix: 0.14 }
+      m.vocal.comp2.on = false
+      m.vocal.saturation = { on: true, type: 'tape', drive: 0.15, mix: 0.25 }
+      m.vocal.reverb = { ...m.vocal.reverb, type: 'room', size: 0.35, decay: 1.2, preDelayMs: 10, mix: 0.13 }
       m.backing.gainDb = -2
     }),
   },
@@ -188,6 +205,8 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
       m.vocal.reverb.on = false
       m.vocal.delay = { ...m.vocal.delay, on: true, sync: false, timeMs: 90, feedback: 0.05, mix: 0.08 }
       m.vocal.gate = { on: true, thresholdDb: -48, rangeDb: 12, releaseMs: 100 }
+      m.vocal.deEss = { on: true, freq: 6500, amountDb: 6, thresholdDb: -32 }
+      m.vocal.saturation.on = false
       m.backing.pocket = { on: true, freq: 2500, amountDb: 3 }
     }),
   },
@@ -197,7 +216,7 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
     settings: derive((m) => {
       m.vocal.comp = { on: true, thresholdDb: -20, ratio: 3, attackMs: 10, releaseMs: 120, makeupDb: 3 }
       m.vocal.comp2 = { on: true, thresholdDb: -10, ratio: 2, attackMs: 2, releaseMs: 60, makeupDb: 1 }
-      m.vocal.saturation = { on: true, type: 'tube', drive: 0.25, mix: 0.35 }
+      m.vocal.saturation = { on: true, type: 'tube', drive: 0.2, mix: 0.3 }
       m.vocal.mod = { on: true, type: 'doubler', rate: 0.5, depth: 0.35, mix: 0.3 }
       m.vocal.delay = { ...m.vocal.delay, on: true, division: '1/8.', feedback: 0.3, mix: 0.12, pingPong: true }
       m.vocal.reverb = { ...m.vocal.reverb, type: 'plate', decay: 1.9, mix: 0.2 }
@@ -224,8 +243,8 @@ export const MIX_PRESETS: Record<MixPresetId, { label: string; description: stri
     description: '熟悉的 K 歌味：明显的回声加大混响，人声音量偏大，唱起来更有自信。',
     settings: derive((m) => {
       m.vocal.gainDb = 2
-      m.vocal.reverb = { ...m.vocal.reverb, type: 'hall', size: 0.75, decay: 2.6, preDelayMs: 15, mix: 0.3 }
-      m.vocal.delay = { ...m.vocal.delay, on: true, division: '1/4', feedback: 0.35, mix: 0.18 }
+      m.vocal.reverb = { ...m.vocal.reverb, type: 'hall', size: 0.75, decay: 2.5, preDelayMs: 20, mix: 0.26 }
+      m.vocal.delay = { ...m.vocal.delay, on: true, division: '1/4', feedback: 0.3, mix: 0.15 }
       m.backing.gainDb = -3
     }),
   },
@@ -275,7 +294,7 @@ export function fixOrder(order: unknown): InsertId[] {
  */
 export function clampMix(input: MixSettings): MixSettings {
   // Older saves may lack any of the newer fields.
-  const m = input as unknown as { vocal: Partial<MixSettings['vocal']>; backing: Partial<MixSettings['backing']>; master: Partial<MixSettings['master']> }
+  const m = input as unknown as { engine?: unknown; vocal: Partial<MixSettings['vocal']>; backing: Partial<MixSettings['backing']>; master: Partial<MixSettings['master']> }
   const v = { ...DEF.vocal, ...m.vocal }
   const c = clampTo
   const gate = { ...DEF.vocal.gate, ...v.gate }
@@ -300,6 +319,8 @@ export function clampMix(input: MixSettings): MixSettings {
   const stems: Record<string, { gainDb: number; mute: boolean }> = {}
   for (const [k, x] of Object.entries(b.stems ?? {})) stems[k] = { gainDb: c(x?.gainDb ?? 0, -24, 12), mute: bool(x?.mute, false) }
   return {
+    // Mixes saved before 0.28.0 keep the sound they were made with.
+    engine: pick(m.engine, ['airwindows', 'classic'] as const, 'classic'),
     vocal: {
       gainDb: c(v.gainDb, -24, 12),
       pan: c(v.pan, -1, 1),

@@ -249,6 +249,7 @@ export function autoMix(input: AutoMixInput, current: MixSettings): AutoMixResul
   const base = chooseBase(backing, sr, bpm)
   const m = cloneMix(MIX_PRESETS[base.id].settings)
   // Kept from the student's own settings.
+  m.engine = current.engine
   m.vocal.autoLevel = cloneMix(current).vocal.autoLevel
   m.vocal.tune = cloneMix(current).vocal.tune
   m.vocal.order = [...current.vocal.order]

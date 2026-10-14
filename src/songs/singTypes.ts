@@ -40,6 +40,12 @@ export interface MultibandBand {
  * defaults by clampMix when an older saved mix lacks them.
  */
 export interface MixSettings {
+  /**
+   * Effect engine (0.28.0): 'airwindows' = 新音色 (compressors, de-esser,
+   * saturation and reverbs from Airwindows, audio/fx/airwindows), 'classic' =
+   * the Web Audio built-ins of earlier versions. The knobs are the same.
+   */
+  engine: 'airwindows' | 'classic'
   vocal: {
     gainDb: number
     pan: number

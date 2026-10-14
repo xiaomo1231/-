@@ -8,6 +8,17 @@
 import type { MixSettings } from '@/songs/singTypes'
 import { dbToGain, delayMs } from '@/songs/mixPresets'
 import { DYN_DEFAULTS, makeDynNode, type DynParams } from '@/audio/fx/mixWorklet'
+import { makeAwNode, setAw } from '@/audio/fx/airwindows/awNode'
+import type { AirwindowsName } from '@/audio/fx/airwindows/registry'
+import {
+  PARALLEL_SETTING,
+  type AwSetting,
+  compSetting,
+  deEssSetting,
+  glueSetting,
+  reverbSetting,
+  saturationSetting,
+} from '@/audio/fx/airwindows/mapping'
 
 export interface Module {
   /** Input 0 is the signal; a sidechain module has input 1 too. */
@@ -27,6 +38,8 @@ export interface Kit {
   all: AudioNode[]
   oscillators: OscillatorNode[]
   worklets: boolean
+  /** The 'groove-aw' worklet (Airwindows) is loaded in this context. */
+  airwindows: boolean
   track<T extends AudioNode>(n: T): T
   gain(v?: number): GainNode
   biquad(type: BiquadFilterType, freq: number, q?: number): BiquadFilterNode
@@ -36,9 +49,11 @@ export interface Kit {
     onReduction?: (db: number) => void,
   ): AudioWorkletNode | null
   lfo(rate: number): OscillatorNode
+  /** An Airwindows effect node; null when unavailable (the caller falls back to the 经典 sound). */
+  aw(effect: AirwindowsName, params: number[]): AudioWorkletNode | null
 }
 
-export function makeKit(ctx: BaseAudioContext, worklets: boolean): Kit {
+export function makeKit(ctx: BaseAudioContext, worklets: boolean, airwindows = false): Kit {
   const all: AudioNode[] = []
   const oscillators: OscillatorNode[] = []
   const track = <T extends AudioNode>(n: T): T => {
@@ -50,7 +65,16 @@ export function makeKit(ctx: BaseAudioContext, worklets: boolean): Kit {
     all,
     oscillators,
     worklets,
+    airwindows,
     track,
+    aw: (effect, params) => {
+      if (!airwindows) return null
+      try {
+        return track(makeAwNode(ctx, effect, params))
+      } catch {
+        return null
+      }
+    },
     gain: (v = 1) => {
       const g = track(ctx.createGain())
       g.gain.value = v
@@ -95,6 +119,39 @@ export function disposeKit(kit: Kit): void {
 }
 
 const setDyn = (n: AudioWorkletNode | null, p: DynParams) => n?.port.postMessage(p)
+
+/** Build the Airwindows variant of a module (新音色) instead of the Web Audio one. */
+export const awOn = (k: Kit, m: MixSettings) => k.airwindows && m.engine === 'airwindows'
+
+/**
+ * Airwindows insert with a bypass: input → plugin → trim → output, or the
+ * straight path when the insert is off (the trim is 0 then, the bypass 1).
+ */
+function awInsert(
+  k: Kit,
+  aw: AudioWorkletNode,
+  on: (m: MixSettings) => boolean,
+  setting: (m: MixSettings) => AwSetting,
+): Module {
+  const input = k.gain()
+  const output = k.gain()
+  const trim = k.gain(0)
+  const bypass = k.gain(1)
+  input.connect(aw).connect(trim).connect(output)
+  input.connect(bypass).connect(output)
+  return {
+    inputs: [input],
+    output,
+    update: (m) => {
+      const s = setting(m)
+      setAw(aw, s.effect, s.params)
+      const isOn = on(m)
+      trim.gain.value = isOn ? dbToGain(s.trimDb) : 0
+      bypass.gain.value = isOn ? 0 : 1
+    },
+    nodes: [input, output, aw, trim, bypass],
+  }
+}
 
 function passthrough(k: Kit): Module {
   const g = k.gain()
@@ -182,7 +239,17 @@ export function dynEqModule(k: Kit, first: MixSettings): Module {
   )
 }
 
-export function compModule(k: Kit, which: 'comp' | 'comp2' = 'comp'): Module {
+export function compModule(k: Kit, which: 'comp' | 'comp2', first: MixSettings): Module {
+  const setting = (m: MixSettings) => {
+    const c = m.vocal[which]
+    return which === 'comp' ? compSetting(c) : glueSetting(c)
+  }
+  if (awOn(k, first)) {
+    // 新音色: Airwindows Pressure4 (comp) / ButterComp2 (comp2, glue) (audio/fx/airwindows/mapping).
+    const s0 = setting(first)
+    const aw = k.aw(s0.effect, s0.params)
+    if (aw) return awInsert(k, aw, (m) => m.vocal[which].on, setting)
+  }
   const comp = k.track(k.ctx.createDynamicsCompressor())
   const makeup = k.gain()
   comp.connect(makeup)
@@ -203,12 +270,29 @@ export function compModule(k: Kit, which: 'comp' | 'comp2' = 'comp'): Module {
   }
 }
 
-export function parallelModule(k: Kit): Module {
+export function parallelModule(k: Kit, first: MixSettings): Module {
   const input = k.gain()
   const output = k.gain()
-  const crush = k.track(k.ctx.createDynamicsCompressor())
   const wet = k.gain(0)
   input.connect(output)
+  if (awOn(k, first)) {
+    // 新音色: Airwindows ButterComp2 (audio/fx/airwindows/mapping).
+    const aw = k.aw(PARALLEL_SETTING.effect, PARALLEL_SETTING.params)
+    if (aw) {
+      input.connect(aw).connect(wet).connect(output)
+      return {
+        inputs: [input],
+        output,
+        update: (m) => {
+          const p = m.vocal.parallel
+          setAw(aw, PARALLEL_SETTING.effect, PARALLEL_SETTING.params)
+          wet.gain.value = p.on ? p.blend * dbToGain(PARALLEL_SETTING.trimDb) : 0
+        },
+        nodes: [input, output, aw, wet],
+      }
+    }
+  }
+  const crush = k.track(k.ctx.createDynamicsCompressor())
   input.connect(crush).connect(wet).connect(output)
   return {
     inputs: [input],
@@ -230,6 +314,18 @@ export function parallelModule(k: Kit): Module {
 }
 
 export function deEssModule(k: Kit, first: MixSettings): Module {
+  if (awOn(k, first)) {
+    // 新音色: Airwindows DeBess (audio/fx/airwindows/mapping).
+    const s0 = deEssSetting(first.vocal.deEss)
+    const aw = k.aw(s0.effect, s0.params)
+    if (aw)
+      return awInsert(
+        k,
+        aw,
+        (m) => m.vocal.deEss.on,
+        (m) => deEssSetting(m.vocal.deEss),
+      )
+  }
   const params = (m: MixSettings) => {
     const d = m.vocal.deEss
     return dyn({
@@ -288,10 +384,34 @@ export function saturationCurve(
   return curve
 }
 
-export function saturationModule(k: Kit): Module {
+export function saturationModule(k: Kit, first: MixSettings): Module {
   const input = k.gain()
   const output = k.gain()
   const dry = k.gain(1)
+  if (awOn(k, first)) {
+    // 新音色: Airwindows ToTape6 / Tube2 / ADClip8 (audio/fx/airwindows/mapping).
+    const s0 = saturationSetting(first.vocal.saturation)
+    const aw = k.aw(s0.effect, s0.params)
+    if (aw) {
+      const trim = k.gain(1)
+      const wet = k.gain(0)
+      input.connect(dry).connect(output)
+      input.connect(aw).connect(trim).connect(wet).connect(output)
+      return {
+        inputs: [input],
+        output,
+        update: (m) => {
+          const s = m.vocal.saturation
+          const a = saturationSetting(s)
+          setAw(aw, a.effect, a.params)
+          trim.gain.value = dbToGain(a.trimDb)
+          dry.gain.value = s.on ? 1 - s.mix : 1
+          wet.gain.value = s.on ? s.mix : 0
+        },
+        nodes: [input, output, dry, aw, trim, wet],
+      }
+    }
+  }
   const drive = k.gain(1)
   const shaper = k.track(k.ctx.createWaveShaper())
   shaper.oversample = '4x'
@@ -462,23 +582,27 @@ export function reverbImpulse(
  * Reverb: `send` = the wet sound only (a send / return: the quick desk, or a
  * 发送 bus in the workspace); otherwise dry + wet at `mix` (an insert).
  */
-export function reverbModule(k: Kit, send: () => boolean): Module {
+export function reverbModule(k: Kit, send: () => boolean, first: MixSettings): Module {
   const input = k.gain()
   const output = k.gain()
   const dry = k.gain(0)
   const wetIn = k.gain(0)
   const preDelay = k.track(k.ctx.createDelay(0.5))
-  const convolver = k.track(k.ctx.createConvolver())
+  // 新音色: an Airwindows reverb (kPlateD / Verbity2 / Galactic3) replaces the convolver (audio/fx/airwindows/mapping).
+  const s0 = awOn(k, first) ? reverbSetting(first.vocal.reverb) : null
+  const aw = s0 ? k.aw(s0.effect, s0.params) : null
+  const trim = aw ? k.gain(1) : null
+  const convolver = aw ? null : k.track(k.ctx.createConvolver())
   const revLow = k.biquad('highpass', 200)
   const revHigh = k.biquad('lowpass', 8000)
   input.connect(dry).connect(output)
-  input
-    .connect(wetIn)
-    .connect(preDelay)
-    .connect(convolver)
-    .connect(revLow)
-    .connect(revHigh)
-    .connect(output)
+  input.connect(wetIn).connect(preDelay)
+  if (aw && trim) {
+    preDelay.connect(aw).connect(trim).connect(revLow)
+  } else {
+    preDelay.connect(convolver!).connect(revLow)
+  }
+  revLow.connect(revHigh).connect(output)
   let irKey = ''
   return {
     inputs: [input],
@@ -491,13 +615,28 @@ export function reverbModule(k: Kit, send: () => boolean): Module {
       preDelay.delayTime.value = r.preDelayMs / 1000
       revLow.frequency.value = r.lowCut
       revHigh.frequency.value = r.highCut
+      if (aw && trim) {
+        const a = reverbSetting(r)
+        setAw(aw, a.effect, a.params)
+        trim.gain.value = dbToGain(a.trimDb)
+        return
+      }
       const key = `${r.type}|${r.size.toFixed(2)}|${r.decay.toFixed(2)}`
-      if (key !== irKey) {
+      if (convolver && key !== irKey) {
         convolver.buffer = reverbImpulse(k.ctx, r.size, r.decay, r.type)
         irKey = key
       }
     },
-    nodes: [input, output, dry, wetIn, preDelay, convolver, revLow, revHigh],
+    nodes: [
+      input,
+      output,
+      dry,
+      wetIn,
+      preDelay,
+      ...(convolver ? [convolver] : [aw!, trim!]),
+      revLow,
+      revHigh,
+    ],
   }
 }
 

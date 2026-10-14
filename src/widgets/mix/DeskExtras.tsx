@@ -487,7 +487,7 @@ export function UserPresets({ mix, onMix }: { mix: MixSettings; onMix: (m: MixSe
       <div className="flex flex-wrap gap-2">
         {rows.map((r) => (
           <span key={r.id} className="inline-flex items-center gap-1 rounded-full border border-border/80 pl-3 text-sm">
-            <button type="button" className="focus-ring" onClick={() => onMix(JSON.parse(JSON.stringify(r.mix)) as MixSettings)}>
+            <button type="button" className="focus-ring" onClick={() => onMix({ ...(JSON.parse(JSON.stringify(r.mix)) as MixSettings), engine: mix.engine })}>
               {r.name}
             </button>
             <button type="button" className="focus-ring rounded-full p-1.5 text-muted-foreground hover:text-destructive" onClick={() => void MixCourseService.removePreset(r.id).then(() => setRows((x) => x.filter((y) => y.id !== r.id)))} aria-label={`删除预设 ${r.name}`}>

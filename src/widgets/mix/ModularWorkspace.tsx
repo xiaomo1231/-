@@ -42,10 +42,27 @@ import {
 import { toast } from '@/features/toast/toastStore'
 import { Button } from '@/shared/ui/Button'
 import { cn } from '@/shared/lib/utils'
-import { Controls, LoudnessTarget, StemLevels } from './DeskExtras'
+import { ControlField } from '@/widgets/mixing/ControlField'
+import { LoudnessTarget, StemLevels } from './DeskExtras'
 import type { MixPlayer } from './mixPlayer'
 
 const DRAG_TYPE = 'application/x-groovelab-module'
+
+/** Knobs the 新音色 engine ignores (see audio/fx/airwindows/mapping.ts), with the note shown under them. */
+const AIRWINDOWS_IGNORED: Partial<Record<ModuleType, { paths: string[]; note: string }>> = {
+  comp: {
+    paths: ['vocal.comp.attackMs'],
+    note: '新音色的压缩器会按音乐自动决定起音，「起音」只在经典音色下起作用。',
+  },
+  parallel: {
+    paths: ['vocal.parallel.thresholdDb', 'vocal.parallel.ratio'],
+    note: '新音色用固定的强压缩做并行，「阈值」「比例」只在经典音色下起作用；混合比例照常。',
+  },
+  deEss: {
+    paths: ['vocal.deEss.thresholdDb'],
+    note: '新音色的齿音消除会自己找齿音，「阈值」只在经典音色下起作用。',
+  },
+}
 
 const CATEGORY_COLOR: Record<ModuleCategory, string> = {
   source: 'hsl(var(--cyan))',
@@ -550,6 +567,9 @@ function Inspector({
   const view = info.shared ? mix : mixFor(mix, node)
   const setView = (m: MixSettings) =>
     info.shared ? onMix(m) : onChange({ params: paramsFrom(node.type, m) })
+  // 新音色 ignores these (mapping.ts): still editable, drawn fainter, with a note. A 'comp' node may be
+  // the 第二级压缩 too, which also ignores its release; that case is not told apart here.
+  const aw = mix.engine === 'airwindows' ? AIRWINDOWS_IGNORED[node.type] : undefined
   return (
     <div className="space-y-3">
       <div className="flex items-center gap-2">
@@ -598,8 +618,15 @@ function Inspector({
         </label>
       )}
       {info.controls.length > 0 && (
-        <Controls paths={info.controls} mix={view} onMix={setView} cols={1} />
+        <div className="grid gap-4">
+          {info.controls.map((p) => (
+            <div key={p} className={aw?.paths.includes(p) ? 'opacity-60' : undefined}>
+              <ControlField path={p} mix={view} onChange={setView} />
+            </div>
+          ))}
+        </div>
       )}
+      {aw && <p className="text-xs text-muted-foreground">{aw.note}</p>}
       {node.type === 'backing' && <StemLevels names={backingNames} mix={mix} onMix={onMix} />}
       {node.type === 'output' && <LoudnessTarget mix={view} onMix={setView} />}
       {node.type === 'mixer' && (
