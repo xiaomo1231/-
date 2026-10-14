@@ -235,8 +235,9 @@ export function FullVersionTab({
 
   const missing = useMemo(
     () => phrases.filter((p) => pickFor(p.index) === null).length,
+    // eslint-disable-next-line react-hooks/exhaustive-deps
     [phrases, plan, takes],
-  ) // eslint-disable-line react-hooks/exhaustive-deps
+  )
 
   return (
     <div className="space-y-6">
