@@ -46,6 +46,8 @@ export interface StudentProfile {
   /** Microphone for singing (0.26.2); the instrument input stays audioInputId. */
   audioVoiceInputId?: string
   audioVoiceInputLabel?: string
+  /** Extra gain for the singing microphone, dB 0–30 (0.26.3). */
+  micGainDb?: number
   audioInputLabel?: string
   audioOutputId?: string
   audioOutputLabel?: string

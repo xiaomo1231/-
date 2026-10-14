@@ -46,6 +46,8 @@ class InputManager {
   private preferredInput: string | undefined
   /** The microphone chosen for singing (Settings → 音频设备). */
   private preferredVoice: string | undefined
+  /** Extra gain for the singing microphone, dB (quiet interfaces). */
+  private voiceGainDb = 0
   private preferredOutput: string | undefined
   private opening: Promise<void> | null = null
   /** The app's sound card driver feeding the bus instead of the browser stream (ASIO monitoring). */
@@ -71,8 +73,16 @@ class InputManager {
   }
 
   /** Saved choices from the profile. Re-opens the input if a holder is active. */
-  async setPreferences(prefs: { inputId?: string; voiceInputId?: string; outputId?: string }): Promise<void> {
-    const inputChanged = prefs.inputId !== this.preferredInput || prefs.voiceInputId !== this.preferredVoice
+  async setPreferences(prefs: {
+    inputId?: string
+    voiceInputId?: string
+    outputId?: string
+    micGainDb?: number
+  }): Promise<void> {
+    this.voiceGainDb = Math.max(0, Math.min(30, prefs.micGainDb ?? 0))
+    this.applyGain()
+    const inputChanged =
+      prefs.inputId !== this.preferredInput || prefs.voiceInputId !== this.preferredVoice
     this.preferredInput = prefs.inputId
     this.preferredVoice = prefs.voiceInputId
     this.preferredOutput = prefs.outputId
@@ -141,6 +151,7 @@ class InputManager {
       this.closeStream()
       this.external = node
       node.connect(this.bus)
+      this.applyGain()
       this.info = {
         deviceId: undefined,
         label: label || this.info?.label || '声卡',
@@ -187,6 +198,13 @@ class InputManager {
   }
 
   /** Instrument use wins: a guitar lesson and the tuner both need the cable. */
+  /** The singing microphone's gain on the bus (instruments get none). */
+  private applyGain(): void {
+    if (!this.busNode) return
+    const voice = this.wantedPurpose() !== 'instrument'
+    this.busNode.gain.value = voice ? 10 ** (this.voiceGainDb / 20) : 1
+  }
+
   private wantedPurpose(): InputPurpose | null {
     if (this.holders.size === 0) return null
     return [...this.holders.values()].includes('instrument') ? 'instrument' : 'voice'
@@ -252,6 +270,7 @@ class InputManager {
     const ctx = rawContext()
     this.source = ctx.createMediaStreamSource(stream)
     this.source.connect(this.bus)
+    this.applyGain()
     const track = stream.getAudioTracks()[0]
     const settings = (track?.getSettings() ?? {}) as MediaTrackSettings & { latency?: number }
     const label = track?.label ?? ''

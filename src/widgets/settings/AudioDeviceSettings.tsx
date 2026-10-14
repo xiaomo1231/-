@@ -97,6 +97,25 @@ export function AudioDeviceSettings() {
               这是内录通道，录的是电脑播放的声音，不是你的麦克风。
             </p>
           )}
+          <label className="flex items-center gap-2 text-sm">
+            <span className="shrink-0">麦克风增益</span>
+            <input
+              type="range"
+              min={0}
+              max={30}
+              step={1}
+              value={profile?.micGainDb ?? 0}
+              onChange={(e) =>
+                void ProfileService.update({ micGainDb: Number(e.target.value) }).then(setProfile)
+              }
+              className="min-w-0 flex-1 accent-[hsl(var(--amber))]"
+              aria-label="麦克风增益"
+            />
+            <span className="num w-14 text-right">+{profile?.micGainDb ?? 0} dB</span>
+          </label>
+          <p className="text-xs text-muted-foreground">
+            声卡输入旋钮开得小、唱歌时电平条只到一半以下时，可以在这里放大（录音也会一起变大）。优先调声卡上的旋钮，音质更好。
+          </p>
         </div>
 
         <div className="space-y-2">
@@ -195,6 +214,11 @@ function MicTest() {
 
   const db = mic.frame && mic.frame.rms > 1e-6 ? 20 * Math.log10(mic.frame.rms) : -120
   const pct = Math.max(0, Math.min(100, ((db + 70) / 70) * 100))
+  // Loudest level of the last few seconds (what singing reaches), falling back slowly.
+  const [loudest, setLoudest] = useState(-120)
+  useEffect(() => {
+    setLoudest((l) => (db > l ? db : Math.max(-120, l - 0.05)))
+  }, [db])
 
   const recordTest = async () => {
     setResult(null)
@@ -274,6 +298,17 @@ function MicTest() {
         </Button>
         {result && <span className="text-xs text-muted-foreground">{result}</span>}
       </div>
+      <p className="num text-xs text-muted-foreground">
+        现在 {db > -119 ? `${Math.round(db)} dB` : '无声'}
+        {loudest > -119 ? `，刚才唱得最响 ${Math.round(loudest)} dB` : ''}
+        {loudest > -119 && loudest < -30
+          ? '：偏小，把声卡输入旋钮调大，或者调高上面的「麦克风增益」。'
+          : loudest >= -30 && loudest < -3
+            ? '：合适。'
+            : loudest >= -3
+              ? '：太大，可能破音，调小一点。'
+              : ''}
+      </p>
     </div>
   )
 }

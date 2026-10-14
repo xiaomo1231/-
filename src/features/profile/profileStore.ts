@@ -7,7 +7,7 @@ import { setTimbre, trainingTimbre } from '@/audio/engine'
 import { inputManager } from '@/audio/input/inputManager'
 
 function applyDevices(p: StudentProfile) {
-  void inputManager.setPreferences({ ...(p.audioInputId ? { inputId: p.audioInputId } : {}), ...(p.audioVoiceInputId ? { voiceInputId: p.audioVoiceInputId } : {}), ...(p.audioOutputId ? { outputId: p.audioOutputId } : {}) })
+  void inputManager.setPreferences({ ...(p.audioInputId ? { inputId: p.audioInputId } : {}), ...(p.audioVoiceInputId ? { voiceInputId: p.audioVoiceInputId } : {}), ...(p.audioOutputId ? { outputId: p.audioOutputId } : {}), micGainDb: p.micGainDb ?? 0 })
 }
 
 interface ProfileStore {

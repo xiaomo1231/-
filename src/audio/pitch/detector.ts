@@ -32,7 +32,10 @@ export const PRESETS: Record<DetectorPreset, PresetConfig> = {
   piano: { minFreq: 50, maxFreq: 2100, fftSize: 4096, threshold: 0.15, minClarity: 0.75 },
 }
 
-/** Below this RMS the input is treated as silence (noise gate). */
+/** SwiftF0 (voice): below this sample peak the input is silence. */
+const SWIFT_MIN_PEAK = 0.002
+
+/** Below this RMS the input is treated as silence (noise gate, YIN). */
 export const DEFAULT_GATE = 0.012
 
 export { MicError }
@@ -126,11 +129,16 @@ export class PitchDetector {
     for (let i = 0; i < this.buf.length; i++) peak = Math.max(peak, Math.abs(this.buf[i]!))
     const t = Tone.getContext().rawContext.currentTime
     let frame: PitchFrame
-    if (level < this.gate) {
+    if (this.useSwift()) {
+      // The model judges voicing itself, at any level: a fixed loudness gate
+      // shut out quiet microphones entirely. Only real silence is skipped.
+      if (peak < SWIFT_MIN_PEAK) frame = { t, hz: null, clarity: 0, rms: level, peak }
+      else {
+        this.tickSwift(t, level, peak)
+        return
+      }
+    } else if (level < this.gate) {
       frame = { t, hz: null, clarity: 0, rms: level, peak }
-    } else if (this.useSwift()) {
-      this.tickSwift(t, level, peak)
-      return
     } else {
       const r = yin(this.buf, {
         sampleRate: this.analyser.context.sampleRate,

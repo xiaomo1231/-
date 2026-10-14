@@ -115,7 +115,8 @@ export function PitchLane({
           g.moveTo(0, y(m))
           g.lineTo(w, y(m))
           g.stroke()
-          const text = `${word} ${NAMES[((m % 12) + 12) % 12]}${Math.floor(m / 12) - 1}`
+          const r = Math.round(m)
+          const text = `${word} ${NAMES[((r % 12) + 12) % 12]}${Math.floor(r / 12) - 1}`
           g.fillText(
             text,
             w - g.measureText(text).width - 6,

@@ -227,6 +227,8 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // Pitch detection and recording keep full speed when the window is behind another one.
+      backgroundThrottling: false,
     },
   })
   // Links to other sites open in the normal browser.
