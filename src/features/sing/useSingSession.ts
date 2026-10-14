@@ -304,7 +304,7 @@ export function useSingSession(source: SingSource) {
   const restoreDraft = useCallback(async (id: string) => afterReset(await SingService.restoreDraft(source.key, id)), [source.key, afterReset])
   const deleteDraft = useCallback(async (id: string) => setMetaState(await SingService.deleteDraft(source.key, id)), [source.key])
 
-  const updateTake = useCallback(async (t: SessionTake, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs'>>) => {
+  const updateTake = useCallback(async (t: SessionTake, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs' | 'alignAuto'>>) => {
     await SingService.updateTake(t.id, patch)
     setAllTakes((all) => all.map((x) => (x.id === t.id ? { ...x, ...patch } : x)))
   }, [])

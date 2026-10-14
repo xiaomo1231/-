@@ -15,6 +15,8 @@ import { uuid } from '@/infrastructure/crypto/crypto'
 import { lyricsInPhrase as lyricOf } from '@/songs/phrasing'
 import { LyricsDisplay } from './LyricsDisplay'
 import { NativeMonitorControls } from './NativeMonitorControls'
+import { ProfileService } from '@/services/profileService'
+import { useProfileStore } from '@/features/profile/profileStore'
 
 interface LaneView {
   /** Semitones shown above the highest and below the lowest note. */
@@ -31,6 +33,8 @@ function loadLaneView(): LaneView {
     return { pad: 2, height: 'tall' }
   }
 }
+/** The lag scoring found, used to line the take up (not for takes nudged by hand before 0.24.0). */
+const autoLag = (t: { score: { lagMs: number } | null; nudgeMs?: number; alignAuto?: boolean }) => (t.nudgeMs === undefined || t.alignAuto ? (t.score?.lagMs ?? 0) : 0)
 const NOTE_NAMES = ['C', 'C#', 'D', 'D#', 'E', 'F', 'F#', 'G', 'G#', 'A', 'A#', 'B']
 const midiName = (m: number) => {
   const r = Math.round(m)
@@ -223,6 +227,11 @@ export function PracticeTab() {
       }
       return next
     })
+  const refreshProfile = useProfileStore((p) => p.refresh)
+  const setDeviceLatency = async (ms: number) => {
+    await ProfileService.setLatency(ms)
+    await refreshProfile()
+  }
   const extremes = useMemo(() => {
     const ms = notes.map((n) => n.midi).filter((m) => Number.isFinite(m))
     return ms.length ? { low: Math.min(...ms), high: Math.max(...ms) } : null
@@ -377,7 +386,8 @@ export function PracticeTab() {
       if (!live() || !buf) return
       const speed = take.speed ?? 1
       // Song time at the first sample of the recording.
-      const takeStart = (take.audioStartMs ?? phrase.startMs - 300) + (take.nudgeMs ?? 0)
+      // Lined up with the singer automatically (the lag scoring found: earphones / device delay), plus the student's own nudge.
+      const takeStart = (take.audioStartMs ?? phrase.startMs - 300) - autoLag(take) + (take.nudgeMs ?? 0)
       const takeAlone = async () => {
         stage('take')
         const when = audioNow() + 0.03
@@ -540,12 +550,28 @@ export function PracticeTab() {
         </p>
       )}
       {s.lagNotice !== null && (
-        <p className="rounded-xl border border-amber/40 bg-amber-soft/20 px-3 py-2 text-sm">
-          最近几句你可能都比原唱{s.lagNotice > 0 ? '晚' : '早'}约 {Math.abs(s.lagNotice)} 毫秒。评分已经按这个差来比较音高；如果是设备延迟，可以到「设置 → 延迟校准」校准一次。
-        </p>
+        <div className="flex flex-wrap items-center gap-2 rounded-xl border border-amber/40 bg-amber-soft/20 px-3 py-2 text-sm">
+          <span className="min-w-0 flex-1">
+            最近几句你可能都比原唱{s.lagNotice > 0 ? '晚' : '早'}约 {Math.abs(s.lagNotice)} 毫秒。评分已经按这个差来比较音高。如果每句都差不多，多半是耳机或设备的延迟（无线耳机常见 150–250 毫秒）。
+          </span>
+          {s.lagNotice > 0 && s.latencyMs + s.lagNotice <= 400 && (
+            <Button size="sm" variant="outline" onClick={() => void setDeviceLatency(s.latencyMs + s.lagNotice!)}>
+              补偿这 {s.lagNotice} 毫秒（设备延迟改为 {s.latencyMs + s.lagNotice} 毫秒）
+            </Button>
+          )}
+        </div>
       )}
 
       <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+        <span title="耳机、声卡、蓝牙带来的总延迟。录音和评分会往前挪这么多；无线耳机一般 150–250 毫秒，有线耳机一般 0–40 毫秒">设备延迟</span>
+        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={s.latencyMs <= 0} onClick={() => void setDeviceLatency(s.latencyMs - 10)} aria-label="设备延迟减 10 毫秒">
+          −
+        </button>
+        <span className="num w-14 text-center">{s.latencyMs} 毫秒</span>
+        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={s.latencyMs >= 400} onClick={() => void setDeviceLatency(s.latencyMs + 10)} aria-label="设备延迟加 10 毫秒">
+          ＋
+        </button>
+        <span className="mr-3" />
         {extremes && (
           <span>
             整首音域 {midiName(extremes.low)}–{midiName(extremes.high)}（{Math.round(extremes.high - extremes.low)} 个半音）
@@ -681,12 +707,12 @@ export function PracticeTab() {
                 {take.kept ? <PinOff /> : <Pin />} {take.kept ? '取消保留' : '保留这一次'}
               </Button>
               <span className="flex items-center gap-1 text-xs text-muted-foreground">
-                对齐
-                <Button size="sm" variant="ghost" onClick={() => void s.updateTake(take, { nudgeMs: (take.nudgeMs ?? 0) - 10 })} aria-label="提前 10 毫秒">
+                {autoLag(take) ? `已自动对齐 ${autoLag(take) > 0 ? '−' : '+'}${Math.abs(Math.round(autoLag(take)))} ms，再微调` : '对齐'}
+                <Button size="sm" variant="ghost" onClick={() => void s.updateTake(take, { nudgeMs: (take.nudgeMs ?? 0) - 10, alignAuto: take.alignAuto ?? take.nudgeMs === undefined })} aria-label="提前 10 毫秒">
                   −10
                 </Button>
                 <span className="num">{take.nudgeMs ?? 0} ms</span>
-                <Button size="sm" variant="ghost" onClick={() => void s.updateTake(take, { nudgeMs: (take.nudgeMs ?? 0) + 10 })} aria-label="推后 10 毫秒">
+                <Button size="sm" variant="ghost" onClick={() => void s.updateTake(take, { nudgeMs: (take.nudgeMs ?? 0) + 10, alignAuto: take.alignAuto ?? take.nudgeMs === undefined })} aria-label="推后 10 毫秒">
                   +10
                 </Button>
               </span>

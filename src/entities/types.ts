@@ -443,6 +443,11 @@ export interface SingTake {
   audioStartMs?: number
   /** Extra nudge applied when playing / mixing, ms. */
   nudgeMs?: number
+  /**
+   * Playback is lined up by the lag scoring found (0.24.0). True for takes whose
+   * nudge was set on top of that; takes nudged by hand before 0.24.0 keep their nudge only.
+   */
+  alignAuto?: boolean
   /** The phrase's stretch when it was sung (takes follow it when the phrase cuts change). */
   fromMs?: number
   toMs?: number

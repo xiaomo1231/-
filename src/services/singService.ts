@@ -293,7 +293,7 @@ export const SingService = {
     return out
   },
 
-  async updateTake(id: string, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs'>>): Promise<void> {
+  async updateTake(id: string, patch: Partial<Pick<SingTake, 'kept' | 'nudgeMs' | 'alignAuto'>>): Promise<void> {
     const db = getDb()
     const t = await db.singTakes.get(id)
     if (t) await db.singTakes.put({ ...t, ...patch })
