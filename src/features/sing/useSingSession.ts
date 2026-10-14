@@ -6,6 +6,7 @@ import { SingService, type SingSource } from '@/services/singService'
 import { BackingService } from '@/services/backingService'
 import { StemPlayer } from '@/audio/backing/stemPlayer'
 import { loadPitchCurve } from '@/audio/backing/pitchCurve'
+import { analyzeTake } from '@/audio/pitch/referenceCurve'
 import { detector } from '@/audio/pitch/detector'
 import { rawTime } from '@/audio/engine'
 import { SongClock, VoiceRecorder, encodeTake } from '@/audio/sing/voiceRecorder'
@@ -184,7 +185,15 @@ export function useSingSession(source: SingSource) {
       const p = player.current
       if (!p?.isPlaying || previewing.current || !f.hz || f.clarity < 0.8) return
       const ageMs = (rawTime() - f.t) * 1000
-      samples.current.push({ ms: p.positionMs() - ageMs - latencyMs * speed, midi: hzToMidi(f.hz) })
+      const ms = p.positionMs() - ageMs - latencyMs * speed
+      let midi = hzToMidi(f.hz)
+      // A single frame an octave off the one just before (a detector slip, not a leap): bring it back.
+      const last = samples.current[samples.current.length - 1]
+      if (last && ms - last.ms < 120 && Math.abs(midi - last.midi) > 9) {
+        const octaves = Math.round((midi - last.midi) / 12)
+        if (Math.abs(midi - 12 * octaves - last.midi) < 1.5) midi -= 12 * octaves
+      }
+      samples.current.push({ ms, midi })
       if (samples.current.length > 80000) samples.current.splice(0, 20000)
     })
   }, [mic, latencyMs, speed])
@@ -279,12 +288,20 @@ export function useSingSession(source: SingSource) {
   const finishPhrase = useCallback(
     async (p: Phrase): Promise<SessionTake | null> => {
       // Only the latest pass over this phrase (singing it again appends a second run of samples).
-      const window = latestPass(
+      const live = latestPass(
         samples.current.filter((s) => s.ms >= p.startMs - PAD_MS && s.ms <= p.endMs + PAD_MS),
       )
-      const detail = scoreNotes(notes, p, window)
-      if (!window.length) return null
+      if (!live.length) return null
       const cut = cutRecording(p.startMs - PAD_MS, p.endMs + PAD_MS)
+      // The recording analysed again with RMVPE (app): steadier than the live line; else the live line.
+      const again = cut
+        ? await analyzeTake(cut.samples, cut.sampleRate, cut.startMs, speed).catch(() => null)
+        : null
+      const window =
+        again && again.length >= live.length * 0.3
+          ? again.filter((s) => s.ms >= p.startMs - PAD_MS && s.ms <= p.endMs + PAD_MS)
+          : live
+      const detail = scoreNotes(notes, p, window)
       const audio = cut ? encodeTake(cut.samples, cut.sampleRate) : null
       const take: SessionTake = {
         id: uuid(),

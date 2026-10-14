@@ -8,6 +8,14 @@ import { desktop } from '@/app/desktop'
  * mono; RMVPE / SwiftF0 / YIN, see audio/pitch/referenceCurve) and cached in IndexedDB.
  * A line made without RMVPE is made again once the app can use RMVPE.
  */
+/** How the cached line of a vocals stem was made, and its version (for the admin view). */
+export async function pitchCurveInfo(
+  fileId: string,
+): Promise<{ method: string; version: number } | null> {
+  const row = await getDb().pitchCurves.get(fileId)
+  return row ? { method: row.method ?? 'yin', version: row.version } : null
+}
+
 export async function loadPitchCurve(
   fileId: string,
   onProgress?: (done: number) => void,

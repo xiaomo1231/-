@@ -16,6 +16,8 @@ import { lyricsInPhrase as lyricOf } from '@/songs/phrasing'
 import { LyricsDisplay } from './LyricsDisplay'
 import { NativeMonitorControls } from './NativeMonitorControls'
 import { MicName } from './MicName'
+import { CurveDebug } from './CurveDebug'
+import { isAdmin } from '@/services/adminMode'
 import { ProfileService } from '@/services/profileService'
 import { useProfileStore } from '@/features/profile/profileStore'
 
@@ -229,6 +231,7 @@ export function PracticeTab() {
       return next
     })
   const refreshProfile = useProfileStore((p) => p.refresh)
+  const admin = isAdmin(useProfileStore((p) => p.profile))
   const setDeviceLatency = async (ms: number) => {
     await ProfileService.setSingLatency(ms)
     await refreshProfile()
@@ -607,6 +610,7 @@ export function PracticeTab() {
         ))}
       </div>
       <PitchLane curve={curve} notes={notes} positionMs={positionMs} sung={getSung} overlay={getOverlay} shift={shift} low={range.low} high={range.high} extremes={extremes} heightClass={LANE_HEIGHT[laneView.height]} />
+      {admin && s.source.stems.some((x) => x.stem === 'vocals') && <CurveDebug fileId={s.source.stems.find((x) => x.stem === 'vocals')!.fileId} curve={curve} notes={notes} />}
       {lyrics.length > 0 && <LyricsDisplay lines={lyrics} positionMs={positionMs} {...((loop || preview) && phrase ? { lockLine: lyrics.findIndex((l) => l.startMs >= phrase.startMs - 500 && l.startMs <= phrase.endMs) } : {})} />}
       <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
         <Headphones className="h-3.5 w-3.5" /> 请戴耳机唱，否则伴奏会被录进去。灰色横条是原唱的音（颤音、滑音已经去掉，不打分），彩色是你，淡蓝是你选中的那一次。任何舒服的八度都可以。
