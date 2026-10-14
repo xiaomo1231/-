@@ -1,3 +1,4 @@
+import { desktop } from '@/app/desktop'
 import { useEffect, useRef, useState } from 'react'
 import { AlertTriangle, Cpu, Loader2, Monitor, Scissors, Square, Zap } from 'lucide-react'
 import {
@@ -45,6 +46,7 @@ export function SeparateDialog({
   const [helper, setHelper] = useState<HelperStatus | null | undefined>(undefined)
   const [cached, setCached] = useState(false)
   const [engine, setEngine] = useState<Engine>('browser')
+  const inApp = desktop() !== null
   const [progress, setProgress] = useState<SeparationProgress | null>(null)
   const [error, setError] = useState<string | null>(null)
   const abort = useRef<AbortController | null>(null)
@@ -69,12 +71,18 @@ export function SeparateDialog({
     setError(null)
     setStopped(false)
     setHelper(undefined)
+    // The app separates vocals on the graphics card by itself: no helper to look for.
+    if (inApp && mode === 'vocals') {
+      setHelper(null)
+      setEngine('browser')
+      return
+    }
     void helperStatus().then((h) => {
       setHelper(h)
       setEngine(h ? 'local' : 'browser')
     })
     void browserModelCached().then(setCached)
-  }, [file])
+  }, [file, inApp, mode])
 
   const start = async () => {
     if (!file) return
@@ -134,7 +142,19 @@ export function SeparateDialog({
           </DialogDescription>
         </DialogHeader>
 
-        {!running && (
+        {!running && inApp && mode === 'vocals' && (
+          <div className="space-y-2" role="radiogroup" aria-label="分轨方式">
+            <EngineOption
+              on
+              onPick={() => setEngine('browser')}
+              icon={<Zap className="h-4 w-4" />}
+              title="应用加速（显卡）"
+              text="应用自带人声模型，用显卡计算（N 卡、A 卡、Intel 核显都可以），一首歌通常十几秒；显卡用不了时自动改用处理器。不需要安装本机助手。"
+            />
+          </div>
+        )}
+
+        {!running && !(inApp && mode === 'vocals') && (
           <div className="space-y-2" role="radiogroup" aria-label="分轨方式">
             <EngineOption
               on={engine === 'local'}

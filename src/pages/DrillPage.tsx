@@ -139,7 +139,7 @@ function DrillSession({ moduleId, params }: { moduleId: ModuleId; params: URLSea
         </Link>
         <div className="rounded-3xl border border-border/80 bg-card/80 p-8 shadow-lift">
           <h1 className="text-2xl font-semibold">先测一下你的舒适音域</h1>
-          <p className="mt-2 mb-6 text-muted-foreground">只需要一次。之后所有唱歌练习都会放在你唱得舒服的范围里。请允许浏览器使用麦克风，建议戴耳机。</p>
+          <p className="mt-2 mb-6 text-muted-foreground">只需要一次。之后所有唱歌练习都会放在你唱得舒服的范围里。请允许使用麦克风，建议戴耳机。</p>
           <RangeCalibration
             onSave={async (range) => {
               const next = await ProfileService.update({ vocalRange: range })

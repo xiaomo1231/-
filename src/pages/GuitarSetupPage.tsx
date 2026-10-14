@@ -77,7 +77,7 @@ export function GuitarSetupPage() {
             <RefreshCw /> 刷新设备
           </Button>
         </div>
-        {!labelled && <p className="mt-3 text-sm text-muted-foreground">浏览器还没给出设备名称。允许“麦克风”权限后会显示所有输入设备。</p>}
+        {!labelled && <p className="mt-3 text-sm text-muted-foreground">还没有读到设备名称。允许使用麦克风后会显示所有输入设备。</p>}
         {mic.error && (
           <p role="alert" className="mt-3 text-sm text-destructive">
             {mic.error}

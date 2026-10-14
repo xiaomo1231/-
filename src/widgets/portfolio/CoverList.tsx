@@ -63,7 +63,7 @@ export function CoverList({ covers, onChanged }: { covers: CoverWork[]; onChange
         <DialogContent>
           <DialogHeader>
             <DialogTitle>删除翻唱「{deleting?.title}」？</DialogTitle>
-            <DialogDescription>删除后无法恢复，录音只保存在这个浏览器里。</DialogDescription>
+            <DialogDescription>删除后无法恢复，录音只保存在这台电脑上。</DialogDescription>
           </DialogHeader>
           <DialogFooter>
             <Button variant="ghost" onClick={() => setDeleting(null)}>

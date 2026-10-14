@@ -71,7 +71,7 @@ export function LibraryPage() {
       toast({ title: '文件名已经是这个样子了', variant: 'info' })
       return
     }
-    if (!window.confirm(`把硬盘上的文件改名？\n\n${s.fileName}\n→ ${name}\n\n浏览器会再问一次是否允许修改这个文件夹。`)) return
+    if (!window.confirm(`把硬盘上的文件改名？\n\n${s.fileName}\n→ ${name}`)) return
     try {
       const next = await LibraryService.renameOnDisk(s)
       lib.replaceSong(s.id, next)
@@ -152,7 +152,7 @@ export function LibraryPage() {
             )
           })}
           {Object.values(lib.access).some((a) => a !== 'granted') && (
-            <p className="text-xs text-muted-foreground">浏览器每次重新打开后，需要点一下「允许访问」才能读文件夹，这是浏览器的规定。</p>
+            <p className="text-xs text-muted-foreground">显示「允许访问」时点一下，就能继续读取这个文件夹。</p>
           )}
           {!lib.folders.some((f) => f.kind === 'lyrics') && (
             <p className="text-xs text-muted-foreground">
@@ -165,7 +165,7 @@ export function LibraryPage() {
       {supported && lib.loaded && lib.folders.length === 0 && (
         <section className="rounded-3xl border border-dashed border-border/80 p-8 text-center">
           <FolderOpen className="mx-auto h-10 w-10 text-muted-foreground" aria-hidden />
-          <p className="mt-3 text-sm text-muted-foreground">选一个放歌的文件夹（比如浏览器的下载文件夹）。以后放进这个文件夹的歌会自动出现在这里。</p>
+          <p className="mt-3 text-sm text-muted-foreground">选一个放歌的文件夹（比如下载歌曲的文件夹）。以后放进这个文件夹的歌会自动出现在这里。</p>
         </section>
       )}
 

@@ -315,7 +315,7 @@ export function SettingsPage() {
             <Trash2 /> 清空全部数据
           </Button>
         </div>
-        <p className="mt-3 text-xs text-muted-foreground">所有数据只存在这台电脑的浏览器里。换浏览器或清除站点数据前，请先导出备份。「导出练习数据」包含练习记录、课程进度、作品和版本历史；「完整备份」另外包含导入的谱子、原曲和分轨、跟唱歌曲、录音和翻唱作品，用来搬到应用版或另一台电脑（歌曲库文件夹需要重新添加）。都不包含 API 密钥。</p>
+        <p className="mt-3 text-xs text-muted-foreground">所有数据只存在这台电脑上。换电脑或重装前，请先导出备份。「导出练习数据」包含练习记录、课程进度、作品和版本历史；「完整备份」另外包含导入的谱子、原曲和分轨、跟唱歌曲、录音和翻唱作品，用来搬到应用版或另一台电脑（歌曲库文件夹需要重新添加）。都不包含 API 密钥。</p>
       </Section>
 
       <Dialog open={pendingImport !== null} onOpenChange={(o) => !o && setPendingImport(null)}>

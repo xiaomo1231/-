@@ -189,7 +189,7 @@ export function TuneControls({ mix, onMix, hasReference = false, stats }: { mix:
           {stats.skipped > 0 ? `；${Math.round((stats.skipped / stats.frames) * 100)}% 没动（${t.scale === 'reference' ? '原唱没有音或离得太远' : '离目标太远'}）` : ''}
         </p>
       )}
-      <p className="text-xs text-muted-foreground">实验功能：在浏览器里离线处理，长歌需要几秒。力度别太大、速度别太快，否则会有明显的"电音"感；它只能把音拉近，不能代替把歌唱准。</p>
+      <p className="text-xs text-muted-foreground">实验功能：在这台电脑上离线处理，长歌需要几秒。力度别太大、速度别太快，否则会有明显的"电音"感；它只能把音拉近，不能代替把歌唱准。</p>
     </div>
   )
 }

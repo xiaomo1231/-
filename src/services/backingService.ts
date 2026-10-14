@@ -37,7 +37,7 @@ export const BackingService = {
     const total = audio.reduce((s, f) => s + f.size, 0)
     const free = await freeBytes()
     if (free !== null && free < total * 1.2) {
-      throw new BackingError(`浏览器存储空间不够：需要约 ${Math.ceil(total / 1048576)} MB，剩余约 ${Math.floor(free / 1048576)} MB。可以只导入要用的几轨，或先删掉不用的谱子音频。`)
+      throw new BackingError(`存储空间不够：需要约 ${Math.ceil(total / 1048576)} MB，剩余约 ${Math.floor(free / 1048576)} MB。可以只导入要用的几轨，或先删掉不用的谱子音频。`)
     }
     const now = Date.now()
     const rows: AudioFile[] = audio.map((f) => ({ id: uuid(), sheetId, stem: stemOverride ?? detectStem(f.name), name: f.name, size: f.size, type: f.type || 'audio/mpeg', blob: f, createdAt: now }))
@@ -54,7 +54,7 @@ export const BackingService = {
         await db.songSheets.put({ ...sheet, backing, updatedAt: now })
       })
     } catch (e) {
-      if (e instanceof Error && /quota/i.test(e.name + e.message)) throw new BackingError('浏览器存储空间已满，音频没有保存。')
+      if (e instanceof Error && /quota/i.test(e.name + e.message)) throw new BackingError('存储空间已满，音频没有保存。')
       throw e
     }
     return backing

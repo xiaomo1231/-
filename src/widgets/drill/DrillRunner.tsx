@@ -312,7 +312,7 @@ export function DrillRunner({ module, kind, count: countProp, levelOverride, foc
         await refreshProfile()
       } catch (err) {
         logger.error('Drill submit failed', { error: err instanceof Error ? err.message : String(err) })
-        toast({ title: '这道题没能保存', description: '作答结果已显示，但练习记录写入浏览器存储失败。可以刷新页面后继续。', variant: 'error' })
+        toast({ title: '这道题没能保存', description: '作答结果已显示，但练习记录没能写入。可以刷新页面后继续。', variant: 'error' })
       } finally {
         setBusy(false)
       }

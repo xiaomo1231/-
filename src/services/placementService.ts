@@ -34,7 +34,7 @@ export const PLACEMENT_SECTIONS: readonly PlacementSectionDef[] = [
   { id: 'T5', title: '和弦性质', module: 'E5', maxQuestions: 6, maxLevel: 4, intro: '明亮还是暗，几层音。' },
   { id: 'T6', title: '级数', module: 'E3', maxQuestions: 5, maxLevel: 3, intro: '先听和弦，再听一个音，它是第几级。' },
   { id: 'T7', title: '乐理知识', module: 'T1', maxQuestions: 6, maxLevel: 4, intro: '拍号、半音全音、调号这些基本规则。' },
-  { id: 'T8', title: '音准', module: 'S1', maxQuestions: 3, maxLevel: 3, intro: '听一个音，用麦克风唱回来。需要允许浏览器使用麦克风；不方便唱可以跳过。', mic: true },
+  { id: 'T8', title: '音准', module: 'S1', maxQuestions: 3, maxLevel: 3, intro: '听一个音，用麦克风唱回来。需要允许使用麦克风；不方便唱可以跳过。', mic: true },
 ]
 
 export const PLACEMENT_OBSERVATION_WEIGHT = 0.35

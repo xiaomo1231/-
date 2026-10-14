@@ -34,7 +34,7 @@ export function NativeMonitorControls({
     <>
       <label
         className="flex items-center gap-1 text-xs"
-        title="通过声卡驱动直接监听，延迟比浏览器小"
+        title="通过声卡驱动直接监听，延迟更小"
       >
         <input
           type="checkbox"

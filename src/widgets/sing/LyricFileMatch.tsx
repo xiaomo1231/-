@@ -48,7 +48,7 @@ export function LyricFileList({
       {locked.length > 0 && (
         <div className="flex flex-wrap items-center gap-2 rounded-lg border border-amber/50 bg-amber-soft/20 px-2 py-1.5 text-xs">
           <span className="flex-1">
-            浏览器重新打开后需要点一下，才能读取歌词文件夹（{locked.map((f) => f.name).join('、')}
+            需要点一下才能读取歌词文件夹（{locked.map((f) => f.name).join('、')}
             ）。
           </span>
           <Button size="sm" variant="outline" onClick={onAllow}>

@@ -93,7 +93,7 @@ export const SingService = {
     }
     const total = files.reduce((s, f) => s + f.size, 0)
     const free = await freeBytes()
-    if (free !== null && free < total * 1.2) throw new SingError(`浏览器存储空间不够：需要约 ${Math.ceil(total / 1048576)} MB，剩余约 ${Math.floor(free / 1048576)} MB。`)
+    if (free !== null && free < total * 1.2) throw new SingError(`存储空间不够：需要约 ${Math.ceil(total / 1048576)} MB，剩余约 ${Math.floor(free / 1048576)} MB。`)
     const now = Date.now()
     const id = uuid()
     // One file per stem kind (the last one wins).
@@ -114,7 +114,7 @@ export const SingService = {
         await db.singSongs.put(song)
       })
     } catch (e) {
-      if (e instanceof Error && /quota/i.test(e.name + e.message)) throw new SingError('浏览器存储空间已满，音频没有保存。')
+      if (e instanceof Error && /quota/i.test(e.name + e.message)) throw new SingError('存储空间已满，音频没有保存。')
       throw e
     }
     return song

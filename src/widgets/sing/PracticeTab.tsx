@@ -491,7 +491,7 @@ export function PracticeTab() {
             ? `低延迟监听（${s.monitorStatus.info.api}，${s.monitorStatus.info.input} → ${s.monitorStatus.info.output}），延迟约 ${s.monitorStatus.info.latencyMs} 毫秒。`
             : s.monitorStatus?.kind === 'fallback'
               ? `低延迟监听没能打开（${s.monitorStatus.reason}），先用普通监听，会有一点延迟（通常 20–60 毫秒）。`
-              : '浏览器里的监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；'}
+              : '普通监听会有一点延迟（通常 20–60 毫秒），觉得别扭可以调小音量或关掉；'}
           录音和评分不受影响。
         </p>
       )}

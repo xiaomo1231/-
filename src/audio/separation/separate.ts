@@ -308,7 +308,7 @@ async function vocalsInBrowser(file: File, onProgress: (p: SeparationProgress) =
       onProgress({
         phase: 'load',
         ratio: 0,
-        text: plan.backend === 'webgpu' ? '应用加速出了问题，改用浏览器的显卡加速…' : plan.backend === 'wasm' && n === cpuWorkers() ? '显卡加速出了问题，改用处理器计算…' : `刚才的分轨进程意外退出（可能是内存不够），改用 ${n} 路重试…`,
+        text: plan.backend === 'webgpu' ? '应用加速出了问题，改用备用的显卡加速…' : plan.backend === 'wasm' && n === cpuWorkers() ? '显卡加速出了问题，改用处理器计算…' : `刚才的分轨进程意外退出（可能是内存不够），改用 ${n} 路重试…`,
       })
     try {
       backend = plan.backend

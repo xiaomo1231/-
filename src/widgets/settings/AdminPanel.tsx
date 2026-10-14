@@ -45,7 +45,7 @@ export function AdminPanel() {
               {timings.map((t) => (
                 <tr key={t.at} className="border-t border-border/60">
                   <td className="py-1 pr-3">{new Date(t.at).toLocaleString()}</td>
-                  <td className="py-1 pr-3">{t.engine === 'local' ? '本机助手' : t.mode === 'vocals' ? '浏览器 · 人声' : '浏览器 · 六轨'}</td>
+                  <td className="py-1 pr-3">{t.engine === 'local' ? '本机助手' : t.backend === 'native' ? '应用 · 人声' : t.mode === 'vocals' ? '浏览器 · 人声' : '浏览器 · 六轨'}</td>
                   <td className="py-1 pr-3">{t.engine === 'local' ? '—' : t.backend === 'webgpu' ? `显卡${t.precision ? ` ${t.precision}` : ''}` : `处理器${t.threads ? ` ×${t.threads}` : ''}`}</td>
                   <td className="py-1 pr-3">{t.audioSeconds ? durationText(t.audioSeconds) : '—'}</td>
                   <td className="py-1 pr-3">{durationText(t.seconds)}</td>

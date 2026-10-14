@@ -308,7 +308,7 @@ export const LibraryService = {
   async readLyrics(folderId: string, entry: LyricFileEntry): Promise<ParsedLyricFile> {
     const folder = await getDb().libraryFolders.get(folderId)
     if (!folder) throw new Error('这个歌词文件夹已经从歌曲库移除。')
-    if ((await this.access(folder)) !== 'granted') throw new Error('浏览器还没允许读取歌词文件夹。请点「允许读取歌词文件夹」。')
+    if ((await this.access(folder)) !== 'granted') throw new Error('还没有允许读取歌词文件夹。请点「允许读取歌词文件夹」。')
     let dir = handleOf(folder)
     const parts = entry.path.split('/')
     try {
@@ -353,7 +353,7 @@ export const LibraryService = {
       return await (await this.fileHandle(song)).getFile()
     } catch (e) {
       if (e instanceof DOMException && e.name === 'NotFoundError') throw new Error('找不到这个文件了，可能被移动或删除。请重新扫描歌曲库。')
-      if (e instanceof DOMException && e.name === 'NotAllowedError') throw new Error('浏览器还没允许读取这个文件夹。请在歌曲库里点「允许访问」。')
+      if (e instanceof DOMException && e.name === 'NotAllowedError') throw new Error('还没有允许读取这个文件夹。请在歌曲库里点「允许访问」。')
       throw e
     }
   },

@@ -25,7 +25,7 @@ export function LibraryPicker({ open, onClose, onPick, title = '从歌曲库选�
     setError(null)
     try {
       const folder = lib.folders.find((f) => f.id === s.folderId)
-      if (folder && lib.access[folder.id] !== 'granted' && (await lib.allow(folder)) !== 'granted') throw new Error('浏览器没有允许读取这个文件夹。')
+      if (folder && lib.access[folder.id] !== 'granted' && (await lib.allow(folder)) !== 'granted') throw new Error('没有允许读取这个文件夹。')
       onPick(s, await LibraryService.file(s))
     } catch (e) {
       setError(e instanceof Error ? e.message : String(e))
