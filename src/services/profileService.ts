@@ -81,6 +81,10 @@ export const ProfileService = {
     return this.update({ streak })
   },
 
+  async setSingLatency(ms: number): Promise<void> {
+    await this.update({ singLatencyMs: Math.max(0, Math.min(400, Math.round(ms))) })
+  },
+
   async setLatency(ms: number): Promise<void> {
     await this.update({ deviceLatencyMs: Math.max(0, Math.min(400, Math.round(ms))) })
   },

@@ -229,7 +229,7 @@ export function PracticeTab() {
     })
   const refreshProfile = useProfileStore((p) => p.refresh)
   const setDeviceLatency = async (ms: number) => {
-    await ProfileService.setLatency(ms)
+    await ProfileService.setSingLatency(ms)
     await refreshProfile()
   }
   const extremes = useMemo(() => {
@@ -556,19 +556,19 @@ export function PracticeTab() {
           </span>
           {s.lagNotice > 0 && s.latencyMs + s.lagNotice <= 400 && (
             <Button size="sm" variant="outline" onClick={() => void setDeviceLatency(s.latencyMs + s.lagNotice!)}>
-              补偿这 {s.lagNotice} 毫秒（设备延迟改为 {s.latencyMs + s.lagNotice} 毫秒）
+              补偿这 {s.lagNotice} 毫秒（录音延迟改为 {s.latencyMs + s.lagNotice} 毫秒）
             </Button>
           )}
         </div>
       )}
 
       <div className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
-        <span title="耳机、声卡、蓝牙带来的总延迟。录音和评分会往前挪这么多；无线耳机一般 150–250 毫秒，有线耳机一般 0–40 毫秒">设备延迟</span>
-        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={s.latencyMs <= 0} onClick={() => void setDeviceLatency(s.latencyMs - 10)} aria-label="设备延迟减 10 毫秒">
+        <span title="耳机、声卡、蓝牙带来的总延迟。录音和评分会往前挪这么多；无线耳机一般 150–250 毫秒，有线耳机一般 0–40 毫秒。可以在「设置 → 跟唱录音延迟」自动检测">录音延迟</span>
+        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={s.latencyMs <= 0} onClick={() => void setDeviceLatency(s.latencyMs - 10)} aria-label="录音延迟减 10 毫秒">
           −
         </button>
         <span className="num w-14 text-center">{s.latencyMs} 毫秒</span>
-        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={s.latencyMs >= 400} onClick={() => void setDeviceLatency(s.latencyMs + 10)} aria-label="设备延迟加 10 毫秒">
+        <button type="button" className="focus-ring rounded-md border border-border/80 px-2 py-0.5 hover:text-foreground disabled:opacity-40" disabled={s.latencyMs >= 400} onClick={() => void setDeviceLatency(s.latencyMs + 10)} aria-label="录音延迟加 10 毫秒">
           ＋
         </button>
         <span className="mr-3" />

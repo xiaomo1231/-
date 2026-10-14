@@ -30,6 +30,8 @@ export interface StudentProfile {
   octaveEquivalence: boolean
   /** Measured tap latency (ms) subtracted from every tap; 0 until calibrated. */
   deviceLatencyMs: number
+  /** 跟唱 (0.24.1): how late recordings arrive (headphones, sound card), ms; falls back to deviceLatencyMs. */
+  singLatencyMs?: number
   /** Use the downloaded Salamander piano samples instead of the synth piano. */
   /** @deprecated The bundled piano is always available (0.10.0). */
   sampledPiano?: boolean

@@ -15,6 +15,7 @@ import { desktop } from '@/app/desktop'
 import { useProfileStore } from '@/features/profile/profileStore'
 import { toast } from '@/features/toast/toastStore'
 import { PROVIDER_PRESETS, createProvider, getPreset, type AIProviderId } from '@/infrastructure/ai/presets'
+import { RecordLatencyCalibration } from '@/widgets/settings/RecordLatencyCalibration'
 import { LatencyCalibration } from '@/widgets/settings/LatencyCalibration'
 import { Button } from '@/shared/ui/Button'
 import { Input } from '@/shared/ui/Input'
@@ -216,7 +217,11 @@ export function SettingsPage() {
         </div>
       </Section>
 
-      <Section title="节奏延迟标定">
+      <Section title="跟唱录音延迟" id="record-latency">
+        <RecordLatencyCalibration current={profile.singLatencyMs ?? profile.deviceLatencyMs} onSave={(ms) => save({ singLatencyMs: ms }, `已保存跟唱录音延迟 ${ms} 毫秒`)} />
+      </Section>
+
+      <Section title="节奏延迟标定（按键）">
         <LatencyCalibration current={profile.deviceLatencyMs} onSave={(ms) => save({ deviceLatencyMs: ms }, `已保存补偿值 ${ms}ms`)} />
       </Section>
 

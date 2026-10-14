@@ -39,7 +39,7 @@ export interface SessionTake extends SingTake {
  * takes per phrase and the per-source metadata (lyrics, full version, mix).
  */
 export function useSingSession(source: SingSource) {
-  const latencyMs = useProfileStore((s) => s.profile?.deviceLatencyMs ?? 0)
+  const latencyMs = useProfileStore((s) => s.profile?.singLatencyMs ?? s.profile?.deviceLatencyMs ?? 0)
   const vocals = source.stems.find((s) => s.stem === 'vocals')!
   const [curve, setCurve] = useState<PitchCurve | null>(null)
   const [progress, setProgress] = useState(0)
