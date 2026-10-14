@@ -16,6 +16,7 @@ import { useProfileStore } from '@/features/profile/profileStore'
 import { toast } from '@/features/toast/toastStore'
 import { PROVIDER_PRESETS, createProvider, getPreset, type AIProviderId } from '@/infrastructure/ai/presets'
 import { RecordLatencyCalibration } from '@/widgets/settings/RecordLatencyCalibration'
+import { AudioDeviceSettings } from '@/widgets/settings/AudioDeviceSettings'
 import { LatencyCalibration } from '@/widgets/settings/LatencyCalibration'
 import { Button } from '@/shared/ui/Button'
 import { Input } from '@/shared/ui/Input'
@@ -215,6 +216,10 @@ export function SettingsPage() {
             </span>
           </label>
         </div>
+      </Section>
+
+      <Section title="音频设备" id="audio-devices">
+        <AudioDeviceSettings />
       </Section>
 
       <Section title="跟唱录音延迟" id="record-latency">

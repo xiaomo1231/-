@@ -43,6 +43,9 @@ export interface StudentProfile {
   capo?: number
   /** Chosen audio devices (G1). Ids are stable per browser origin. */
   audioInputId?: string
+  /** Microphone for singing (0.26.2); the instrument input stays audioInputId. */
+  audioVoiceInputId?: string
+  audioVoiceInputLabel?: string
   audioInputLabel?: string
   audioOutputId?: string
   audioOutputLabel?: string

@@ -44,6 +44,8 @@ class InputManager {
   private info: InputInfo | null = null
   private listeners = new Set<Listener>()
   private preferredInput: string | undefined
+  /** The microphone chosen for singing (Settings → 音频设备). */
+  private preferredVoice: string | undefined
   private preferredOutput: string | undefined
   private opening: Promise<void> | null = null
   /** The app's sound card driver feeding the bus instead of the browser stream (ASIO monitoring). */
@@ -69,9 +71,10 @@ class InputManager {
   }
 
   /** Saved choices from the profile. Re-opens the input if a holder is active. */
-  async setPreferences(prefs: { inputId?: string; outputId?: string }): Promise<void> {
-    const inputChanged = prefs.inputId !== this.preferredInput
+  async setPreferences(prefs: { inputId?: string; voiceInputId?: string; outputId?: string }): Promise<void> {
+    const inputChanged = prefs.inputId !== this.preferredInput || prefs.voiceInputId !== this.preferredVoice
     this.preferredInput = prefs.inputId
+    this.preferredVoice = prefs.voiceInputId
     this.preferredOutput = prefs.outputId
     await this.applyOutput()
     if (inputChanged && this.holders.size) await this.reopen()
@@ -209,7 +212,7 @@ class InputManager {
     await Tone.start()
     const purpose = this.wantedPurpose() ?? 'voice'
     const { inputs } = await this.listDevices()
-    const deviceId = pickInputFor(purpose, inputs, this.preferredInput)
+    const deviceId = pickInputFor(purpose, inputs, this.preferredInput, this.preferredVoice)
     const constraints: MediaTrackConstraints = {
       echoCancellation: false,
       noiseSuppression: false,
@@ -232,7 +235,7 @@ class InputManager {
       if (name === 'NotFoundError' || name === 'OverconstrainedError') {
         throw new MicError(
           deviceId
-            ? '选中的输入设备找不到了，可能已经拔出。请在“吉他工坊 → 设备检查”里重新选择。'
+            ? '选中的输入设备找不到了，可能已经拔出。请在「设置 → 音频设备」里重新选择。'
             : '没有找到音频输入设备。请插上麦克风或吉他线，检查系统声音设置。',
           'MIC_NOT_FOUND',
           err,

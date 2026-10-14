@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { deviceComboKey, deviceDisplayName, inputKindOf, isGuitarCableLabel, pickInputFor } from '@/audio/input/devices'
+import { deviceComboKey, deviceDisplayName, inputKindOf, isGuitarCableLabel, isLoopbackLabel, pickInputFor } from '@/audio/input/devices'
 import { BUILTIN_PRESETS, DEFAULT_RIG, normalizePresets, normalizeRig, syncedDelayTime } from '@/audio/guitar/rigSettings'
 import { ampPreGain, dbToGain, gateBlock, masterGain, pedalDrive, reverbImpulse, shaperCurve, toneCutoff } from '@/audio/guitar/dsp'
 import { calibrate, estimateRoundTripMs, judgeOffset } from '@/audio/latency'
@@ -253,5 +253,26 @@ describe('guitar units', () => {
         if (ex.kind === 'strum') expect(() => strumPattern(ex.pattern)).not.toThrow()
       }
     }
+  })
+})
+
+describe('singing input choice', () => {
+  const devices = [
+    { id: 'default', label: '默认 - Loopback 1/2 (E2x2 OTG)', kind: 'mic' as const },
+    { id: 'lb', label: 'Loopback 1/2 (E2x2 OTG)', kind: 'mic' as const },
+    { id: 'an', label: 'Analog 1/2 (E2x2 OTG)', kind: 'mic' as const },
+    { id: 'gt', label: 'Rocksmith Guitar Adapter', kind: 'cable' as const },
+  ]
+  it('never picks a loopback by itself, follows an explicit choice', () => {
+    expect(pickInputFor('voice', devices, undefined)).toBe('an')
+    expect(pickInputFor('voice', devices, 'gt')).toBe('an')
+    expect(pickInputFor('voice', devices, 'lb')).toBe('an')
+    expect(pickInputFor('voice', devices, 'gt', 'lb')).toBe('lb')
+    expect(isLoopbackLabel('立体声混音 (Realtek)')).toBe(true)
+    expect(isLoopbackLabel('Microphone (Realtek)')).toBe(false)
+  })
+  it('uses the system default when it is a real microphone', () => {
+    const d = [{ id: 'default', label: 'Default - Microphone (USB)', kind: 'mic' as const }, ...devices.slice(1)]
+    expect(pickInputFor('voice', d, undefined)).toBeUndefined()
   })
 })

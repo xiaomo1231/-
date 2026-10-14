@@ -15,6 +15,7 @@ import { uuid } from '@/infrastructure/crypto/crypto'
 import { lyricsInPhrase as lyricOf } from '@/songs/phrasing'
 import { LyricsDisplay } from './LyricsDisplay'
 import { NativeMonitorControls } from './NativeMonitorControls'
+import { MicName } from './MicName'
 import { ProfileService } from '@/services/profileService'
 import { useProfileStore } from '@/features/profile/profileStore'
 
@@ -507,6 +508,7 @@ export function PracticeTab() {
               <span className="flex items-center gap-1.5 text-xs text-success">
                 <Mic className="h-3.5 w-3.5" /> 麦克风已开（正在录音）
               </span>
+              <MicName />
               <button
                 type="button"
                 onClick={() => s.setMonitor({ on: !s.monitor.on })}
