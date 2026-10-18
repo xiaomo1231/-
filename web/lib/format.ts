@@ -2,11 +2,11 @@ import type { ScoreFormat, SearchMatch } from '@/songs/scoreLibraryTypes'
 
 /** Format badges: the same labels as the desktop library. */
 export const FORMAT_BADGE: Record<ScoreFormat, { label: string; className: string }> = {
-  score: { label: 'GP 谱', className: 'border-success/60 text-success' },
+  score: { label: 'GP 谱', className: 'border-success/40 bg-success/10 text-success' },
   legacy: { label: 'GTP', className: 'border-border text-muted-foreground' },
-  image: { label: '图片谱', className: 'border-amber/60 text-amber' },
-  pdf: { label: 'PDF', className: 'border-destructive/60 text-destructive' },
-  text: { label: '文本谱', className: 'border-cyan/60 text-cyan' },
+  image: { label: '图片谱', className: 'border-amber/40 bg-amber/10 text-amber' },
+  pdf: { label: 'PDF', className: 'border-destructive/40 bg-destructive/10 text-destructive' },
+  text: { label: '文本谱', className: 'border-cyan/40 bg-cyan/10 text-cyan' },
   midi: { label: 'MIDI', className: 'border-border text-muted-foreground' },
   audio: { label: '音频', className: 'border-border text-muted-foreground' },
   video: { label: '视频', className: 'border-border text-muted-foreground' },

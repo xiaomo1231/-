@@ -1,6 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { api, ApiError, errorText } from '../lib/api'
 import { buttonClass } from '../lib/classes'
+import { Seal, StringsArt } from './Brand'
 
 function loginMessage(e: unknown): string {
   if (e instanceof ApiError && e.status === 401) return '密码不对，请再试一次。'
@@ -18,12 +19,14 @@ export function LoginScreen({
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(notice)
+  const [pluck, setPluck] = useState(0)
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!password || busy) return
     setBusy(true)
     setError(null)
+    setPluck((n) => n + 1)
     try {
       await api.login(password)
       setPassword('')
@@ -37,17 +40,20 @@ export function LoginScreen({
 
   return (
     <main className="gutter grid min-h-dvh place-items-center py-10">
-      <div className="w-full max-w-sm space-y-6">
-        <div className="text-center">
-          <h1 className="font-display text-3xl font-semibold">谱库</h1>
-          <p className="mt-2 text-sm text-muted-foreground">输入密码后查看你的吉他谱</p>
+      <div className="w-full max-w-sm">
+        <div className="flex items-center gap-3">
+          <Seal size={44} />
+          <div>
+            <h1 className="font-display text-3xl font-black leading-none">谱库</h1>
+            <p className="eyebrow mt-1.5">Guitar tab archive</p>
+          </div>
         </div>
-        <form
-          onSubmit={submit}
-          className="space-y-4 rounded-3xl border border-border/80 bg-card p-5"
-        >
+
+        <StringsArt pluck={pluck} className="mt-8 h-16 w-full" />
+
+        <form onSubmit={submit} className="mt-8 space-y-4">
           <label className="block space-y-2">
-            <span className="text-sm font-medium">密码</span>
+            <span className="text-sm text-muted-foreground">输入密码，打开你的吉他谱</span>
             <input
               type="password"
               name="password"
@@ -55,7 +61,8 @@ export function LoginScreen({
               autoFocus
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="h-12 w-full rounded-xl border border-border bg-background px-3 text-base text-foreground outline-none focus:border-ring"
+              onFocus={() => setPluck((n) => n + 1)}
+              className="mono h-12 w-full rounded-xl border border-border bg-card px-4 text-base tracking-widest text-foreground outline-none transition-colors focus:border-primary"
             />
           </label>
           {error && (
@@ -66,11 +73,14 @@ export function LoginScreen({
           <button
             type="submit"
             disabled={busy || !password}
-            className={buttonClass('primary') + ' w-full'}
+            className={buttonClass('primary') + ' h-12 w-full text-base'}
           >
-            {busy ? '正在登录…' : '登录'}
+            {busy ? '正在打开…' : '打开谱库'}
           </button>
         </form>
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          只读：在这里看谱、下载，谱库里的文件不会被改动。
+        </p>
       </div>
     </main>
   )

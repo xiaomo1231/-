@@ -1,6 +1,6 @@
 import type { ReactNode } from 'react'
 import { api } from '../lib/api'
-import { PANEL, cx } from '../lib/classes'
+import { cx, LIST_PANEL, ROW } from '../lib/classes'
 import { hrefArtist } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
 import { useLoad } from '../lib/useLoad'
@@ -22,37 +22,30 @@ export function SearchResults({ q }: { q: string }) {
 
   const { artists, songs, moreSongs } = state.data
   if (artists.length === 0 && songs.length === 0) {
-    return (
-      <Notice>
-        没有找到「{q}」。试试只输入歌名的一部分，或换个写法（拼音、首字母、繁体都可以）。
-      </Notice>
-    )
+    return <Notice>没找到。试试少打几个字，或者用拼音首字母（例如 zjl）。</Notice>
   }
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-8">
       {artists.length > 0 && (
-        <Section title={`歌手（${artists.length}）`}>
-          <ul className="space-y-2">
+        <Section title="歌手" count={`${artists.length}`}>
+          <ul className={LIST_PANEL}>
             {artists.map((a) => (
               <li key={a.id}>
-                <Link
-                  href={hrefArtist(a)}
-                  className={cx(
-                    PANEL,
-                    'flex min-h-14 items-center justify-between gap-3 p-4 transition-colors hover:bg-accent',
-                  )}
-                >
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-2">
-                      <span className="truncate font-semibold">{a.name}</span>
+                <Link href={hrefArtist(a)} className={cx(ROW, 'justify-between')}>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex min-w-0 items-center gap-2">
+                      <span className="truncate font-medium">{a.name}</span>
                       <MatchTag match={a.match} />
                     </span>
                     <span className="block truncate text-xs text-muted-foreground">
                       {a.categoryName} · {a.groupName}
                     </span>
                   </span>
-                  <span className="shrink-0 text-xs text-muted-foreground">{a.songs} 首</span>
+                  <span className="mono shrink-0 text-sm text-muted-foreground">{a.songs} 首</span>
+                  <span aria-hidden className="shrink-0 text-xl text-muted-foreground">
+                    ›
+                  </span>
                 </Link>
               </li>
             ))}
@@ -61,7 +54,7 @@ export function SearchResults({ q }: { q: string }) {
       )}
 
       {songs.length > 0 && (
-        <Section title={`谱子（${songs.length}${moreSongs ? '+' : ''}）`}>
+        <Section title="谱子" count={`${songs.length}${moreSongs ? '+' : ''}`}>
           <div className="space-y-3">
             {songs.map(({ song, artistName, match }) => (
               <SongCard
@@ -69,7 +62,7 @@ export function SearchResults({ q }: { q: string }) {
                 song={song}
                 artistName={artistName}
                 subtitle={
-                  <span className="flex items-center gap-2">
+                  <span className="flex min-w-0 items-center gap-2">
                     <span className="truncate">{artistName}</span>
                     <MatchTag match={match} />
                   </span>
@@ -78,8 +71,8 @@ export function SearchResults({ q }: { q: string }) {
             ))}
           </div>
           {moreSongs && (
-            <p className="pt-3 text-sm text-muted-foreground">
-              结果较多，只显示了前面的。输入更完整的歌名可以缩小范围。
+            <p className="px-1 pt-3 text-sm text-muted-foreground">
+              结果较多，只显示前 200 个。输入更完整的歌名可以缩小范围。
             </p>
           )}
         </Section>
@@ -88,10 +81,21 @@ export function SearchResults({ q }: { q: string }) {
   )
 }
 
-function Section({ title, children }: { title: string; children: ReactNode }) {
+function Section({
+  title,
+  count,
+  children,
+}: {
+  title: string
+  count: string
+  children: ReactNode
+}) {
   return (
     <section>
-      <h2 className="mb-2 px-1 text-sm font-medium text-muted-foreground">{title}</h2>
+      <h2 className="mb-3 flex items-baseline gap-2 px-1 font-display text-lg font-black">
+        {title}
+        <span className="mono text-xs font-normal text-muted-foreground">{count}</span>
+      </h2>
       {children}
     </section>
   )

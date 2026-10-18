@@ -1,15 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import { errorText, fetchBytes, fileUrl } from '../lib/api'
-import { SELECT, buttonClass } from '../lib/classes'
+import { SELECT, buttonClass, cx } from '../lib/classes'
 import { clampTranspose, transposeLabel, TRANSPOSE_MAX, TRANSPOSE_MIN } from '../lib/transpose'
+import { Notice } from '../components/ui'
 import {
   alphaTabUrls,
   applyTranspose,
   chooseEncoding,
   cleanHeader,
   loadAlphaTab,
-  themeResources,
+  paperResources,
   type AlphaTab,
 } from './alphaTab'
 
@@ -47,6 +48,8 @@ export function ScoreViewer({ path }: { path: string }) {
   const [playing, setPlaying] = useState(false)
   const [rendering, setRendering] = useState(false)
   const [speed, setSpeed] = useState(1)
+  /** Phones only: the settings sheet above the bar. Wide screens always show them. */
+  const [sheet, setSheet] = useState(false)
 
   // Event handlers see the latest values without being re-subscribed.
   const staffRef = useRef(staff)
@@ -79,7 +82,7 @@ export function ScoreViewer({ path }: { path: string }) {
           display: {
             staveProfile: staveProfileOf(at, staffRef.current),
             scale: 1,
-            resources: themeResources(),
+            resources: paperResources(),
           },
           player: {
             playerMode: at.PlayerMode.EnabledSynthesizer,
@@ -157,125 +160,169 @@ export function ScoreViewer({ path }: { path: string }) {
   const tracks = score?.tracks ?? []
   // Playback controls appear only once the soundfont has loaded (no soundfont = notation only).
   const showPlayer = playerReady
+  const ready = phase === 'ready'
 
   return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-center gap-2">
-        {tracks.length > 1 && (
-          <label className="flex items-center gap-2 text-sm">
-            <span className="text-muted-foreground">音轨</span>
-            <select
-              className={SELECT}
-              value={track}
-              onChange={(e) => setTrack(Number(e.target.value))}
-            >
-              {tracks.map((t, i) => (
-                <option key={i} value={i}>
-                  {t.name.trim() || `音轨 ${i + 1}`}
-                </option>
-              ))}
-            </select>
-          </label>
-        )}
-
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">谱面</span>
-          <select
-            className={SELECT}
-            value={staff}
-            onChange={(e) => setStaff(e.target.value as StaffMode)}
+    <div className={cx('space-y-3', ready && 'pb-32 sm:pb-0')}>
+      {ready && (
+        <div
+          className={cx(
+            // phones: a bar fixed to the bottom; wide screens: one row above the score
+            'fixed inset-x-0 bottom-0 z-40 flex flex-col rounded-t-2xl border-t border-border bg-card/95 px-4 pt-3 shadow-[var(--shadow-lift)] backdrop-blur',
+            'sm:static sm:z-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:rounded-2xl sm:border sm:bg-card sm:px-3 sm:pt-3 sm:shadow-[var(--shadow-soft)] sm:backdrop-blur-none',
+          )}
+          style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}
+        >
+          <div
+            className={cx(
+              'order-1 flex-col gap-3 pb-3 sm:order-2 sm:flex sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:pb-0',
+              sheet ? 'flex' : 'hidden',
+            )}
           >
-            {STAFF_OPTIONS.map((o) => (
-              <option key={o.value} value={o.value}>
-                {o.label}
-              </option>
-            ))}
-          </select>
-        </label>
+            {tracks.length > 1 && (
+              <label className="flex items-center justify-between gap-3 text-sm sm:justify-start">
+                <span className="text-muted-foreground">音轨</span>
+                <select
+                  className={SELECT + ' min-w-0 max-w-56'}
+                  value={track}
+                  onChange={(e) => setTrack(Number(e.target.value))}
+                >
+                  {tracks.map((t, i) => (
+                    <option key={i} value={i}>
+                      {t.name.trim() || `音轨 ${i + 1}`}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            )}
 
-        <div className="flex items-center gap-1 text-sm" role="group" aria-label="变调">
-          <span className="mr-1 text-muted-foreground">变调</span>
-          <button
-            type="button"
-            aria-label="降半音"
-            onClick={() => shift(-1)}
-            disabled={transpose <= TRANSPOSE_MIN}
-            className={buttonClass('outline') + ' min-w-11 px-0'}
-          >
-            −
-          </button>
-          <span className="num min-w-14 text-center">{transposeLabel(transpose)}</span>
-          <button
-            type="button"
-            aria-label="升半音"
-            onClick={() => shift(1)}
-            disabled={transpose >= TRANSPOSE_MAX}
-            className={buttonClass('outline') + ' min-w-11 px-0'}
-          >
-            +
-          </button>
-        </div>
+            <label className="flex items-center justify-between gap-3 text-sm sm:justify-start">
+              <span className="text-muted-foreground">谱面</span>
+              <select
+                className={SELECT}
+                value={staff}
+                onChange={(e) => setStaff(e.target.value as StaffMode)}
+              >
+                {STAFF_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-        {showPlayer && (
-          <div className="flex items-center gap-2">
-            <button
-              type="button"
-              onClick={() => api.current?.playPause()}
-              className={buttonClass('primary')}
-              aria-label={playing ? '暂停' : '播放'}
+            <div
+              className="flex items-center justify-between gap-3 text-sm sm:justify-start"
+              role="group"
+              aria-label="变调"
             >
-              {playing ? '暂停' : '播放'}
-            </button>
-            <button
-              type="button"
-              onClick={() => api.current?.stop()}
-              className={buttonClass('outline')}
-              aria-label="停止"
-            >
-              停止
-            </button>
-            <select
-              className={SELECT}
-              aria-label="速度"
-              value={speed}
-              onChange={(e) => setSpeed(Number(e.target.value))}
-            >
-              {SPEEDS.map((s) => (
-                <option key={s} value={s}>
-                  {Math.round(s * 100)}%
-                </option>
-              ))}
-            </select>
+              <span className="text-muted-foreground">变调</span>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  aria-label="降半音"
+                  onClick={() => shift(-1)}
+                  disabled={transpose <= TRANSPOSE_MIN}
+                  className={buttonClass('outline') + ' min-w-11 px-0'}
+                >
+                  −
+                </button>
+                <span className="mono min-w-14 text-center">{transposeLabel(transpose)}</span>
+                <button
+                  type="button"
+                  aria-label="升半音"
+                  onClick={() => shift(1)}
+                  disabled={transpose >= TRANSPOSE_MAX}
+                  className={buttonClass('outline') + ' min-w-11 px-0'}
+                >
+                  +
+                </button>
+              </div>
+            </div>
           </div>
-        )}
-      </div>
+
+          <div className="order-2 flex items-center gap-2 sm:order-1 sm:flex-wrap">
+            {showPlayer && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => api.current?.playPause()}
+                  aria-label={playing ? '暂停' : '播放'}
+                  className="h-14 w-14 shrink-0 rounded-full bg-primary text-lg text-primary-foreground shadow-[var(--shadow-soft)] transition-[transform,background-color] hover:bg-primary-strong active:scale-95"
+                >
+                  <span aria-hidden>{playing ? '❚❚' : '▶'}</span>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => api.current?.stop()}
+                  aria-label="停止"
+                  className={buttonClass('outline') + ' min-w-11 px-0'}
+                >
+                  <span aria-hidden>■</span>
+                </button>
+                <select
+                  className={SELECT}
+                  aria-label="速度"
+                  value={speed}
+                  onChange={(e) => setSpeed(Number(e.target.value))}
+                >
+                  {SPEEDS.map((s) => (
+                    <option key={s} value={s}>
+                      {Math.round(s * 100)}%
+                    </option>
+                  ))}
+                </select>
+              </>
+            )}
+            <button
+              type="button"
+              aria-expanded={sheet}
+              onClick={() => setSheet((o) => !o)}
+              className={buttonClass('outline') + ' sm:hidden'}
+            >
+              设置
+            </button>
+          </div>
+        </div>
+      )}
+
+      {phase === 'error' && <Notice tone="error">{message}</Notice>}
 
       <div
-        ref={scroller}
-        className="at-surface relative max-h-[72vh] overflow-auto rounded-2xl border border-border/80 bg-card p-3"
+        className={cx(
+          'paper relative overflow-hidden p-3 sm:p-4',
+          phase === 'loading' && 'min-h-60',
+          phase === 'error' && 'hidden',
+        )}
       >
+        {phase === 'loading' && (
+          <div
+            role="status"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 text-[#8a7d6b]"
+          >
+            <p className="text-sm">{slow ? '这个文件读得比较慢，请再等一等…' : '正在排谱…'}</p>
+            <div aria-hidden className="flex gap-2">
+              {[0, 1, 2].map((i) => (
+                <span
+                  key={i}
+                  className="h-2 w-2 rounded-full bg-[#b9852f] motion-safe:animate-pulse"
+                  style={{ animationDelay: `${i * 180}ms` }}
+                />
+              ))}
+            </div>
+          </div>
+        )}
         {rendering && (
-          <p className="pointer-events-none absolute right-3 top-2 z-10 text-xs text-muted-foreground">
+          <p className="pointer-events-none absolute right-3 top-2 z-10 text-xs text-[#8a7d6b]">
             正在排版…
           </p>
         )}
-        <div ref={host} />
+        <div ref={scroller} className="at-surface relative max-h-[72vh] overflow-auto">
+          <div ref={host} />
+        </div>
       </div>
 
-      {phase === 'loading' && (
-        <p role="status" className="py-6 text-center text-sm text-muted-foreground">
-          {slow ? '这个文件读得比较慢，请再等一等…' : '正在读取谱子…'}
-        </p>
-      )}
-      {phase === 'error' && (
-        <p
-          role="alert"
-          className="rounded-2xl border border-destructive/50 p-4 text-sm text-destructive"
-        >
-          {message}
-        </p>
-      )}
-      {phase === 'ready' && (
+      {ready && (
         <p className="text-xs text-muted-foreground">
           变调只在这里生效，不会改动原文件。可以在谱面上点一下跳到某一处。
         </p>

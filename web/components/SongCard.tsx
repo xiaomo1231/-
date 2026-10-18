@@ -1,5 +1,6 @@
 import type { ReactNode } from 'react'
 import type { ScoreSong, ScoreVersion } from '@/songs/scoreLibraryTypes'
+import { cx, PANEL, ROW } from '../lib/classes'
 import { formatSize } from '../lib/format'
 import { hrefViewer } from '../lib/route'
 import { Link } from './Link'
@@ -17,15 +18,19 @@ export function SongCard({
 }) {
   const title = song.unknownTitle ? '未识别的曲名' : song.title
   return (
-    <article className="rounded-2xl border border-border/80 bg-card p-3">
-      <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-0.5">
-        <h3 className="min-w-0 break-words text-base font-semibold">{title}</h3>
-        <span className="shrink-0 text-xs text-muted-foreground">
-          {song.versions.length} 个版本
-        </span>
-      </div>
-      {subtitle && <div className="mt-0.5 text-xs text-muted-foreground">{subtitle}</div>}
-      <ul className="mt-2 divide-y divide-border/60">
+    <article className={cx(PANEL, 'p-0')}>
+      <header className="p-4">
+        <div className="flex items-baseline justify-between gap-3">
+          <h3 className="min-w-0 break-words font-display text-xl font-black leading-snug">
+            {title}
+          </h3>
+          <span className="mono shrink-0 text-xs text-muted-foreground">
+            {song.versions.length} 个版本
+          </span>
+        </div>
+        {subtitle && <div className="mt-1 text-xs text-muted-foreground">{subtitle}</div>}
+      </header>
+      <ul className="divide-y divide-border/60 border-t border-border/60">
         {song.versions.map((v) => (
           <li key={v.file.path}>
             <VersionRow song={song} version={v} artistName={artistName} />
@@ -54,10 +59,7 @@ function VersionRow({
     artist: artistName,
   })
   return (
-    <Link
-      href={href}
-      className="flex min-h-11 items-center gap-3 py-2 transition-colors hover:text-primary"
-    >
+    <Link href={href} className={cx(ROW, 'px-4')}>
       <FormatBadge format={version.file.format} />
       <span className="min-w-0 flex-1">
         <span className="block truncate text-sm">{version.label}</span>
@@ -66,7 +68,7 @@ function VersionRow({
             {version.tags.map((t) => (
               <span
                 key={t}
-                className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground"
+                className="rounded-full border border-border px-2 text-[11px] leading-5 text-muted-foreground"
               >
                 {t}
               </span>
@@ -74,9 +76,12 @@ function VersionRow({
           </span>
         )}
       </span>
-      <span className="shrink-0 text-right text-xs text-muted-foreground">
-        <span className="num block">{formatSize(version.size)}</span>
+      <span className="mono shrink-0 text-right text-xs text-muted-foreground">
+        <span className="block">{formatSize(version.size)}</span>
         {pages > 1 && <span className="block">{pages} 页</span>}
+      </span>
+      <span aria-hidden className="shrink-0 text-xl text-muted-foreground">
+        ›
       </span>
     </Link>
   )

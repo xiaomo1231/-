@@ -32,9 +32,18 @@ export function SongsPage({ artist }: { artist: { id: string; name: string } }) 
 
   const songs = state.data
   const shown = songs.slice(0, limit)
+  // Files on disk: an image score's pages are separate files.
+  const files = songs.reduce(
+    (n, s) => n + s.versions.reduce((m, v) => m + (v.pages?.length ?? 1), 0),
+    0,
+  )
   return (
     <>
-      <PageBar title={name} subtitle={`${songs.length} 首`} fallback="#/" />
+      <PageBar
+        title={name}
+        subtitle={`${songs.length} 首 · ${files.toLocaleString('zh-CN')} 个文件`}
+        fallback="#/"
+      />
       {songs.length === 0 ? (
         <Notice>这位歌手下还没有谱子。</Notice>
       ) : (

@@ -145,28 +145,20 @@ export function applyTranspose(a: AlphaTabApi, score: Score, transpose: number):
   })
 }
 
-/** A CSS colour (any syntax, theme variables included) as the "rgb(…)" alphaTab expects. */
-function cssColor(value: string): string {
-  const el = document.createElement('span')
-  el.style.color = value
-  el.style.display = 'none'
-  document.body.appendChild(el)
-  const rgb = getComputedStyle(el).color
-  el.remove()
-  return rgb
-}
-
-/** Notation colours from the page's theme tokens. */
-export function themeResources() {
-  const fg = cssColor('hsl(var(--foreground))')
-  const muted = cssColor('hsl(var(--muted-foreground))')
-  const line = cssColor('hsl(var(--muted-foreground) / 0.55)')
+/**
+ * Notation colours for the printed paper. The score is always drawn on the
+ * light paper (the `.paper` surface), so these stay fixed in every theme.
+ */
+export function paperResources() {
+  const ink = 'rgb(35, 27, 19)' // #231b13
+  const staff = 'rgb(138, 125, 107)' // #8a7d6b
+  const bar = 'rgb(154, 106, 31)' // #9a6a1f
   return {
-    mainGlyphColor: fg,
-    secondaryGlyphColor: muted,
-    scoreInfoColor: fg,
-    barNumberColor: muted,
-    staffLineColor: line,
-    barSeparatorColor: line,
+    mainGlyphColor: ink,
+    secondaryGlyphColor: ink,
+    scoreInfoColor: ink,
+    barNumberColor: bar,
+    staffLineColor: staff,
+    barSeparatorColor: staff,
   }
 }
