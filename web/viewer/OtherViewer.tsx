@@ -1,7 +1,6 @@
 import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
 import { fileUrl } from '../lib/api'
-import { buttonClass, PANEL } from '../lib/classes'
-import { FormatBadge } from '../components/ui'
+import { buttonClass } from '../lib/classes'
 
 const MESSAGES: Partial<Record<ScoreFormat, string>> = {
   legacy:
@@ -12,11 +11,10 @@ const MESSAGES: Partial<Record<ScoreFormat, string>> = {
   other: '这种文件网页里看不了。请先下载，再用电脑上对应的软件打开。',
 }
 
-/** Formats the browser cannot show: a calm panel saying so, with the download. */
+/** Formats the browser cannot show: a short explanation with the download. */
 export function OtherViewer({ format, path }: { format: ScoreFormat; path: string }) {
   return (
-    <div className={PANEL + ' space-y-4 p-5'}>
-      <FormatBadge format={format} />
+    <div className="space-y-4 py-4">
       <p className="text-sm leading-relaxed text-muted-foreground">
         {MESSAGES[format] ?? MESSAGES.other}
       </p>

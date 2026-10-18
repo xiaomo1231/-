@@ -1,18 +1,18 @@
 import { useEffect, type ReactNode } from 'react'
 import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
-import { buttonClass } from '../lib/classes'
 import { fileUrl } from '../lib/api'
 import { fileBaseName, formatOfPath, isScoreFormat } from '../lib/format'
 import { goBack, type ViewerRoute } from '../lib/route'
 import { recordRecent } from '../lib/recent'
-import { FormatBadge, Notice, PageBar } from '../components/ui'
+import { Notice, PageBar } from '../components/ui'
 import { ScoreViewer } from './ScoreViewer'
 import { ImageViewer } from './ImageViewer'
 import { PdfViewer } from './PdfViewer'
 import { TextViewer } from './TextViewer'
 import { OtherViewer } from './OtherViewer'
+import { FileBar } from './Remote'
 
-/** The score viewer page: the file in the way its format can be shown, plus the original to download. */
+/** The score viewer page: a one-line header, then the file in the way its format can be shown. */
 export function Viewer({ route }: { route: ViewerRoute }) {
   const path = route.path
 
@@ -34,58 +34,60 @@ export function Viewer({ route }: { route: ViewerRoute }) {
 
   const format: ScoreFormat = isScoreFormat(route.format) ? route.format : formatOfPath(path)
   const title = route.title || fileBaseName(path)
+  const artist = route.artist
   const pages = route.pages.length > 0 ? route.pages : [path]
+  const item = { path, format, pages, title, artist }
 
   let body: ReactNode
+  let bar: ReactNode = null
   switch (format) {
     case 'score':
-      body = <ScoreViewer key={path} path={path} />
+      body = <ScoreViewer key={path} path={path} title={title} artist={artist} pages={pages} />
       break
     case 'image':
       body = <ImageViewer paths={pages} />
+      bar = <FileBar item={item} downloadHref={fileUrl(path, true)} />
       break
     case 'pdf':
       body = <PdfViewer path={path} />
+      bar = <FileBar item={item} downloadHref={fileUrl(path, true)} />
       break
     case 'text':
       body = <TextViewer path={path} />
+      bar = <FileBar item={item} downloadHref={fileUrl(path, true)} />
       break
     default:
       body = <OtherViewer format={format} path={path} />
   }
 
   return (
-    <div className="space-y-5 pb-6">
-      <header className="flex items-start gap-3 pt-2">
+    <div className="space-y-4 pb-6">
+      <header className="gutter mx-auto flex w-full max-w-[1180px] flex-wrap items-baseline gap-x-3.5 gap-y-1 pb-1 pt-3.5">
         <button
           type="button"
           aria-label="返回"
           onClick={() => goBack('#/')}
-          className="mt-1 flex h-11 w-11 shrink-0 items-center justify-center rounded-full text-3xl leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
+          className="-ml-2 flex h-11 w-11 shrink-0 items-center justify-center self-center rounded-full text-3xl leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground"
         >
-          <span aria-hidden>‹</span>
+          <span aria-hidden className="-translate-y-0.5">
+            ‹
+          </span>
         </button>
-        <div className="min-w-0 flex-1">
-          <h1 className="break-words font-display text-3xl font-black leading-tight">{title}</h1>
-          {route.artist && (
-            <p className="mt-1 break-words text-sm text-muted-foreground">{route.artist}</p>
-          )}
-        </div>
-      </header>
-      <div className="flex min-w-0 items-center gap-2">
-        <FormatBadge format={format} />
-        <span className="mono min-w-0 flex-1 truncate text-xs text-muted-foreground">
+        <h1 className="min-w-0 break-words font-display text-[26px] font-black leading-tight">
+          {title}
+        </h1>
+        {artist && <span className="break-words text-sm text-muted-foreground">{artist}</span>}
+        <span className="mono min-w-0 break-all text-[11px] text-muted-foreground">
           {fileBaseName(path)}
         </span>
-        <a
-          href={fileUrl(path, true)}
-          download
-          className={buttonClass('outline') + ' shrink-0 px-3'}
-        >
-          下载原文件
-        </a>
-      </div>
-      {body}
+      </header>
+      {/* The score runs edge to edge; pictures, PDFs and text keep the page gutter. */}
+      {format === 'score' ? (
+        body
+      ) : (
+        <div className="gutter mx-auto w-full max-w-[1180px]">{body}</div>
+      )}
+      {bar}
     </div>
   )
 }

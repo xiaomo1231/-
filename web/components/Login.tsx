@@ -1,7 +1,7 @@
 import { useState, type FormEvent } from 'react'
 import { api, ApiError, errorText } from '../lib/api'
 import { buttonClass } from '../lib/classes'
-import { Seal, StringsArt } from './Brand'
+import { Staff } from './ui'
 
 function loginMessage(e: unknown): string {
   if (e instanceof ApiError && e.status === 401) return '密码不对，请再试一次。'
@@ -19,14 +19,12 @@ export function LoginScreen({
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(notice)
-  const [pluck, setPluck] = useState(0)
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
     if (!password || busy) return
     setBusy(true)
     setError(null)
-    setPluck((n) => n + 1)
     try {
       await api.login(password)
       setPassword('')
@@ -41,15 +39,12 @@ export function LoginScreen({
   return (
     <main className="gutter grid min-h-dvh place-items-center py-10">
       <div className="w-full max-w-sm">
-        <div className="flex items-center gap-3">
-          <Seal size={44} />
-          <div>
-            <h1 className="font-display text-3xl font-black leading-none">谱库</h1>
-            <p className="eyebrow mt-1.5">Guitar tab archive</p>
-          </div>
+        <h1 className="m-0 font-display text-[clamp(56px,14vw,96px)] font-black leading-none tracking-[-0.02em]">
+          谱库
+        </h1>
+        <div className="mt-6">
+          <Staff />
         </div>
-
-        <StringsArt pluck={pluck} className="mt-8 h-16 w-full" />
 
         <form onSubmit={submit} className="mt-8 space-y-4">
           <label className="block space-y-2">
@@ -61,8 +56,7 @@ export function LoginScreen({
               autoFocus
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              onFocus={() => setPluck((n) => n + 1)}
-              className="mono h-12 w-full rounded-xl border border-border bg-card px-4 text-base tracking-widest text-foreground outline-none transition-colors focus:border-primary"
+              className="h-12 w-full rounded-lg border border-border bg-card px-4 text-base text-foreground outline-none transition-colors focus:border-primary"
             />
           </label>
           {error && (

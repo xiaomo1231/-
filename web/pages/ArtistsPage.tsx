@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import type { ScoreArtist } from '@/songs/scoreLibraryTypes'
 import { api } from '../lib/api'
-import { cx, LIST_PANEL, PAGE_SIZE, ROW } from '../lib/classes'
-import { hrefArtist } from '../lib/route'
+import { cx, PAGE_SIZE } from '../lib/classes'
+import { hrefArtist, hrefCategory } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
 import { groupByInitial, initialOf, sortArtists, type ArtistSort } from '../lib/sort'
 import { useLoad } from '../lib/useLoad'
 import { Link } from '../components/Link'
-import { LoadMore, Notice, PageBar } from '../components/ui'
+import { LoadMore, Notice, PageBar, Seg, Staff } from '../components/ui'
 
 export interface GroupRoute {
   id: string
@@ -17,9 +17,9 @@ export interface GroupRoute {
 
 const LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i))
 
-/** The artists of one group (歌手 / 乐队…), with an A–Z jump on the right. */
+/** 索引: a group's artists as a back-of-book index, with an A–Z jump row above. */
 export function ArtistsPage({ group }: { group: GroupRoute }) {
-  const { version } = useLibrary()
+  const { info, version } = useLibrary()
   const [sort, setSort] = useState<ArtistSort>('name')
   const [limit, setLimit] = useState(PAGE_SIZE)
   const [jump, setJump] = useState<string | null>(null)
@@ -34,13 +34,18 @@ export function ArtistsPage({ group }: { group: GroupRoute }) {
   )
   const shown = sorted.slice(0, limit)
   const letters = useMemo(() => new Set(sorted.map(initialOf)), [sorted])
-  // The longest string in the group: every artist's brass line is measured against it.
-  const most = useMemo(() => Math.max(...sorted.map((a) => a.songs), 1), [sorted])
-  // A–Z always shows all 26 letters; the ones with no artist are disabled.
+  // A–Z always shows all 26 letters; the ones with no artist are dimmed and disabled.
   const jumpLetters = useMemo(() => {
     const extra = [...letters].filter((l) => !/^[A-Z]$/.test(l))
     return [...LETTERS, ...extra]
   }, [letters])
+  const files = sorted.reduce((n, a) => n + a.files, 0)
+
+  // The category above this group: a multi-group category is a page of its own.
+  const categoryId = group.id.split('/')[0] ?? ''
+  const category = info?.categories.find((c) => c.id === categoryId)
+  const back = category ? `← 目录 · ${category.name}` : '← 目录'
+  const backTo = category && category.groups.length > 1 ? hrefCategory(category.id) : '#/'
 
   // After a letter tap, scroll to its section once it is on screen.
   useEffect(() => {
@@ -56,79 +61,50 @@ export function ArtistsPage({ group }: { group: GroupRoute }) {
     setJump(letter)
   }
 
-  const count = state.status === 'ready' ? `${state.data.length} 位${group.noun}` : undefined
+  const ready = state.status === 'ready'
 
   return (
     <>
-      <PageBar title={group.name} subtitle={count} fallback="#/" />
+      <PageBar
+        title={group.name}
+        back={back}
+        fallback={backTo}
+        subtitle={
+          ready
+            ? `${sorted.length} 位${group.noun} · ${files.toLocaleString('zh-CN')} 份`
+            : undefined
+        }
+      >
+        <Seg<ArtistSort>
+          label="排序"
+          value={sort}
+          onChange={setSort}
+          options={[
+            ['name', '按拼音'],
+            ['count', '按数量'],
+          ]}
+        />
+      </PageBar>
+      <Staff />
 
       {state.status === 'loading' && (
         <p className="py-10 text-center text-sm text-muted-foreground">正在读取…</p>
       )}
-      {state.status === 'error' && <Notice tone="error">{state.message}</Notice>}
-
-      {state.status === 'ready' && sorted.length === 0 && (
-        <Notice>这个分组里还没有{group.noun}。</Notice>
+      {state.status === 'error' && (
+        <div className="py-6">
+          <Notice tone="error">{state.message}</Notice>
+        </div>
+      )}
+      {ready && sorted.length === 0 && (
+        <div className="py-6">
+          <Notice>这个分组里还没有{group.noun}。</Notice>
+        </div>
       )}
 
       {sorted.length > 0 && (
-        <div className="flex items-start gap-2">
-          <div className="min-w-0 flex-1 space-y-4">
-            <div
-              role="group"
-              aria-label="排序"
-              className="inline-flex rounded-full bg-muted p-1 text-sm"
-            >
-              {(
-                [
-                  ['name', '按名称'],
-                  ['count', '按谱子数'],
-                ] as const
-              ).map(([value, label]) => (
-                <button
-                  key={value}
-                  type="button"
-                  aria-pressed={sort === value}
-                  onClick={() => setSort(value)}
-                  className={cx(
-                    'min-h-11 rounded-full px-4 transition-colors',
-                    sort === value
-                      ? 'bg-card font-medium text-foreground shadow-[var(--shadow-soft)]'
-                      : 'text-muted-foreground hover:text-foreground',
-                  )}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
-
-            {sort === 'name' ? (
-              groupByInitial(shown).map((section) => (
-                <section key={section.letter} id={`sec-${section.letter}`} className="scroll-mt-28">
-                  <h2 className="sticky top-[calc(env(safe-area-inset-top)+3.5rem)] z-10 flex items-center gap-3 bg-background/90 py-2 backdrop-blur-md">
-                    <span className="mono text-sm font-medium text-primary">{section.letter}</span>
-                    <span aria-hidden className="h-px flex-1 bg-border" />
-                  </h2>
-                  <ArtistRows artists={section.items} most={most} />
-                </section>
-              ))
-            ) : (
-              <ArtistRows artists={shown} most={most} />
-            )}
-
-            {sorted.length > limit && (
-              <LoadMore
-                remaining={sorted.length - limit}
-                onMore={() => setLimit((n) => n + PAGE_SIZE)}
-              />
-            )}
-          </div>
-
+        <>
           {sort === 'name' && (
-            <nav
-              aria-label="按字母跳转"
-              className="sticky top-[calc(env(safe-area-inset-top)+6rem)] flex shrink-0 flex-col items-center py-1"
-            >
+            <nav aria-label="按字母跳转" className="flex flex-wrap gap-0.5 pb-[18px] pt-1.5">
               {jumpLetters.map((letter) => {
                 const present = letters.has(letter)
                 return (
@@ -139,10 +115,10 @@ export function ArtistsPage({ group }: { group: GroupRoute }) {
                     onClick={() => jumpTo(letter)}
                     aria-label={present ? `跳到 ${letter}` : `${letter}，没有歌手`}
                     className={cx(
-                      'mono relative h-6 w-6 rounded-md text-[11px] font-medium before:absolute before:-inset-2 before:content-[""]',
+                      'mono grid h-11 w-[30px] place-items-center rounded text-[13px] transition-colors',
                       present
-                        ? 'text-primary hover:bg-accent'
-                        : 'cursor-default text-muted-foreground/40',
+                        ? 'text-foreground hover:bg-primary/10 hover:text-primary'
+                        : 'cursor-default text-border',
                     )}
                   >
                     {letter}
@@ -151,39 +127,64 @@ export function ArtistsPage({ group }: { group: GroupRoute }) {
               })}
             </nav>
           )}
-        </div>
+
+          {sort === 'name' ? (
+            <div className="[column-gap:48px] [columns:3_260px]">
+              {groupByInitial(shown).map((section) => (
+                <section key={section.letter} id={`sec-${section.letter}`} className="scroll-mt-28">
+                  <h2 className="mono mb-1 mt-[18px] flex items-center gap-2.5 text-[22px] font-semibold text-primary [break-after:avoid]">
+                    {section.letter}
+                    <span aria-hidden className="h-px flex-1 bg-border" />
+                  </h2>
+                  <ul className="m-0 list-none p-0">
+                    {section.items.map((a) => (
+                      <ArtistEntry key={a.id} artist={a} />
+                    ))}
+                  </ul>
+                </section>
+              ))}
+            </div>
+          ) : (
+            <ul className="m-0 list-none p-0 pt-2 [column-gap:48px] [columns:3_260px]">
+              {shown.map((a) => (
+                <ArtistEntry key={a.id} artist={a} />
+              ))}
+            </ul>
+          )}
+
+          <div className="mb-20">
+            {sorted.length > limit && (
+              <LoadMore
+                remaining={sorted.length - limit}
+                onMore={() => setLimit((n) => n + PAGE_SIZE)}
+              />
+            )}
+          </div>
+        </>
       )}
     </>
   )
 }
 
-function ArtistRows({ artists, most }: { artists: ScoreArtist[]; most: number }) {
+/** One line of the index: name, a dotted leader, the count in mono. */
+function ArtistEntry({ artist: a }: { artist: ScoreArtist }) {
   return (
-    <ul className={LIST_PANEL}>
-      {artists.map((a) => (
-        <li key={a.id}>
-          <Link href={hrefArtist(a)} className={cx(ROW, 'justify-between')}>
-            <span className="min-w-0 flex-1">
-              <span className="block truncate text-base font-medium">{a.name}</span>
-              {a.aliases && a.aliases.length > 0 && (
-                <span className="block truncate text-xs text-muted-foreground">
-                  含：{a.aliases.join('、')}
-                </span>
-              )}
-              {/* a quiet string length: the artist's files against the longest in the group */}
-              <span
-                aria-hidden
-                className="mt-2 block h-[2px] rounded-full bg-primary/70"
-                style={{ width: `${Math.max(4, (a.songs / most) * 100)}%` }}
-              />
+    <li className="[break-inside:avoid]">
+      <Link
+        href={hrefArtist(a)}
+        className="group flex min-h-11 items-baseline gap-2 py-1.5 text-base"
+      >
+        <span className="min-w-0 break-words transition-colors group-hover:text-primary">
+          {a.name}
+          {a.aliases && a.aliases.length > 0 && (
+            <span className="ml-1.5 text-xs text-muted-foreground">
+              也叫 {a.aliases.join('、')}
             </span>
-            <span className="mono shrink-0 text-sm text-muted-foreground">{a.songs} 首</span>
-            <span aria-hidden className="shrink-0 text-xl text-muted-foreground">
-              ›
-            </span>
-          </Link>
-        </li>
-      ))}
-    </ul>
+          )}
+        </span>
+        <span aria-hidden className="leader" />
+        <span className="mono shrink-0 text-xs text-muted-foreground">{a.songs}</span>
+      </Link>
+    </li>
   )
 }

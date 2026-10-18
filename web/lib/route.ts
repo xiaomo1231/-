@@ -16,6 +16,8 @@ export type Route =
   | { kind: 'category'; id: string }
   | { kind: 'group'; id: string; name: string; noun: string }
   | { kind: 'artist'; id: string; name: string }
+  | { kind: 'search'; q: string }
+  | { kind: 'favorites' }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -29,7 +31,7 @@ function decode(s: string): string {
   }
 }
 
-/** "#/g/<id>?n=…&k=…", "#/a/<id>?n=…", "#/c/<id>", "#/v?p=…" — anything else is home. */
+/** "#/g/<id>?n=…&k=…", "#/a/<id>?n=…", "#/c/<id>", "#/s?q=…", "#/f", "#/v?p=…" — anything else is home. */
 export function parseHash(hash: string): Route {
   const raw = hash.startsWith('#') ? hash.slice(1) : hash
   const q = raw.indexOf('?')
@@ -44,6 +46,8 @@ export function parseHash(hash: string): Route {
       return { kind: 'group', id, name: qs.get('n') ?? '', noun: qs.get('k') ?? '歌手' }
     return { kind: 'artist', id, name: qs.get('n') ?? '' }
   }
+  if (path === '/s') return { kind: 'search', q: qs.get('q') ?? '' }
+  if (path === '/f') return { kind: 'favorites' }
   if (path === '/v') {
     return {
       kind: 'viewer',
@@ -56,6 +60,13 @@ export function parseHash(hash: string): Route {
   }
   return { kind: 'home' }
 }
+
+/** 搜索谱, optionally with a query. */
+export function hrefSearch(q = ''): string {
+  return q ? `#/s?q=${enc(q)}` : '#/s'
+}
+
+export const HREF_FAVORITES = '#/f'
 
 export function hrefCategory(id: string): string {
   return `#/c/${enc(id)}`

@@ -1,16 +1,19 @@
 import type { ReactNode } from 'react'
 import type { ScoreFormat, SearchMatch } from '@/songs/scoreLibraryTypes'
 import { FORMAT_BADGE, MATCH_LABEL } from '../lib/format'
-import { buttonClass, cx, PAGE_SIZE, PANEL } from '../lib/classes'
+import { buttonClass, cx, PAGE_SIZE } from '../lib/classes'
 import { goBack } from '../lib/route'
+import { Link } from './Link'
 
-export function FormatBadge({ format }: { format: ScoreFormat }) {
+/** A format chip: plain bordered mono, as printed on a score's label. */
+export function FormatBadge({ format, className }: { format: ScoreFormat; className?: string }) {
   const badge = FORMAT_BADGE[format]
   return (
     <span
       className={cx(
-        'inline-flex shrink-0 items-center rounded-md border px-1.5 py-0.5 text-[11px] font-medium',
+        'mono inline-flex shrink-0 items-center justify-center rounded-[3px] border px-1 py-px text-[11px] leading-5',
         badge.className,
+        className,
       )}
     >
       {badge.label}
@@ -18,63 +21,140 @@ export function FormatBadge({ format }: { format: ScoreFormat }) {
   )
 }
 
+/** How a search hit matched (拼音 / 首字母 / 繁简 / 相近); a plain name match shows none. */
 export function MatchTag({ match }: { match: SearchMatch }) {
   const label = MATCH_LABEL[match]
   if (!label) return null
   return (
-    <span className="inline-flex shrink-0 items-center rounded-full bg-primary/10 px-2 text-[11px] text-primary">
+    <span className="ml-2 inline-flex shrink-0 items-center rounded-full border border-primary px-1.5 text-[11px] leading-5 text-primary">
       {label}
     </span>
   )
 }
 
-export function BackButton({ fallback }: { fallback: string }) {
+/** 「← 目录」: a text back link; the phone's back gesture when the app made the entry. */
+export function BackLink({ label, fallback }: { label: string; fallback: string }) {
   return (
     <button
       type="button"
-      aria-label="返回"
       onClick={() => goBack(fallback)}
-      className="grid h-11 w-11 shrink-0 place-items-center rounded-full text-3xl leading-none text-muted-foreground transition-colors hover:bg-accent hover:text-foreground active:scale-[0.96]"
+      className="-ml-1 inline-flex min-h-11 items-center self-start px-1 text-sm text-muted-foreground transition-colors hover:text-primary"
     >
-      <span aria-hidden className="-translate-y-0.5">
-        ‹
-      </span>
+      {label}
     </button>
   )
 }
 
-/** Page header: back button, serif title, mono subtitle, then a string-thin rule with a brass nut. */
+/**
+ * Page head, as on a printed contents page: a back link, a heavy title and a
+ * mono note, with optional tools on the right. The staff rule follows it.
+ */
 export function PageBar({
   title,
   subtitle,
   fallback,
+  back = '← 返回',
+  children,
 }: {
   title: string
   subtitle?: string
   fallback: string
+  back?: string
+  children?: ReactNode
 }) {
   return (
-    <header className="pb-4 pt-2">
-      <div className="-ml-2 flex items-start gap-2">
-        <BackButton fallback={fallback} />
-        <div className="min-w-0 flex-1 pt-1.5">
-          <h1 className="break-words font-display text-3xl font-black leading-tight">{title}</h1>
-          {subtitle && (
-            <p className="mono mt-1.5 break-words text-xs text-muted-foreground">{subtitle}</p>
-          )}
-        </div>
+    <header className="flex flex-wrap items-end gap-x-4 gap-y-2 pb-[18px] pt-9">
+      <div className="min-w-0 flex-1 basis-64">
+        <BackLink label={back} fallback={fallback} />
+        <h1 className="m-0 break-words font-display text-[clamp(36px,7vw,64px)] font-black leading-none tracking-[-0.01em]">
+          {title}
+        </h1>
       </div>
-      <div aria-hidden className="relative mt-4 h-[3px]">
-        <span className="absolute inset-x-0 top-1/2 h-px -translate-y-1/2 bg-border" />
-        <span className="absolute left-0 top-0 h-[3px] w-12 rounded-full bg-primary" />
-      </div>
+      {subtitle && <p className="mono pb-1.5 text-xs text-muted-foreground">{subtitle}</p>}
+      {children && <div className="flex items-center gap-1.5 pb-1">{children}</div>}
     </header>
+  )
+}
+
+/** The page's divider: six hairlines. */
+export function Staff() {
+  return <div className="staff" aria-hidden />
+}
+
+/** A two-to-four item segmented control (按拼音 / 按数量, 按收藏时间 / 按歌手). */
+export function Seg<T extends string>({
+  label,
+  value,
+  options,
+  onChange,
+}: {
+  label: string
+  value: T
+  options: ReadonlyArray<readonly [T, string]>
+  onChange: (v: T) => void
+}) {
+  return (
+    <div
+      role="group"
+      aria-label={label}
+      className="inline-flex overflow-hidden rounded-lg border border-border"
+    >
+      {options.map(([v, text]) => (
+        <button
+          key={v}
+          type="button"
+          aria-pressed={value === v}
+          onClick={() => onChange(v)}
+          className={cx(
+            'min-h-11 px-3 text-[13px] transition-colors',
+            value === v
+              ? 'bg-foreground text-background'
+              : 'text-muted-foreground hover:text-foreground',
+          )}
+        >
+          {text}
+        </button>
+      ))}
+    </div>
+  )
+}
+
+/** A contents-style line for a score: title over artist, format on the right. */
+export function ScoreLine({
+  title,
+  artist,
+  format,
+  href,
+  action,
+}: {
+  title: string
+  artist: string
+  format: ScoreFormat
+  href: string
+  action?: ReactNode
+}) {
+  return (
+    <div className="flex items-center gap-2 border-t border-border py-1.5 first:border-t-0">
+      <Link
+        href={href}
+        className="group grid min-h-11 min-w-0 flex-1 grid-cols-[minmax(0,1fr)_auto] items-baseline gap-2.5 py-1.5"
+      >
+        <span className="min-w-0">
+          <span className="block truncate text-base font-bold transition-colors group-hover:text-primary">
+            {title || '未识别的曲名'}
+          </span>
+          <span className="block truncate text-xs text-muted-foreground">{artist || ' '}</span>
+        </span>
+        <span className="mono text-[11px] text-muted-foreground">{FORMAT_BADGE[format].label}</span>
+      </Link>
+      {action}
+    </div>
   )
 }
 
 export function LoadMore({ remaining, onMore }: { remaining: number; onMore: () => void }) {
   return (
-    <div className="flex pt-3">
+    <div className="flex pt-4">
       <button
         type="button"
         onClick={onMore}
@@ -97,9 +177,10 @@ export function Notice({
     <div
       role={tone === 'error' ? 'alert' : 'status'}
       className={cx(
-        PANEL,
-        'p-4 text-sm leading-relaxed',
-        tone === 'error' ? 'border-destructive/50 text-destructive' : 'text-muted-foreground',
+        'rounded-lg border p-4 text-sm leading-relaxed',
+        tone === 'error'
+          ? 'border-destructive text-destructive'
+          : 'border-dashed border-border text-muted-foreground',
       )}
     >
       {children}

@@ -2,7 +2,7 @@ import { api } from '../lib/api'
 import { useLoad } from '../lib/useLoad'
 import { Notice } from '../components/ui'
 
-/** Chord / tab text: monospace on paper, scrolling sideways rather than wrapping (the columns matter). */
+/** Chord / tab text: monospace on the sheet, scrolling sideways rather than wrapping (the columns matter). */
 export function TextViewer({ path }: { path: string }) {
   const state = useLoad((signal) => api.text(path, signal).then((r) => r.text), `text\n${path}`)
 
@@ -13,8 +13,8 @@ export function TextViewer({ path }: { path: string }) {
   if (!state.data.trim()) return <Notice>这个文件是空的。</Notice>
 
   return (
-    <div className="paper overflow-hidden">
-      <pre className="max-h-[75vh] overflow-auto whitespace-pre p-4 font-mono text-[13px] leading-relaxed">
+    <div className="sheet -mx-4 pb-24 sm:mx-0 sm:rounded-2xl">
+      <pre className="max-h-[80vh] overflow-auto whitespace-pre px-4 py-6 font-mono text-[13px] leading-relaxed">
         {state.data}
       </pre>
     </div>

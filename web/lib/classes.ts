@@ -5,28 +5,23 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
   return parts.filter(Boolean).join(' ')
 }
 
+/** Flat buttons: no shadows, the pen (primary) for the one main action. */
 const BUTTON_BASE =
-  'inline-flex min-h-11 items-center justify-center gap-2 rounded-xl px-4 text-sm font-medium transition-[background-color,border-color,color,transform] active:scale-[0.98] disabled:cursor-not-allowed disabled:opacity-50'
+  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors active:opacity-80 disabled:cursor-not-allowed disabled:opacity-50'
 
 const BUTTON_KIND = {
-  primary: 'bg-primary text-primary-foreground shadow-[var(--shadow-soft)] hover:bg-primary-strong',
-  outline: 'border border-border bg-card/70 text-foreground hover:border-primary/50 hover:bg-accent',
-  ghost: 'text-muted-foreground hover:bg-accent hover:text-foreground',
+  primary: 'bg-primary text-primary-foreground hover:bg-primary-strong',
+  outline: 'border border-border text-foreground hover:border-foreground',
+  ghost: 'text-muted-foreground hover:bg-card hover:text-foreground',
 } as const
 
 export function buttonClass(kind: keyof typeof BUTTON_KIND = 'outline'): string {
   return cx(BUTTON_BASE, BUTTON_KIND[kind])
 }
 
-export const PANEL = 'rounded-2xl border border-border/70 bg-card shadow-[var(--shadow-soft)]'
+/** A plain bordered block (the viewer's panels). */
+export const PANEL = 'rounded-lg border border-border bg-card'
 
-/** A list on one card: rows split by string-thin hairlines instead of a card per row. */
-export const LIST_PANEL =
-  'overflow-hidden rounded-2xl border border-border/70 bg-card shadow-[var(--shadow-soft)] divide-y divide-border/60'
-
-/** A row inside LIST_PANEL that opens something (brass pluck mark on press). */
-export const ROW =
-  'pluck flex min-h-14 items-center gap-3 px-4 py-3 transition-colors hover:bg-accent/60 active:bg-accent'
-
+/** A select in the songbook look: a hairline box, no shadow. */
 export const SELECT =
-  'h-11 rounded-xl border border-border bg-card px-3 text-sm text-foreground focus:border-primary'
+  'h-11 rounded-lg border border-border bg-transparent px-3 text-sm text-foreground focus:border-primary'

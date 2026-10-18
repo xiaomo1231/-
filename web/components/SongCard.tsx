@@ -1,43 +1,72 @@
-import type { ReactNode } from 'react'
 import type { ScoreSong, ScoreVersion } from '@/songs/scoreLibraryTypes'
-import { cx, PANEL, ROW } from '../lib/classes'
+import { cx } from '../lib/classes'
 import { formatSize } from '../lib/format'
 import { hrefViewer } from '../lib/route'
 import { Link } from './Link'
 import { FormatBadge } from './ui'
 
-/** A song and its versions: each version row opens in the viewer. */
+/**
+ * One song in an artist's list: a title row that opens its versions inline
+ * (a pen-blue rule on the left), each with a favourite star and 「看谱 →」.
+ */
 export function SongCard({
   song,
   artistName,
-  subtitle,
+  open,
+  onToggle,
+  isStarred,
+  busyPath,
+  onStar,
 }: {
   song: ScoreSong
   artistName: string
-  subtitle?: ReactNode
+  open: boolean
+  onToggle: () => void
+  isStarred: (path: string) => boolean
+  /** The version whose favourite is being saved, if any. */
+  busyPath: string | null
+  onStar: (song: ScoreSong, version: ScoreVersion) => void
 }) {
   const title = song.unknownTitle ? '未识别的曲名' : song.title
   return (
-    <article className={cx(PANEL, 'p-0')}>
-      <header className="p-4">
-        <div className="flex items-baseline justify-between gap-3">
-          <h3 className="min-w-0 break-words font-display text-xl font-black leading-snug">
-            {title}
-          </h3>
-          <span className="mono shrink-0 text-xs text-muted-foreground">
-            {song.versions.length} 个版本
-          </span>
-        </div>
-        {subtitle && <div className="mt-1 text-xs text-muted-foreground">{subtitle}</div>}
-      </header>
-      <ul className="divide-y divide-border/60 border-t border-border/60">
-        {song.versions.map((v) => (
-          <li key={v.file.path}>
-            <VersionRow song={song} version={v} artistName={artistName} />
-          </li>
-        ))}
-      </ul>
-    </article>
+    <li className="border-b border-border">
+      <button
+        type="button"
+        aria-expanded={open}
+        onClick={onToggle}
+        className="grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3.5 py-3.5 text-left"
+      >
+        <span className="min-w-0 break-words font-display text-[21px] font-black leading-snug">
+          {title}
+        </span>
+        <span className="mono text-xs text-muted-foreground">{song.versions.length} 个版本</span>
+        <span
+          aria-hidden
+          className={cx(
+            'text-lg text-muted-foreground transition-transform duration-200 motion-reduce:transition-none',
+            open && 'rotate-90',
+          )}
+        >
+          ›
+        </span>
+      </button>
+
+      {open && (
+        <ul className="mb-3.5 list-none border-l-2 border-primary pl-[18px]">
+          {song.versions.map((v) => (
+            <VersionRow
+              key={v.file.path}
+              song={song}
+              version={v}
+              artistName={artistName}
+              starred={isStarred(v.file.path)}
+              busy={busyPath === v.file.path}
+              onStar={onStar}
+            />
+          ))}
+        </ul>
+      )}
+    </li>
   )
 }
 
@@ -45,12 +74,17 @@ function VersionRow({
   song,
   version,
   artistName,
+  starred,
+  busy,
+  onStar,
 }: {
   song: ScoreSong
   version: ScoreVersion
   artistName: string
+  starred: boolean
+  busy: boolean
+  onStar: (song: ScoreSong, version: ScoreVersion) => void
 }) {
-  const pages = version.pages?.length ?? 0
   const href = hrefViewer({
     path: version.file.path,
     format: version.file.format,
@@ -59,30 +93,41 @@ function VersionRow({
     artist: artistName,
   })
   return (
-    <Link href={href} className={cx(ROW, 'px-4')}>
-      <FormatBadge format={version.file.format} />
-      <span className="min-w-0 flex-1">
-        <span className="block truncate text-sm">{version.label}</span>
+    <li className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 py-1.5 min-[861px]:grid-cols-[56px_minmax(0,1fr)_auto_auto]">
+      <FormatBadge format={version.file.format} className="w-[52px]" />
+      <span className="min-w-0 truncate text-sm">
+        {version.label}
         {version.tags.length > 0 && (
-          <span className="mt-1 flex flex-wrap gap-1">
-            {version.tags.map((t) => (
-              <span
-                key={t}
-                className="rounded-full border border-border px-2 text-[11px] leading-5 text-muted-foreground"
-              >
-                {t}
-              </span>
-            ))}
-          </span>
+          <em className="ml-2 text-xs not-italic text-muted-foreground">
+            {version.tags.join(' · ')}
+          </em>
         )}
       </span>
-      <span className="mono shrink-0 text-right text-xs text-muted-foreground">
-        <span className="block">{formatSize(version.size)}</span>
-        {pages > 1 && <span className="block">{pages} 页</span>}
+      <span className="mono hidden text-[11px] text-muted-foreground min-[861px]:block">
+        {formatSize(version.size)}
       </span>
-      <span aria-hidden className="shrink-0 text-xl text-muted-foreground">
-        ›
+      <span className="flex items-center gap-1">
+        <button
+          type="button"
+          aria-pressed={starred}
+          aria-label={starred ? '取消收藏' : '收藏'}
+          title={starred ? '取消收藏' : '收藏'}
+          disabled={busy}
+          onClick={() => onStar(song, version)}
+          className={cx(
+            'grid h-11 w-11 place-items-center rounded-lg text-base transition-colors disabled:opacity-50 min-[861px]:h-8 min-[861px]:w-8',
+            starred ? 'text-primary' : 'text-muted-foreground hover:text-primary',
+          )}
+        >
+          <span aria-hidden>{starred ? '★' : '☆'}</span>
+        </button>
+        <Link
+          href={href}
+          className="inline-flex min-h-11 items-center px-1.5 text-[13px] text-primary"
+        >
+          看谱 →
+        </Link>
       </span>
-    </Link>
+    </li>
   )
 }

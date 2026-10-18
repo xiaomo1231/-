@@ -1,62 +1,99 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
+import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
 import { errorText, fetchBytes, fileUrl } from '../lib/api'
-import { SELECT, buttonClass, cx } from '../lib/classes'
-import { clampTranspose, transposeLabel, TRANSPOSE_MAX, TRANSPOSE_MIN } from '../lib/transpose'
+import { clampTranspose } from '../lib/transpose'
+import { cx } from '../lib/classes'
 import { Notice } from '../components/ui'
+import { alphaTabUrls, applyTranspose, chooseEncoding, cleanHeader, loadAlphaTab } from './alphaTab'
 import {
-  alphaTabUrls,
-  applyTranspose,
-  chooseEncoding,
-  cleanHeader,
-  loadAlphaTab,
-  paperResources,
-  type AlphaTab,
-} from './alphaTab'
+  effectiveScale,
+  isPhone,
+  loadPrefs,
+  savePrefs,
+  SPEED_MAX,
+  SPEED_MIN,
+  sheetResources,
+  staveProfileOf,
+  type ScorePrefs,
+  type StaffMode,
+  type SheetMode,
+} from './scorePrefs'
+import { Remote, useStar, type PopKind } from './Remote'
 
-export type StaffMode = 'ScoreTab' | 'Tab' | 'Score'
-
-const STAFF_OPTIONS: Array<{ value: StaffMode; label: string }> = [
-  { value: 'Tab', label: '六线谱' },
-  { value: 'ScoreTab', label: '五线谱 + 六线谱' },
-  { value: 'Score', label: '五线谱' },
-]
-const SPEEDS = [0.5, 0.75, 1, 1.25]
 /** After this long without a score, say the file is slow to read. */
 const SLOW_MS = 20000
+/** Playback needs the sound font; after this long without it, the playback keys are hidden. */
+const SOUND_WAIT_MS = 60000
 
-const isNarrow = () => window.matchMedia('(max-width: 767px)').matches
-
-const staveProfileOf = (at: AlphaTab, staff: StaffMode): number =>
-  (at.StaveProfile as unknown as Record<StaffMode, number>)[staff] ?? 0
+/** The sheet's own colours: the cursor, the selection and the highlight follow the pen blue. */
+const SHEET_CSS = `
+.score-sheet .at-surface .at-cursor-beat { background: var(--sheet-pen); width: 3px; }
+.score-sheet .at-surface .at-cursor-bar { background: color-mix(in srgb, var(--sheet-pen) 12%, transparent); }
+.score-sheet .at-surface .at-selection div { background: color-mix(in srgb, var(--sheet-pen) 22%, transparent); }
+.score-sheet .at-surface .at-highlight * { fill: var(--sheet-pen); stroke: var(--sheet-pen); }
+.score-sheet .at-surface { min-height: 12rem; }
+`
 
 type Phase = 'loading' | 'ready' | 'error'
 
+interface Props {
+  path: string
+  title: string
+  artist: string
+  pages: string[]
+}
+
+/** Loop range for the current choices: the user's selection, or the whole piece when none. */
+function syncLoop(a: AlphaTabApi, loop: boolean, hasSelection: boolean): void {
+  if (!loop) {
+    a.playbackRange = null
+    a.isLooping = false
+    return
+  }
+  if (hasSelection) a.applyPlaybackRangeFromHighlight()
+  else a.playbackRange = null
+  a.isLooping = true
+}
+
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
-export function ScoreViewer({ path }: { path: string }) {
+export function ScoreViewer({ path, title, artist, pages }: Props) {
   const host = useRef<HTMLDivElement>(null)
-  const scroller = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
   const [message, setMessage] = useState('')
   const [slow, setSlow] = useState(false)
   const [score, setScore] = useState<model.Score | null>(null)
+  const [prefs, setPrefs] = useState<ScorePrefs>(loadPrefs)
   const [track, setTrack] = useState(0)
-  const [staff, setStaff] = useState<StaffMode>(() => (isNarrow() ? 'Tab' : 'ScoreTab'))
   const [transpose, setTranspose] = useState(0)
-  const [playerReady, setPlayerReady] = useState(false)
+  const [ready, setReady] = useState(false)
+  const [soundFailed, setSoundFailed] = useState(false)
+  const [soundPct, setSoundPct] = useState(0)
   const [playing, setPlaying] = useState(false)
   const [rendering, setRendering] = useState(false)
-  const [speed, setSpeed] = useState(1)
-  /** Phones only: the settings sheet above the bar. Wide screens always show them. */
-  const [sheet, setSheet] = useState(false)
+  const [speedPct, setSpeedPct] = useState(100)
+  const [loop, setLoop] = useState(false)
+  const [hasSelection, setHasSelection] = useState(false)
+  const [countIn, setCountIn] = useState(true)
+  const [metro, setMetro] = useState(false)
+  const [solo, setSolo] = useState<Set<number>>(new Set())
+  const [mute, setMute] = useState<Set<number>>(new Set())
+  const [pop, setPop] = useState<PopKind | null>(null)
+  const [collapsed, setCollapsed] = useState(false)
+  const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
+  const star = useStar({
+    path,
+    format: 'score' as ScoreFormat,
+    pages,
+    title,
+    artist,
+  })
 
-  // Event handlers see the latest values without being re-subscribed.
-  const staffRef = useRef(staff)
-  staffRef.current = staff
-  const transposeRef = useRef(transpose)
-  transposeRef.current = transpose
-  const moved = useRef(false)
+  // alphaTab callbacks and key handling read the latest values from here.
+  const live = useRef({ prefs, transpose, loop, hasSelection, countIn, metro, speedPct })
+  live.current = { prefs, transpose, loop, hasSelection, countIn, metro, speedPct }
+  const selRef = useRef(false)
 
   useEffect(() => {
     if (phase !== 'loading') return
@@ -68,42 +105,81 @@ export function ScoreViewer({ path }: { path: string }) {
   useEffect(() => {
     const ac = new AbortController()
     let disposed = false
+    let soundTimer: number | undefined
+    const playerReadyRef = { current: false }
     const run = async () => {
       try {
+        const urls = alphaTabUrls()
         const [bytes, at] = await Promise.all([
           fetchBytes(fileUrl(path), ac.signal),
           loadAlphaTab(),
         ])
-        if (disposed || !host.current || !scroller.current) return
-        const urls = alphaTabUrls()
+        if (disposed || !host.current) return
+        const cur = live.current
         const a = new at.AlphaTabApi(host.current, {
           core: { scriptFile: urls.script, fontDirectory: urls.fonts, useWorkers: true },
           importer: { encoding: chooseEncoding(at, bytes) },
           display: {
-            staveProfile: staveProfileOf(at, staffRef.current),
-            scale: 1,
-            resources: paperResources(),
+            staveProfile: staveProfileOf(at, cur.prefs.staff),
+            scale: effectiveScale(cur.prefs),
+            layoutMode: at.LayoutMode.Page,
+            resources: sheetResources(cur.prefs.sheet),
           },
+          // The "Words & Music by …" line is wider than a phone screen.
+          ...(isPhone() ? { notation: { elements: { scoreWordsAndMusic: false } } } : {}),
           player: {
             playerMode: at.PlayerMode.EnabledSynthesizer,
             soundFont: urls.soundFont,
-            scrollElement: scroller.current,
+            scrollElement: (document.scrollingElement ?? document.documentElement) as HTMLElement,
+            scrollMode: at.ScrollMode.Continuous,
             enableCursor: true,
             enableUserInteraction: true,
-            scrollOffsetY: -30,
+            // The row being played sits about a third of the way down the page.
+            scrollOffsetY: -Math.round(window.innerHeight / 3),
           },
         } as never)
         api.current = a
+        a.countInVolume = cur.countIn ? 1 : 0
+        a.metronomeVolume = cur.metro ? 1 : 0
+        a.playbackSpeed = cur.speedPct / 100
         a.scoreLoaded.on((s) => {
           cleanHeader(s)
-          if (transposeRef.current) applyTranspose(a, s, transposeRef.current)
+          if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
           setPhase('ready')
+          // No sound font after a while: keep the notation, hide the playback keys.
+          window.clearTimeout(soundTimer)
+          soundTimer = window.setTimeout(() => {
+            if (!disposed && !playerReadyRef.current) setSoundFailed(true)
+          }, SOUND_WAIT_MS)
         })
         a.renderStarted.on(() => setRendering(true))
         a.renderFinished.on(() => setRendering(false))
-        a.playerReady.on(() => setPlayerReady(true))
+        a.soundFontLoad.on((e) => setSoundPct(Math.round((e.loaded / Math.max(1, e.total)) * 100)))
+        a.playerReady.on(() => {
+          playerReadyRef.current = true
+          setSoundFailed(false)
+          setReady(true)
+        })
         a.playerStateChanged.on((e) => setPlaying(e.state === 1))
+        a.playerPositionChanged.on((e) =>
+          setTime({ now: e.currentTime, end: e.endTime, tick: e.currentTick }),
+        )
+        // Setting the playback range fires this event again: apply it once, and only while
+        // looping (otherwise just remember the selection, so dragging never clears itself).
+        let applying = false
+        a.playbackRangeHighlightChanged.on((e) => {
+          const sel = Boolean(e.startBeat && e.endBeat)
+          selRef.current = sel
+          setHasSelection(sel)
+          if (applying || !live.current.loop) return
+          applying = true
+          try {
+            syncLoop(a, true, sel)
+          } finally {
+            applying = false
+          }
+        })
         if (!a.load(bytes, [0])) {
           setMessage('这个文件没能显示出来。可以下载后用电脑上的 Guitar Pro 打开。')
           setPhase('error')
@@ -119,33 +195,36 @@ export function ScoreViewer({ path }: { path: string }) {
     return () => {
       disposed = true
       ac.abort()
+      window.clearTimeout(soundTimer)
       api.current?.destroy()
       api.current = null
     }
   }, [path])
 
-  // Track switch.
+  // Track shown on the sheet.
   useEffect(() => {
     const a = api.current
     const t = score?.tracks[track]
     if (a && t) a.renderTracks([t])
   }, [track, score])
 
-  // Notation mode.
+  // Notation and sheet: staff profile, zoom and colours (one re-render for all three).
   useEffect(() => {
     const a = api.current
     const at = window.alphaTab
     if (!a || !score || !at) return
-    a.settings.display.staveProfile = staveProfileOf(at, staff) as never
+    a.settings.display.staveProfile = staveProfileOf(at, prefs.staff) as never
+    a.settings.display.scale = effectiveScale(prefs)
+    a.settings.fillFromJson({ display: { resources: sheetResources(prefs.sheet) } } as never)
     a.updateSettings()
     a.render()
-  }, [staff, score])
+    savePrefs(prefs)
+  }, [prefs, score])
 
-  // 变调: applied to the staves and the playback; the first load already handled a non-zero value.
+  // 变调: applied to the staves and the playback; the file's own transposition is kept aside.
   useEffect(() => {
     const a = api.current
-    if (!a || !score || (transpose === 0 && !moved.current)) return
-    moved.current = transpose !== 0
+    if (!a || !score) return
     applyTranspose(a, score, transpose)
     a.updateSettings()
     a.render()
@@ -153,159 +232,152 @@ export function ScoreViewer({ path }: { path: string }) {
   }, [transpose, score])
 
   useEffect(() => {
-    if (api.current) api.current.playbackSpeed = speed
-  }, [speed])
+    if (api.current) api.current.playbackSpeed = speedPct / 100
+  }, [speedPct])
+  useEffect(() => {
+    if (api.current) api.current.countInVolume = countIn ? 1 : 0
+  }, [countIn])
+  useEffect(() => {
+    if (api.current) api.current.metronomeVolume = metro ? 1 : 0
+  }, [metro])
+  useEffect(() => {
+    if (api.current && score) syncLoop(api.current, loop, selRef.current)
+  }, [loop, score])
 
+  // Solo / mute for the tracks: alphaTab keeps these per track.
+  const toggleSolo = (i: number) => {
+    const a = api.current
+    const t = score?.tracks[i]
+    if (!a || !t) return
+    const on = !solo.has(i)
+    a.changeTrackSolo([t], on)
+    setSolo((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(i)
+      else next.delete(i)
+      return next
+    })
+  }
+  const toggleMute = (i: number) => {
+    const a = api.current
+    const t = score?.tracks[i]
+    if (!a || !t) return
+    const on = !mute.has(i)
+    a.changeTrackMute([t], on)
+    setMute((prev) => {
+      const next = new Set(prev)
+      if (on) next.add(i)
+      else next.delete(i)
+      return next
+    })
+  }
+
+  // Playback keys.
+  const playable = ready && !soundFailed
+  const togglePlay = () => {
+    if (playable) api.current?.playPause()
+  }
+  const backToStart = () => {
+    const a = api.current
+    if (!a || !playable) return
+    const start = a.playbackRange?.startTick ?? 0
+    a.stop()
+    a.tickPosition = start
+  }
+  const setSpeed = (pct: number) =>
+    setSpeedPct(Math.max(SPEED_MIN, Math.min(SPEED_MAX, Math.round(pct))))
   const shift = (d: number) => setTranspose((t) => clampTranspose(t + d))
+  const openPop = (k: PopKind) => {
+    setCollapsed(false)
+    setPop((cur) => (cur === k ? null : k))
+  }
+
+  // Keyboard: on the viewer only, never while typing.
+  const keyRef = useRef<(e: KeyboardEvent) => void>(() => {})
+  keyRef.current = (e: KeyboardEvent) => {
+    if (e.metaKey || e.ctrlKey || e.altKey) return
+    const target = e.target as HTMLElement | null
+    if (target?.closest('input, select, textarea, [contenteditable="true"]')) return
+    if (e.key === 'Escape') {
+      if (pop) {
+        setPop(null)
+        e.preventDefault()
+      }
+      return
+    }
+    if (!score) return
+    const k = e.key.length === 1 ? e.key.toLowerCase() : e.key
+    let handled = true
+    if (k === ' ' || k === 'Spacebar') togglePlay()
+    else if (k === 'Backspace') backToStart()
+    else if (k === 'l') setLoop((v) => !v)
+    else if (k === 's') openPop('speed')
+    else if (k === 't') openPop('tracks')
+    else if (k === 'k') openPop('key')
+    else if (k === 'c') setCountIn((v) => !v)
+    else if (k === 'm') toggleMute(track)
+    else if (k === 'f') void star.toggle()
+    else handled = false
+    if (handled) e.preventDefault()
+  }
+  // A click anywhere outside the remote closes its popover.
+  useEffect(() => {
+    if (!pop) return
+    const onDown = (e: PointerEvent) => {
+      if (!(e.target as HTMLElement | null)?.closest('.gl-remote')) setPop(null)
+    }
+    document.addEventListener('pointerdown', onDown)
+    return () => document.removeEventListener('pointerdown', onDown)
+  }, [pop])
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => keyRef.current(e)
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [])
+
   const tracks = score?.tracks ?? []
-  // Playback controls appear only once the soundfont has loaded (no soundfont = notation only).
-  const showPlayer = playerReady
-  const ready = phase === 'ready'
+  const masterBars = score?.masterBars ?? []
+  let bar = 0
+  for (let i = 0; i < masterBars.length; i++) {
+    if ((masterBars[i]?.start ?? 0) <= time.tick) bar = i + 1
+    else break
+  }
+  const loaded = phase === 'ready'
+  const sound: 'loading' | 'ready' | 'off' = soundFailed ? 'off' : ready ? 'ready' : 'loading'
 
   return (
-    <div className={cx('space-y-3', ready && 'pb-32 sm:pb-0')}>
-      {ready && (
-        <div
-          className={cx(
-            // phones: a bar fixed to the bottom; wide screens: one row above the score
-            'fixed inset-x-0 bottom-0 z-40 flex flex-col rounded-t-2xl border-t border-border bg-card/95 px-4 pt-3 shadow-[var(--shadow-lift)] backdrop-blur',
-            'sm:static sm:z-auto sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:rounded-2xl sm:border sm:bg-card sm:px-3 sm:pt-3 sm:shadow-[var(--shadow-soft)] sm:backdrop-blur-none',
-          )}
-          style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}
-        >
-          <div
-            className={cx(
-              'order-1 flex-col gap-3 pb-3 sm:order-2 sm:flex sm:flex-row sm:flex-wrap sm:items-center sm:gap-3 sm:pb-0',
-              sheet ? 'flex' : 'hidden',
-            )}
-          >
-            {tracks.length > 1 && (
-              <label className="flex items-center justify-between gap-3 text-sm sm:justify-start">
-                <span className="text-muted-foreground">音轨</span>
-                <select
-                  className={SELECT + ' min-w-0 max-w-56'}
-                  value={track}
-                  onChange={(e) => setTrack(Number(e.target.value))}
-                >
-                  {tracks.map((t, i) => (
-                    <option key={i} value={i}>
-                      {t.name.trim() || `音轨 ${i + 1}`}
-                    </option>
-                  ))}
-                </select>
-              </label>
-            )}
-
-            <label className="flex items-center justify-between gap-3 text-sm sm:justify-start">
-              <span className="text-muted-foreground">谱面</span>
-              <select
-                className={SELECT}
-                value={staff}
-                onChange={(e) => setStaff(e.target.value as StaffMode)}
-              >
-                {STAFF_OPTIONS.map((o) => (
-                  <option key={o.value} value={o.value}>
-                    {o.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-
-            <div
-              className="flex items-center justify-between gap-3 text-sm sm:justify-start"
-              role="group"
-              aria-label="变调"
-            >
-              <span className="text-muted-foreground">变调</span>
-              <div className="flex items-center gap-1">
-                <button
-                  type="button"
-                  aria-label="降半音"
-                  onClick={() => shift(-1)}
-                  disabled={transpose <= TRANSPOSE_MIN}
-                  className={buttonClass('outline') + ' min-w-11 px-0'}
-                >
-                  −
-                </button>
-                <span className="mono min-w-14 text-center">{transposeLabel(transpose)}</span>
-                <button
-                  type="button"
-                  aria-label="升半音"
-                  onClick={() => shift(1)}
-                  disabled={transpose >= TRANSPOSE_MAX}
-                  className={buttonClass('outline') + ' min-w-11 px-0'}
-                >
-                  +
-                </button>
-              </div>
-            </div>
-          </div>
-
-          <div className="order-2 flex items-center gap-2 sm:order-1 sm:flex-wrap">
-            {showPlayer && (
-              <>
-                <button
-                  type="button"
-                  onClick={() => api.current?.playPause()}
-                  aria-label={playing ? '暂停' : '播放'}
-                  className="h-14 w-14 shrink-0 rounded-full bg-primary text-lg text-primary-foreground shadow-[var(--shadow-soft)] transition-[transform,background-color] hover:bg-primary-strong active:scale-95"
-                >
-                  <span aria-hidden>{playing ? '❚❚' : '▶'}</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => api.current?.stop()}
-                  aria-label="停止"
-                  className={buttonClass('outline') + ' min-w-11 px-0'}
-                >
-                  <span aria-hidden>■</span>
-                </button>
-                <select
-                  className={SELECT}
-                  aria-label="速度"
-                  value={speed}
-                  onChange={(e) => setSpeed(Number(e.target.value))}
-                >
-                  {SPEEDS.map((s) => (
-                    <option key={s} value={s}>
-                      {Math.round(s * 100)}%
-                    </option>
-                  ))}
-                </select>
-              </>
-            )}
-            <button
-              type="button"
-              aria-expanded={sheet}
-              onClick={() => setSheet((o) => !o)}
-              className={buttonClass('outline') + ' sm:hidden'}
-            >
-              设置
-            </button>
-          </div>
+    <div className="score-bleed">
+      <style>{SHEET_CSS}</style>
+      {phase === 'error' && (
+        <div className="px-4">
+          <Notice tone="error">{message}</Notice>
         </div>
       )}
-
-      {phase === 'error' && <Notice tone="error">{message}</Notice>}
-
       <div
         className={cx(
-          'paper relative overflow-hidden p-3 sm:p-4',
-          phase === 'loading' && 'min-h-60',
+          'score-sheet sheet relative',
+          prefs.sheet === 'paper' && 'sheet-paper',
           phase === 'error' && 'hidden',
         )}
+        style={{
+          minHeight: phase === 'loading' ? '60vh' : undefined,
+          paddingTop: 16,
+          paddingLeft: 'max(12px, env(safe-area-inset-left, 0px))',
+          paddingRight: 'max(12px, env(safe-area-inset-right, 0px))',
+          paddingBottom: loaded ? 'calc(230px + env(safe-area-inset-bottom, 0px))' : 16,
+        }}
       >
         {phase === 'loading' && (
           <div
             role="status"
-            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 text-[#8a7d6b]"
+            className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-4 text-[color:var(--sheet-dim)]"
           >
             <p className="text-sm">{slow ? '这个文件读得比较慢，请再等一等…' : '正在排谱…'}</p>
             <div aria-hidden className="flex gap-2">
               {[0, 1, 2].map((i) => (
                 <span
                   key={i}
-                  className="h-2 w-2 rounded-full bg-[#b9852f] motion-safe:animate-pulse"
+                  className="h-2 w-2 rounded-full bg-[color:var(--sheet-pen)] motion-safe:animate-pulse"
                   style={{ animationDelay: `${i * 180}ms` }}
                 />
               ))}
@@ -313,19 +385,61 @@ export function ScoreViewer({ path }: { path: string }) {
           </div>
         )}
         {rendering && (
-          <p className="pointer-events-none absolute right-3 top-2 z-10 text-xs text-[#8a7d6b]">
+          <p className="pointer-events-none absolute right-3 top-2 z-10 text-xs text-[color:var(--sheet-dim)]">
             正在排版…
           </p>
         )}
-        <div ref={scroller} className="at-surface relative max-h-[72vh] overflow-auto">
-          <div ref={host} />
-        </div>
+        <div ref={host} className="at-surface w-full" />
       </div>
 
-      {ready && (
-        <p className="text-xs text-muted-foreground">
-          变调只在这里生效，不会改动原文件。可以在谱面上点一下跳到某一处。
-        </p>
+      {loaded && score && (
+        <Remote
+          pop={pop}
+          onPop={setPop}
+          collapsed={collapsed}
+          onCollapsed={(c) => {
+            setCollapsed(c)
+            if (c) setPop(null)
+          }}
+          sound={sound}
+          soundPct={soundPct}
+          playing={playing}
+          onPlayPause={togglePlay}
+          onBackToStart={backToStart}
+          now={time.now}
+          end={time.end}
+          bar={bar}
+          bars={masterBars.length}
+          speedPct={speedPct}
+          onSpeedPct={setSpeed}
+          tempo={score.tempo ?? 0}
+          loop={loop}
+          onLoop={() => setLoop((v) => !v)}
+          hasSelection={hasSelection}
+          countIn={countIn}
+          onCountIn={() => setCountIn((v) => !v)}
+          metro={metro}
+          onMetro={() => setMetro((v) => !v)}
+          tracks={tracks.map((t, i) => t.name.trim() || `音轨 ${i + 1}`)}
+          track={track}
+          onShowTrack={setTrack}
+          solo={solo}
+          mute={mute}
+          onSolo={toggleSolo}
+          onMute={toggleMute}
+          transpose={transpose}
+          onTranspose={shift}
+          staff={prefs.staff}
+          onStaff={(s: StaffMode) => setPrefs((p) => ({ ...p, staff: s }))}
+          scale={effectiveScale(prefs)}
+          onScale={(z: number) => setPrefs((p) => ({ ...p, zoom: z }))}
+          sheet={prefs.sheet}
+          onSheet={(s: SheetMode) => setPrefs((p) => ({ ...p, sheet: s }))}
+          starred={star.starred}
+          onStar={() => void star.toggle()}
+          downloadHref={fileUrl(path, true)}
+          note={star.note}
+        />
       )}
     </div>
   )

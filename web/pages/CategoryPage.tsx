@@ -1,13 +1,9 @@
-import { cx, PANEL } from '../lib/classes'
 import { hrefGroup } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
 import { Link } from '../components/Link'
-import { Notice, PageBar } from '../components/ui'
+import { Notice, PageBar, Staff } from '../components/ui'
 
-/** Fret numbers of the inlays on a real neck: the group tiles take them in turn. */
-const INLAY_FRETS = [3, 5, 7, 9, 12, 15, 17, 19, 21, 24]
-
-/** A category with several groups (分组): tap one to see its artists. */
+/** A category with several groups (分组): the groups as contents rows; tap one for its artists. */
 export function CategoryPage({ id }: { id: string }) {
   const { info } = useLibrary()
   const category = info?.categories.find((c) => c.id === id)
@@ -15,70 +11,53 @@ export function CategoryPage({ id }: { id: string }) {
   if (!category) {
     return (
       <>
-        <PageBar title="分类" fallback="#/" />
-        <Notice>找不到这个分类。文件夹可能已经改过名字，回到首页重新看一下。</Notice>
+        <PageBar title="分类" back="← 目录" fallback="#/" />
+        <Staff />
+        <div className="py-6">
+          <Notice>找不到这个分类。文件夹可能已经改过名字，回到目录重新看一下。</Notice>
+        </div>
       </>
     )
   }
-
-  const most = Math.max(...category.groups.map((g) => g.files), 1)
 
   return (
     <>
       <PageBar
         title={category.name}
-        subtitle={`${category.groups.length} 个分组 · ${category.files.toLocaleString('zh-CN')} 个文件`}
+        back="← 目录"
         fallback="#/"
+        subtitle={`${category.groups.length} 个分组 · ${category.files.toLocaleString('zh-CN')} 份`}
       />
+      <Staff />
       {category.groups.length === 0 ? (
-        <Notice>这个分类里还没有内容。</Notice>
+        <div className="py-6">
+          <Notice>这个分类里还没有内容。</Notice>
+        </div>
       ) : (
-        <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-          {category.groups.map((g, i) => {
-            const fret = INLAY_FRETS[i % INLAY_FRETS.length]!
-            return (
-              <li key={g.id}>
-                <Link
-                  href={hrefGroup(g)}
-                  className={cx(
-                    PANEL,
-                    'pluck group flex h-full min-h-32 flex-col justify-between gap-3 p-4 transition-colors hover:border-primary/40',
-                  )}
-                >
-                  <span className="flex items-start justify-between gap-2">
-                    <span className="mono text-[11px] text-muted-foreground">
-                      {String(i + 1).padStart(2, '0')}
-                    </span>
-                    <span className="inlay" aria-hidden>
-                      <i />
-                      {fret % 12 === 0 && <i />}
-                    </span>
+        <ol className="m-0 mb-20 list-none p-0 pt-2">
+          {category.groups.map((g, i) => (
+            <li key={g.id} className="border-t border-border last:border-b">
+              <Link
+                href={hrefGroup(g)}
+                className="group grid min-h-11 grid-cols-[44px_minmax(0,auto)_minmax(1rem,1fr)_auto] items-baseline gap-2.5 py-3.5"
+              >
+                <span className="mono text-[13px] text-muted-foreground">
+                  {String(i + 1).padStart(2, '0')}
+                </span>
+                <span className="font-display text-[26px] font-black tracking-[0.01em] transition-colors group-hover:text-primary max-[860px]:text-[22px]">
+                  {g.name}
+                </span>
+                <span aria-hidden className="leader" />
+                <span className="mono text-[15px]">
+                  <span className="mr-2 text-xs text-muted-foreground">
+                    {g.artists.toLocaleString('zh-CN')} {g.noun}
                   </span>
-                  <span className="min-w-0">
-                    <span className="block break-words font-display text-xl font-black leading-tight">
-                      {g.name}
-                    </span>
-                    <span className="mono mt-1 block truncate text-xs text-muted-foreground">
-                      {g.artists.toLocaleString('zh-CN')} 位{g.noun}
-                    </span>
-                  </span>
-                  <span className="block">
-                    <span className="mono text-xs text-foreground/80">
-                      {g.files.toLocaleString('zh-CN')}
-                    </span>
-                    <span className="ml-1 text-[11px] text-muted-foreground">份</span>
-                    {/* how big the group is, as a string's length */}
-                    <span
-                      aria-hidden
-                      className="mt-2 block h-[2px] rounded-full bg-primary/70"
-                      style={{ width: `${Math.max(6, (g.files / most) * 100)}%` }}
-                    />
-                  </span>
-                </Link>
-              </li>
-            )
-          })}
-        </ul>
+                  {g.files.toLocaleString('zh-CN')}
+                </span>
+              </Link>
+            </li>
+          ))}
+        </ol>
       )}
     </>
   )

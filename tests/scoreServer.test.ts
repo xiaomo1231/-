@@ -18,6 +18,26 @@ import {
   resolveRealFile,
   verifySessionToken,
 } from '../server/util'
+import {
+  narrowIndex,
+  parseCatalogParams,
+  parseTopLimit,
+  rankByVersions,
+  sortResultSongs,
+  topSongs,
+} from '../server/catalog'
+import {
+  createSerialQueue,
+  inRootOf,
+  MAX_FAVORITES,
+  parseFavoriteInput,
+  parseFavoritePath,
+  removeFavorite,
+  sanitizeFavorites,
+  upsertFavorite,
+  type FavoriteItem,
+} from '../server/favorites'
+import { buildLibrary, buildSearchIndex, PLAIN_TOOLS, search } from '../src/songs/scoreLibrary'
 
 const SECRET = Buffer.from('a'.repeat(64), 'hex')
 
@@ -211,5 +231,224 @@ describe('small helpers', () => {
     })
     expect(out).toEqual([10, 20, 30, 40, 50, 60])
     expect(peak).toBeLessThanOrEqual(2)
+  })
+})
+
+describe('favourites (server/favorites.ts)', () => {
+  const root = path.resolve(os.tmpdir(), 'gl-root')
+  const inRoot = inRootOf(root)
+  const body = (over: Record<string, unknown> = {}) => ({
+    path: '1-华语/男歌手/周杰伦/七里香.gp5',
+    format: 'score',
+    pages: [],
+    title: '七里香',
+    artist: '周杰伦',
+    ...over,
+  })
+
+  it('accepts a valid favourite and stamps addedAt', () => {
+    const r = parseFavoriteInput(body({ pages: ['1-华语/a.png'], format: 'image' }), inRoot, 42)
+    expect(r).toEqual({
+      ok: true,
+      value: {
+        path: '1-华语/男歌手/周杰伦/七里香.gp5',
+        format: 'image',
+        pages: ['1-华语/a.png'],
+        title: '七里香',
+        artist: '周杰伦',
+        addedAt: 42,
+      },
+    })
+  })
+
+  it('rejects paths and pages outside the root', () => {
+    expect(parseFavoriteInput(body({ path: '../secret.gp5' }), inRoot, 0).ok).toBe(false)
+    expect(parseFavoriteInput(body({ path: '/etc/passwd' }), inRoot, 0).ok).toBe(false)
+    expect(parseFavoriteInput(body({ pages: ['../../x.png'] }), inRoot, 0).ok).toBe(false)
+    expect(parseFavoriteInput(body({ path: 5 }), inRoot, 0).ok).toBe(false)
+  })
+
+  it('rejects unknown formats, too many pages and over-long texts', () => {
+    expect(parseFavoriteInput(body({ format: 'exe' }), inRoot, 0).ok).toBe(false)
+    const many = Array.from({ length: 201 }, (_, i) => `1/${i}.png`)
+    expect(parseFavoriteInput(body({ pages: many }), inRoot, 0).ok).toBe(false)
+    expect(parseFavoriteInput(body({ title: 'a'.repeat(301) }), inRoot, 0).ok).toBe(false)
+    expect(parseFavoriteInput(body({ artist: 3 }), inRoot, 0).ok).toBe(false)
+    expect(parseFavoriteInput(body({ title: '七'.repeat(300) }), inRoot, 0).ok).toBe(true)
+  })
+
+  it('validates the remove body', () => {
+    expect(parseFavoritePath({ path: '1-华语/a.gp5' }, inRoot)).toEqual({
+      ok: true,
+      value: '1-华语/a.gp5',
+    })
+    expect(parseFavoritePath({ path: '../a.gp5' }, inRoot).ok).toBe(false)
+    expect(parseFavoritePath({}, inRoot).ok).toBe(false)
+  })
+
+  it('upserts by path to the front and removes by path', () => {
+    const item = (p: string, addedAt: number): FavoriteItem => ({
+      path: p,
+      format: 'score',
+      pages: [],
+      title: p,
+      artist: '',
+      addedAt,
+    })
+    let list = upsertFavorite([], item('a', 1))
+    list = upsertFavorite(list, item('b', 2))
+    list = upsertFavorite(list, item('a', 3))
+    expect(list.map((f) => [f.path, f.addedAt])).toEqual([
+      ['a', 3],
+      ['b', 2],
+    ])
+    expect(removeFavorite(list, 'a').map((f) => f.path)).toEqual(['b'])
+    expect(removeFavorite(list, 'zz')).toHaveLength(2)
+  })
+
+  it('caps the list at 2000 entries', () => {
+    let list: FavoriteItem[] = []
+    for (let i = 0; i < MAX_FAVORITES + 5; i++)
+      list = upsertFavorite(list, {
+        path: `p${i}`,
+        format: 'other',
+        pages: [],
+        title: '',
+        artist: '',
+        addedAt: i,
+      })
+    expect(list).toHaveLength(MAX_FAVORITES)
+    expect(list[0]!.path).toBe(`p${MAX_FAVORITES + 4}`)
+  })
+
+  it('drops invalid entries from a stored file', () => {
+    const kept = sanitizeFavorites(
+      [body({ addedAt: 5 }), body({ path: '../x.gp5', addedAt: 6 }), 'junk', null],
+      inRoot,
+    )
+    expect(kept.map((f) => f.addedAt)).toEqual([5])
+    expect(sanitizeFavorites({ not: 'array' }, inRoot)).toEqual([])
+  })
+
+  it('runs queued writes one at a time', async () => {
+    const queue = createSerialQueue()
+    const order: number[] = []
+    await Promise.all([
+      queue(async () => {
+        await new Promise((r) => setTimeout(r, 20))
+        order.push(1)
+      }),
+      queue(async () => {
+        order.push(2)
+      }),
+      queue(() => Promise.reject(new Error('boom'))).catch(() => {}),
+      queue(async () => {
+        order.push(3)
+      }),
+    ])
+    expect(order).toEqual([1, 2, 3])
+  })
+})
+
+describe('catalog filters (server/catalog.ts)', () => {
+  const files: Array<[string, number]> = [
+    ['1-华语/男歌手/周杰伦/七里香.gp5', 10],
+    ['1-华语/男歌手/周杰伦/七里香1.png', 10],
+    ['1-华语/男歌手/周杰伦/七里香2.png', 10],
+    ['1-华语/男歌手/周杰伦/晴天.gp5', 10],
+    ['2-欧美/流行摇滚/Queen/Queen - Bohemian Rhapsody.gp4', 10],
+    ['2-欧美/流行摇滚/Queen/Queen - Bohemian Rhapsody.pdf', 10],
+  ]
+  const lib = buildLibrary(files, PLAIN_TOOLS)
+  const index = buildSearchIndex(lib, PLAIN_TOOLS)
+
+  it('parses and validates query parameters', () => {
+    expect(parseCatalogParams(new URLSearchParams('')).ok).toBe(true)
+    expect(parseCatalogParams(new URLSearchParams('fmt=image&cat=1-华语&sort=ver'))).toEqual({
+      ok: true,
+      value: { fmt: 'image', cat: '1-华语', sort: 'ver' },
+    })
+    expect(parseCatalogParams(new URLSearchParams('fmt=exe')).ok).toBe(false)
+    expect(parseCatalogParams(new URLSearchParams('sort=random')).ok).toBe(false)
+    expect(parseCatalogParams(new URLSearchParams('cat=1/../2')).ok).toBe(false)
+  })
+
+  it('clamps the top limit', () => {
+    expect(parseTopLimit(null)).toBe(50)
+    expect(parseTopLimit('')).toBe(50)
+    expect(parseTopLimit('0')).toBe(1)
+    expect(parseTopLimit('999')).toBe(200)
+    expect(parseTopLimit('abc')).toBe(50)
+  })
+
+  it('keeps only songs with the format, and only those versions', () => {
+    const r = search(lib, narrowIndex(index, { fmt: 'image' }), '七里香', PLAIN_TOOLS)
+    expect(r.songs).toHaveLength(1)
+    expect(r.songs[0]!.song.versions.every((v) => v.file.format === 'image')).toBe(true)
+    const none = search(lib, narrowIndex(index, { fmt: 'midi' }), '七里香', PLAIN_TOOLS)
+    expect(none.songs).toHaveLength(0)
+  })
+
+  it('keeps songs and artists under the category', () => {
+    const r = search(lib, narrowIndex(index, { cat: '1-华语' }), 'Queen', PLAIN_TOOLS)
+    expect(r.songs).toHaveLength(0)
+    expect(r.artists).toHaveLength(0)
+    const q = search(lib, narrowIndex(index, { cat: '2-欧美' }), 'Queen', PLAIN_TOOLS)
+    expect(q.artists.map((a) => a.name)).toEqual(['Queen'])
+    const wrong = search(lib, narrowIndex(index, { cat: '1-华语' }), '七里香', PLAIN_TOOLS)
+    expect(wrong.songs.length).toBeGreaterThan(0)
+    const none = search(lib, narrowIndex(index, { cat: '2-欧美' }), '七里香', PLAIN_TOOLS)
+    expect(none.songs).toHaveLength(0)
+  })
+
+  it('applies the filter before the 200-song limit', () => {
+    const many: Array<[string, number]> = []
+    for (let i = 0; i < 260; i++) many.push([`2-欧美/流行摇滚/Band/Love Song ${i}.gp5`, 1])
+    for (let i = 0; i < 3; i++) many.push([`1-华语/男歌手/某人/爱情故事${i}.png`, 1])
+    const big = buildLibrary(many, PLAIN_TOOLS)
+    const bigIndex = buildSearchIndex(big, PLAIN_TOOLS)
+    // 爱情故事0/1/2 are one song (the trailing digit is a version).
+    const unfiltered = search(big, bigIndex, '爱情', PLAIN_TOOLS)
+    expect(unfiltered.songs).toHaveLength(1)
+    const cat = search(big, narrowIndex(bigIndex, { cat: '1-华语' }), '爱情故事', PLAIN_TOOLS)
+    expect(cat.songs.length).toBe(1)
+    const loveAll = search(big, narrowIndex(bigIndex, { cat: '2-欧美' }), 'love', PLAIN_TOOLS)
+    expect(loveAll.songs).toHaveLength(200)
+    expect(loveAll.moreSongs).toBe(true)
+    const loveWrongCat = search(big, narrowIndex(bigIndex, { cat: '1-华语' }), 'love', PLAIN_TOOLS)
+    expect(loveWrongCat.songs).toHaveLength(0)
+    const loveNone = search(big, narrowIndex(bigIndex, { fmt: 'pdf' }), 'love', PLAIN_TOOLS)
+    expect(loveNone.songs).toHaveLength(0)
+    expect(loveNone.moreSongs).toBe(false)
+  })
+
+  it('sorts results by name, and keeps the count for version sort', () => {
+    const r = search(lib, index, '七里香', PLAIN_TOOLS)
+    const first = r.songs[0]!
+    const byName = sortResultSongs(
+      [
+        { ...first, song: { ...first.song, title: '晴天' } },
+        { ...first, song: { ...first.song, title: '七里香' } },
+      ],
+      'name',
+    )
+    expect(byName.map((x) => x.song.title)).toEqual(['七里香', '晴天'])
+    expect(sortResultSongs([...r.songs], 'ver')).toHaveLength(r.songs.length)
+  })
+
+  it('ranks songs by version count and filters the top list', () => {
+    const ranked = rankByVersions(lib)
+    expect(ranked[0]!.song.title).toBe('七里香')
+    expect(ranked.every((r) => !r.song.unknownTitle)).toBe(true)
+    const top = topSongs(ranked, { cat: '2-欧美' }, 50)
+    expect(top.songs.every((s) => s.song.artistId.startsWith('2-欧美/'))).toBe(true)
+    expect(top.moreSongs).toBe(false)
+    const one = topSongs(ranked, {}, 1)
+    expect(one.songs).toHaveLength(1)
+    expect(one.moreSongs).toBe(true)
+    const img = topSongs(ranked, { fmt: 'image' }, 50)
+    expect(img.songs.every((s) => s.song.versions.every((v) => v.file.format === 'image'))).toBe(
+      true,
+    )
   })
 })

@@ -1,9 +1,32 @@
 import type {
   ScoreArtist,
   ScoreCategory,
+  ScoreFormat,
   ScoreSearchResult,
   ScoreSong,
 } from '@/songs/scoreLibraryTypes'
+
+/** A starred score (kept on the server, so every device sees the same list). */
+export interface FavoriteItem {
+  path: string
+  format: ScoreFormat
+  pages: string[]
+  title: string
+  artist: string
+  addedAt: number
+}
+
+/** 搜索谱 filters: a format, a category id ("1-华语"), and the order. */
+export interface SearchOptions {
+  fmt?: ScoreFormat | ''
+  cat?: string
+  sort?: 'rel' | 'ver' | 'name'
+}
+
+const searchQuery = (o: SearchOptions = {}) =>
+  (o.fmt ? `&fmt=${enc(o.fmt)}` : '') +
+  (o.cat ? `&cat=${enc(o.cat)}` : '') +
+  (o.sort && o.sort !== 'rel' ? `&sort=${o.sort}` : '')
 
 export interface LibraryInfo {
   root: string
@@ -100,8 +123,16 @@ export const api = {
     call<ScoreArtist[]>(`/api/artists?group=${enc(groupId)}`, { signal }),
   songs: (artistId: string, signal?: AbortSignal) =>
     call<ScoreSong[]>(`/api/songs?artist=${enc(artistId)}`, { signal }),
-  search: (q: string, signal?: AbortSignal) =>
-    call<ScoreSearchResult>(`/api/search?q=${enc(q)}`, { signal }),
+  search: (q: string, opts: SearchOptions = {}, signal?: AbortSignal) =>
+    call<ScoreSearchResult>(`/api/search?q=${enc(q)}${searchQuery(opts)}`, { signal }),
+  /** Songs with the most versions (搜索谱 before anything is typed). */
+  top: (opts: SearchOptions = {}, signal?: AbortSignal) =>
+    call<ScoreSearchResult>(`/api/top?limit=50${searchQuery(opts)}`, { signal }),
+  favorites: (signal?: AbortSignal) => call<FavoriteItem[]>('/api/favorites', { signal }),
+  addFavorite: (item: Omit<FavoriteItem, 'addedAt'>) =>
+    call<FavoriteItem[]>('/api/favorites', { body: item }),
+  removeFavorite: (path: string) =>
+    call<FavoriteItem[]>('/api/favorites/remove', { body: { path } }),
   text: (path: string, signal?: AbortSignal) =>
     call<{ text: string }>(`/api/text?p=${enc(path)}`, { signal }),
 }

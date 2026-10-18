@@ -19,6 +19,27 @@ import { pipeline } from 'node:stream'
 import { fileURLToPath } from 'node:url'
 import { search } from '../src/songs/scoreLibrary'
 import {
+  narrowIndex,
+  parseCatalogParams,
+  parseTopLimit,
+  rankByVersions,
+  sortResultSongs,
+  topSongs,
+  type RankedSong,
+} from './catalog'
+import {
+  createSerialQueue,
+  inRootOf,
+  loadFavorites,
+  parseFavoriteInput,
+  parseFavoritePath,
+  removeFavorite,
+  saveFavorites,
+  upsertFavorite,
+  type FavoriteItem,
+  type InRoot,
+} from './favorites'
+import {
   loadFromFiles,
   readCache,
   scanFolder,
@@ -46,6 +67,7 @@ const SESSION_MAX_AGE = 30 * 24 * 60 * 60
 const LOGIN_MAX_FAILURES = 5
 const LOGIN_WINDOW_MS = 10 * 60 * 1000
 const MAX_JSON_BODY = 4096
+const MAX_FAVORITE_BODY = 64 * 1024
 const MAX_TEXT_BYTES = 5 * 1024 * 1024
 const MAX_QUERY_LENGTH = 200
 
@@ -111,12 +133,15 @@ function sendText(res: http.ServerResponse, status: number, text: string): void 
   res.end(text)
 }
 
-async function readJsonBody(req: http.IncomingMessage): Promise<Record<string, unknown>> {
+async function readJsonBody(
+  req: http.IncomingMessage,
+  maxBytes = MAX_JSON_BODY,
+): Promise<Record<string, unknown>> {
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
     size += (chunk as Buffer).length
-    if (size > MAX_JSON_BODY) throw new HttpError(413, '请求内容太长。')
+    if (size > maxBytes) throw new HttpError(413, '请求内容太长。')
     chunks.push(chunk as Buffer)
   }
   let body: unknown
@@ -141,6 +166,11 @@ let webDir: string
 let loaded: LoadedLibrary | null = null
 let scanning = false
 const limiter = createRateLimiter(LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS)
+let inRoot: InRoot
+let favorites: FavoriteItem[] = []
+const favoriteQueue = createSerialQueue()
+/** The unfiltered "most versions" ranking, per library build (a new scan makes a new object). */
+const topCache = new WeakMap<LoadedLibrary, RankedSong[]>()
 
 const log = (msg: string) => console.log(`[谱库] ${msg}`)
 
@@ -216,6 +246,48 @@ function requireLibrary(): LoadedLibrary {
   return loaded
 }
 
+/** Turns a validation result into its value, or a 400 response. */
+function orBadRequest<T>(r: { ok: true; value: T } | { ok: false; error: string }): T {
+  if (!r.ok) throw new HttpError(400, r.error)
+  return r.value
+}
+
+async function handleFavorites(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  p: string,
+): Promise<void> {
+  if (p === '/api/favorites') {
+    if (req.method === 'GET') return sendJson(res, 200, favorites)
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+    const item = orBadRequest(parseFavoriteInput(body, inRoot, Date.now()))
+    const next = await favoriteQueue(() => persistFavorites((list) => upsertFavorite(list, item)))
+    return sendJson(res, 200, next)
+  }
+  // POST /api/favorites/remove
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+  const rel = orBadRequest(parseFavoritePath(body, inRoot))
+  const next = await favoriteQueue(() => persistFavorites((list) => removeFavorite(list, rel)))
+  return sendJson(res, 200, next)
+}
+
+/** Applies `change` to the favourites, writes the file, then keeps the new list in memory. */
+async function persistFavorites(
+  change: (list: FavoriteItem[]) => FavoriteItem[],
+): Promise<FavoriteItem[]> {
+  const next = change(favorites)
+  try {
+    await saveFavorites(cfg.dataDir, next)
+  } catch (err) {
+    log(`收藏保存失败：${errorText(err)}`)
+    throw new HttpError(500, '收藏保存失败，请检查 SCORES_DATA 文件夹是否可写。')
+  }
+  favorites = next
+  return next
+}
+
 function libraryInfo(): unknown {
   const root = path.basename(cfg.root) || 'root'
   if (!loaded) return { root, scannedAt: 0, files: 0, scanning: true, categories: [] }
@@ -247,6 +319,8 @@ async function handleApi(
 
   if (!isLoggedIn(req)) return sendJson(res, 401, { error: '请先登录。' })
 
+  if (p === '/api/favorites' || p === '/api/favorites/remove') return handleFavorites(req, res, p)
+
   const routes: Record<string, { method: string; run: () => Promise<unknown> | unknown }> = {
     '/api/me': { method: 'GET', run: () => ({ ok: true }) },
     '/api/library': { method: 'GET', run: libraryInfo },
@@ -272,8 +346,33 @@ async function handleApi(
         const q = (url.searchParams.get('q') ?? '').trim()
         if ([...q].length > MAX_QUERY_LENGTH) throw new HttpError(400, '搜索内容太长。')
         if (!q) return { artists: [], songs: [], moreSongs: false }
+        const opts = orBadRequest(parseCatalogParams(url.searchParams))
         const lib = requireLibrary()
-        return search(lib.lib, lib.index, q, tools)
+        // Filters apply before the search's own 200-song limit.
+        const result = search(lib.lib, narrowIndex(lib.index, opts), q, tools)
+        return { ...result, songs: sortResultSongs(result.songs, opts.sort) }
+      },
+    },
+    '/api/top': {
+      method: 'GET',
+      run: () => {
+        const opts = orBadRequest(parseCatalogParams(url.searchParams))
+        const lib = requireLibrary()
+        let ranked = topCache.get(lib)
+        if (!ranked) {
+          ranked = rankByVersions(lib.lib)
+          topCache.set(lib, ranked)
+        }
+        const { songs, moreSongs } = topSongs(
+          ranked,
+          opts,
+          parseTopLimit(url.searchParams.get('limit')),
+        )
+        return {
+          artists: [],
+          songs: songs.map((r) => ({ song: r.song, artistName: r.artistName, match: 'name' })),
+          moreSongs,
+        }
       },
     },
     '/api/rescan': {
@@ -477,6 +576,13 @@ async function main(): Promise<void> {
   realRoot = await fs.promises.realpath(cfg.root)
   await fs.promises.mkdir(cfg.dataDir, { recursive: true, mode: 0o700 })
   secret = await loadSecret(cfg.dataDir)
+  inRoot = inRootOf(cfg.root)
+  try {
+    favorites = await loadFavorites(cfg.dataDir, inRoot)
+  } catch (err) {
+    console.error(`收藏文件读取失败：${errorText(err)}`)
+    process.exit(1)
+  }
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 
   const server = http.createServer(onRequest)

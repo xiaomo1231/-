@@ -3,88 +3,87 @@
 @tailwind utilities;
 
 /*
- * 「指板」: the library as a guitar neck. Dark rosewood with brass frets and a
- * bone-white nut by default; light maple when the phone is in light mode.
- * Tailwind's colour names (background, card, primary…) read these variables.
+ * 「曲谱本」: a printed songbook — contents page, back-of-book index,
+ * full-width tab — annotated in ballpoint blue, the one accent. Ink on cool
+ * paper by default; the night page when the system is dark. Tailwind's colour
+ * names (background, card, primary…) read these variables.
  */
 :root {
-  color-scheme: dark;
+  color-scheme: light;
   --font-body: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
-  --font-title: 'Noto Serif SC', 'Songti SC', 'STSong', 'SimSun', serif;
-  --font-mono: 'JetBrains Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
-  --background: 24 21% 6%;
-  --foreground: 37 46% 90%;
-  --card: 30 21% 9%;
-  --card-foreground: 37 46% 90%;
-  --primary: 38 60% 60%;
-  --primary-strong: 36 54% 54%;
-  --primary-foreground: 30 37% 7%;
-  --secondary: 33 21% 12%;
-  --secondary-foreground: 37 46% 90%;
-  --muted: 33 21% 12%;
-  --muted-foreground: 35 14% 59%;
-  --accent: 32 20% 14%;
-  --accent-foreground: 37 46% 92%;
-  --destructive: 13 59% 64%;
-  --destructive-foreground: 30 37% 7%;
-  --success: 115 30% 64%;
-  --success-foreground: 30 37% 7%;
-  --border: 28 19% 19%;
-  --input: 28 19% 22%;
-  --ring: 38 60% 60%;
-  --amber: 38 60% 60%;
-  --amber-soft: 36 40% 16%;
-  --cyan: 201 33% 67%;
-  --cyan-soft: 201 25% 16%;
-  /* the neck itself */
-  --string: 36 12% 70%;
-  --fret: 38 60% 60%;
-  --inlay: 37 46% 90%;
-  --paper: 40 33% 98%;
-  --paper-ink: 30 30% 11%;
+  --font-title: 'Noto Sans SC', 'PingFang SC', 'Microsoft YaHei', system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  /* paper #edefea, paper-2 #e2e5df, ink #14171a, ink-2 #5b625e, rule #c5cac3, pen #2443d6 */
+  --background: 90 10% 93%;
+  --foreground: 210 13% 9%;
+  --card: 90 9% 89%;
+  --card-foreground: 210 13% 9%;
+  --primary: 229 71% 49%;
+  --primary-strong: 229 71% 42%;
+  --primary-foreground: 0 0% 100%;
+  --secondary: 90 9% 89%;
+  --secondary-foreground: 210 13% 9%;
+  --muted: 90 9% 89%;
+  --muted-foreground: 150 4% 37%;
+  --accent: 229 40% 88%;
+  --accent-foreground: 210 13% 9%;
+  --destructive: 4 70% 45%;
+  --destructive-foreground: 0 0% 100%;
+  --success: 150 40% 32%;
+  --success-foreground: 0 0% 100%;
+  --border: 105 6% 78%;
+  --input: 105 6% 74%;
+  --ring: 229 71% 49%;
+  --amber: 229 71% 49%;
+  --amber-soft: 229 40% 88%;
+  --cyan: 229 71% 49%;
+  --cyan-soft: 229 40% 88%;
+  /* the score's sheet: night by default (.sheet-paper switches to paper) */
+  --sheet-bg: #121417;
+  --sheet-line: #50575c;
+  --sheet-ink: #e9ece7;
+  --sheet-dim: #8d958f;
+  --sheet-pen: #7f95ff;
   --radius-sm: 0.25rem;
   --radius-xs: 0.375rem;
   --radius-md: 0.5rem;
   --radius-lg: 0.625rem;
   --radius-xl: 0.75rem;
-  --radius-2xl: 1rem;
-  --radius-3xl: 1.25rem;
-  --shadow-soft: 0 1px 0 0 hsl(37 46% 90% / 0.04) inset, 0 12px 28px -20px hsl(0 0% 0% / 0.9);
-  --shadow-lift: 0 1px 0 0 hsl(37 46% 90% / 0.06) inset, 0 24px 48px -24px hsl(0 0% 0% / 0.95);
+  --radius-2xl: 0.875rem;
+  --radius-3xl: 1rem;
+  --shadow-soft: 0 1px 0 0 hsl(var(--border));
+  --shadow-lift: 0 18px 50px -20px rgb(0 0 0 / 0.45);
 }
 
-@media (prefers-color-scheme: light) {
+@media (prefers-color-scheme: dark) {
   :root {
-    color-scheme: light;
-    --background: 38 44% 92%;
-    --foreground: 30 30% 11%;
-    --card: 37 100% 97%;
-    --card-foreground: 30 30% 11%;
-    --primary: 36 72% 33%;
-    --primary-strong: 34 76% 28%;
-    --primary-foreground: 37 100% 97%;
-    --secondary: 38 37% 87%;
-    --secondary-foreground: 30 30% 11%;
-    --muted: 38 37% 87%;
-    --muted-foreground: 33 16% 37%;
-    --accent: 38 40% 89%;
-    --accent-foreground: 30 30% 11%;
-    --destructive: 11 55% 45%;
-    --destructive-foreground: 37 100% 97%;
-    --success: 115 35% 33%;
-    --success-foreground: 37 100% 97%;
-    --border: 37 31% 80%;
-    --input: 37 31% 76%;
-    --ring: 36 72% 33%;
-    --amber: 36 72% 33%;
-    --amber-soft: 38 60% 86%;
-    --cyan: 200 49% 34%;
-    --cyan-soft: 200 40% 88%;
-    --string: 33 14% 55%;
-    --fret: 36 60% 42%;
-    --inlay: 30 30% 11%;
-    --shadow-soft: 0 12px 26px -20px hsl(30 40% 20% / 0.45);
-    --shadow-lift: 0 24px 44px -24px hsl(30 40% 20% / 0.5);
+    color-scheme: dark;
+    /* paper #0f1113, paper-2 #181b1e, ink #e6e9e3, ink-2 #8f9792, rule #2b3033, pen #8095ff */
+    --background: 210 13% 7%;
+    --foreground: 90 10% 90%;
+    --card: 210 11% 11%;
+    --card-foreground: 90 10% 90%;
+    --primary: 230 100% 75%;
+    --primary-strong: 230 90% 68%;
+    --primary-foreground: 230 60% 12%;
+    --secondary: 210 11% 11%;
+    --secondary-foreground: 90 10% 90%;
+    --muted: 210 11% 11%;
+    --muted-foreground: 140 4% 57%;
+    --accent: 230 28% 18%;
+    --accent-foreground: 90 10% 90%;
+    --destructive: 4 80% 66%;
+    --destructive-foreground: 0 0% 8%;
+    --success: 150 40% 60%;
+    --success-foreground: 0 0% 8%;
+    --border: 200 9% 19%;
+    --input: 200 9% 24%;
+    --ring: 230 100% 75%;
+    --amber: 230 100% 75%;
+    --amber-soft: 230 28% 18%;
+    --cyan: 230 100% 75%;
+    --cyan-soft: 230 28% 18%;
+    --shadow-lift: 0 18px 50px -20px rgb(0 0 0 / 0.75);
   }
 }
 
@@ -132,115 +131,63 @@
     font-variant-numeric: tabular-nums;
   }
 
-  /* ---- 「指板」 motifs ---------------------------------------------------- */
 
-  /* Six strings across a band, thickest at the bottom like a guitar seen from the player. */
-  .strings {
-    position: relative;
-    isolation: isolate;
-  }
-  .strings::before {
-    content: '';
-    position: absolute;
-    inset: 0;
-    z-index: -1;
-    pointer-events: none;
-    background:
-      linear-gradient(hsl(var(--string) / 0.22), hsl(var(--string) / 0.22)) 0 16% / 100% 1px
-        no-repeat,
-      linear-gradient(hsl(var(--string) / 0.24), hsl(var(--string) / 0.24)) 0 30% / 100% 1px
-        no-repeat,
-      linear-gradient(hsl(var(--string) / 0.26), hsl(var(--string) / 0.26)) 0 44% / 100% 1.25px
-        no-repeat,
-      linear-gradient(hsl(var(--string) / 0.3), hsl(var(--string) / 0.3)) 0 58% / 100% 1.5px
-        no-repeat,
-      linear-gradient(hsl(var(--string) / 0.34), hsl(var(--string) / 0.34)) 0 72% / 100% 2px
-        no-repeat,
-      linear-gradient(hsl(var(--string) / 0.38), hsl(var(--string) / 0.38)) 0 86% / 100% 2.5px
-        no-repeat;
-  }
-  /* A brass fret: a short vertical bar used as a divider or a marker. */
-  .fret {
-    display: inline-block;
-    width: 3px;
-    border-radius: 2px;
-    background: linear-gradient(hsl(var(--fret)), hsl(var(--fret) / 0.55));
-  }
-  /* Position-marker inlays: one dot, or two at the 12th fret. */
-  .inlay {
-    display: inline-flex;
-    gap: 6px;
-  }
-  .inlay > i {
-    width: 7px;
-    height: 7px;
-    border-radius: 999px;
-    background: hsl(var(--inlay) / 0.85);
-    box-shadow: 0 0 0 3px hsl(var(--inlay) / 0.08);
-  }
-  .eyebrow {
-    font-family: var(--font-mono);
-    font-size: 0.6875rem;
-    letter-spacing: 0.18em;
-    text-transform: uppercase;
-    color: hsl(var(--muted-foreground));
-  }
+  /* ---- 「曲谱本」 ---------------------------------------------------------- */
+  .num,
   .mono {
     font-family: var(--font-mono);
     font-variant-numeric: tabular-nums;
   }
-  /* The printed score always sits on paper, whatever the theme. */
-  .paper {
-    background: hsl(var(--paper));
-    color: hsl(var(--paper-ink));
-    border-radius: var(--radius-2xl);
-    box-shadow: var(--shadow-lift);
+  /* The staff rule: six hairlines, the page's divider. */
+  .staff {
+    height: 17px;
+    background: repeating-linear-gradient(to bottom, hsl(var(--border)) 0 1px, transparent 1px 3.2px);
+    background-size: 100% 17px;
   }
-  /* Pressing a row: a short brass flash at its left edge, like plucking a string. */
-  .pluck {
-    position: relative;
+  /* Dotted leader between a name and its count, as in a contents page. */
+  .leader {
+    flex: 1;
+    min-width: 1rem;
+    border-bottom: 2px dotted hsl(var(--border));
+    transform: translateY(-0.35em);
   }
-  .pluck::after {
-    content: '';
-    position: absolute;
-    left: 0;
-    top: 18%;
-    bottom: 18%;
-    width: 2px;
-    border-radius: 2px;
-    background: hsl(var(--fret));
-    opacity: 0;
-    transform: scaleY(0.4);
+  /* Spaced section label: 目 录, 最 近 看 过. */
+  .label {
+    font-size: 12px;
+    font-weight: 700;
+    letter-spacing: 0.24em;
+    color: hsl(var(--muted-foreground));
+  }
+  /* The score sheet, night (default) or paper. */
+  .sheet {
+    background: var(--sheet-bg);
+    color: var(--sheet-ink);
+    transition: background 0.25s;
+  }
+  .sheet-paper {
+    --sheet-bg: #fbfbf7;
+    --sheet-line: #8e938c;
+    --sheet-ink: #15171a;
+    --sheet-dim: #6b716c;
+    --sheet-pen: #2443d6;
+  }
+  /* A physical key on the floating remote: it presses down. */
+  .key {
+    box-shadow: 0 2px 0 hsl(var(--border));
     transition:
-      opacity 120ms ease,
-      transform 180ms ease;
+      transform 60ms,
+      box-shadow 60ms;
   }
-  .pluck:hover::after,
-  .pluck:active::after,
-  .pluck:focus-visible::after {
-    opacity: 1;
-    transform: scaleY(1);
+  .key:active {
+    transform: translateY(2px);
+    box-shadow: 0 0 0 hsl(var(--border));
   }
-  @keyframes string-settle {
-    0% {
-      transform: translateY(0);
-    }
-    20% {
-      transform: translateY(-1.5px);
-    }
-    45% {
-      transform: translateY(1px);
-    }
-    70% {
-      transform: translateY(-0.5px);
-    }
-    100% {
-      transform: translateY(0);
-    }
+  /* The browser's own dropdown list follows the page's paper and ink. */
+  select option {
+    background: hsl(var(--background));
+    color: hsl(var(--foreground));
   }
-  .vibrate {
-    animation: string-settle 420ms ease-out;
-  }
+
 
   /* alphaTab surface: cursor and selection colours from the tokens. */
   .at-surface .at-cursor-bar {
@@ -270,8 +217,8 @@
   }
 }
 
-/* Titles in the songbook's serif (after Tailwind's own font utilities, so this one wins). */
+/* Titles: the heavy sans of a printed songbook. */
 .font-display {
   font-family: var(--font-title);
-  letter-spacing: 0.01em;
+  font-weight: 900;
 }

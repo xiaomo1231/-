@@ -1,16 +1,16 @@
 import type { ScoreFormat, SearchMatch } from '@/songs/scoreLibraryTypes'
 
-/** Format badges: the same labels as the desktop library. */
+/** Format chips: plain bordered mono labels; GP is the one ink-strong chip. */
 export const FORMAT_BADGE: Record<ScoreFormat, { label: string; className: string }> = {
-  score: { label: 'GP 谱', className: 'border-success/40 bg-success/10 text-success' },
-  legacy: { label: 'GTP', className: 'border-border text-muted-foreground' },
-  image: { label: '图片谱', className: 'border-amber/40 bg-amber/10 text-amber' },
-  pdf: { label: 'PDF', className: 'border-destructive/40 bg-destructive/10 text-destructive' },
-  text: { label: '文本谱', className: 'border-cyan/40 bg-cyan/10 text-cyan' },
-  midi: { label: 'MIDI', className: 'border-border text-muted-foreground' },
-  audio: { label: '音频', className: 'border-border text-muted-foreground' },
-  video: { label: '视频', className: 'border-border text-muted-foreground' },
-  other: { label: '其它', className: 'border-border text-muted-foreground' },
+  score: { label: 'GP', className: 'border-foreground text-foreground' },
+  legacy: { label: 'GTP', className: 'border-muted-foreground text-muted-foreground' },
+  image: { label: '图片', className: 'border-muted-foreground text-muted-foreground' },
+  pdf: { label: 'PDF', className: 'border-muted-foreground text-muted-foreground' },
+  text: { label: '文本', className: 'border-muted-foreground text-muted-foreground' },
+  midi: { label: 'MIDI', className: 'border-muted-foreground text-muted-foreground' },
+  audio: { label: '音频', className: 'border-muted-foreground text-muted-foreground' },
+  video: { label: '视频', className: 'border-muted-foreground text-muted-foreground' },
+  other: { label: '其它', className: 'border-muted-foreground text-muted-foreground' },
 }
 
 /** Small tag for how a search result matched; a plain name match shows none. */

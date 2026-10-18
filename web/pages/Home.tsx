@@ -1,140 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import type { ScoreCategory } from '@/songs/scoreLibraryTypes'
-import { cx, PANEL } from '../lib/classes'
+import { useFavorites } from '../lib/favorites'
 import { isScoreFormat, libraryName } from '../lib/format'
-import { hrefCategory, hrefGroup, hrefViewer } from '../lib/route'
+import { hrefCategory, hrefGroup, hrefViewer, HREF_FAVORITES } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
-import { clearRecent, readRecent, type RecentItem } from '../lib/recent'
+import { readRecent, type RecentItem } from '../lib/recent'
 import { Link } from '../components/Link'
-import { FormatBadge, Notice } from '../components/ui'
-import { StringsArt } from '../components/Brand'
-import { SearchResults } from './SearchResults'
-
-export function Home() {
-  const { info, scanning } = useLibrary()
-  const [query, setQuery] = useState('')
-  const [searched, setSearched] = useState('')
-
-  // Searching waits 200 ms after the last key, so typing does not fetch every letter.
-  useEffect(() => {
-    const t = window.setTimeout(() => setSearched(query.trim()), 200)
-    return () => window.clearTimeout(t)
-  }, [query])
-
-  const categories = info?.categories ?? []
-  const artists = categories.reduce((n, c) => n + c.groups.reduce((m, g) => m + g.artists, 0), 0)
-
-  return (
-    <div className="space-y-8 pt-2">
-      <section className="pt-2">
-        <StringsArt className="mb-5 h-10 w-full opacity-80" />
-        <p className="eyebrow">Guitar tab archive · 吉他谱库</p>
-        <h1 className="mt-2 break-words font-display text-4xl font-black leading-tight sm:text-5xl">
-          {info ? libraryName(info.root) : '谱库'}
-        </h1>
-        {info && (
-          <p className="mono mt-2 text-xs text-muted-foreground">
-            {info.files.toLocaleString('zh-CN')} 份谱 · {artists.toLocaleString('zh-CN')} 位歌手 ·{' '}
-            {categories.length} 个分类
-          </p>
-        )}
-        <SearchBox value={query} onChange={setQuery} />
-      </section>
-
-      {scanning && <Notice>正在扫描文件夹，已经扫到的谱子可以先看。</Notice>}
-      {searched ? (
-        <SearchResults q={searched} />
-      ) : (
-        <>
-          <Recent />
-          <CategoryGrid categories={categories} />
-        </>
-      )}
-    </div>
-  )
-}
-
-function SearchBox({ value, onChange }: { value: string; onChange: (v: string) => void }) {
-  return (
-    <label className="relative mt-5 block">
-      <span className="sr-only">搜索谱库</span>
-      <svg
-        aria-hidden
-        viewBox="0 0 24 24"
-        className="pointer-events-none absolute left-4 top-1/2 z-10 h-5 w-5 -translate-y-1/2 text-primary"
-        fill="none"
-        stroke="currentColor"
-        strokeWidth="2.2"
-        strokeLinecap="round"
-      >
-        <circle cx="10.5" cy="10.5" r="6.5" />
-        <path d="M15.5 15.5 21 21" />
-      </svg>
-      <input
-        type="search"
-        inputMode="search"
-        enterKeyHint="search"
-        autoComplete="off"
-        autoCapitalize="none"
-        spellCheck={false}
-        placeholder="搜歌名、歌手（拼音也行）"
-        value={value}
-        onChange={(e) => onChange(e.target.value)}
-        className="h-14 w-full rounded-2xl border border-border bg-card/90 pl-11 pr-4 text-base text-foreground shadow-[var(--shadow-lift)] outline-none backdrop-blur transition-colors placeholder:text-muted-foreground focus:border-primary"
-      />
-    </label>
-  )
-}
-
-/** The scores opened on this phone, newest first (a horizontal strip). */
-function Recent() {
-  const [items, setItems] = useState<RecentItem[]>(() => readRecent())
-  if (items.length === 0) return null
-  return (
-    <section>
-      <div className="mb-3 flex items-baseline justify-between px-1">
-        <h2 className="font-display text-lg font-black">最近看过</h2>
-        <button
-          type="button"
-          onClick={() => {
-            clearRecent()
-            setItems([])
-          }}
-          className="min-h-11 px-2 text-xs text-muted-foreground hover:text-foreground"
-        >
-          清空
-        </button>
-      </div>
-      <ul className="-mx-4 flex snap-x gap-3 overflow-x-auto px-4 pb-2 [scrollbar-width:none]">
-        {items.map((r) => (
-          <li key={r.path} className="snap-start">
-            <Link
-              href={hrefViewer({
-                path: r.path,
-                format: isScoreFormat(r.format) ? r.format : 'other',
-                pages: r.pages,
-                title: r.title,
-                artist: r.artist,
-              })}
-              className={cx(
-                PANEL,
-                'pluck flex h-full w-40 flex-col gap-2 p-3 transition-colors hover:border-primary/40',
-              )}
-            >
-              <FormatBadge format={isScoreFormat(r.format) ? r.format : 'other'} />
-              <span className="line-clamp-2 font-display text-base font-black leading-snug">
-                {r.title || '未识别的曲名'}
-              </span>
-              <span className="mt-auto truncate text-xs text-muted-foreground">
-                {r.artist || ' '}
-              </span>
-            </Link>
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
+import { Notice, ScoreLine, Staff } from '../components/ui'
 
 /** A category with one group opens that group directly; more than one shows the groups first. */
 function categoryHref(c: ScoreCategory): string {
@@ -142,70 +14,161 @@ function categoryHref(c: ScoreCategory): string {
   return only ? hrefGroup(only) : hrefCategory(c.id)
 }
 
-/** Fret numbers of the inlays on a real neck: the category tiles take them in turn. */
-const INLAY_FRETS = [3, 5, 7, 9, 12, 15, 17, 19, 21, 24]
+/** The number a folder carries in front: 「1-华语」 → 01. */
+function contentsNumber(id: string, index: number): string {
+  const m = /^(\d+)/.exec(id)
+  return (m ? m[1]! : String(index + 1)).padStart(2, '0')
+}
 
-function CategoryGrid({ categories }: { categories: ScoreCategory[] }) {
-  if (categories.length === 0) {
-    return (
-      <Notice>谱库里还没有找到谱子。请确认电脑上的谱库文件夹，然后点右上角「重新扫描」。</Notice>
-    )
-  }
-  const most = Math.max(...categories.map((c) => c.files), 1)
+/** 目录: the library's name as a heavy title, the categories as contents rows, favourites and recent beside them. */
+export function Home() {
+  const { info, scanning } = useLibrary()
+  const categories = info?.categories ?? []
+
+  return (
+    <>
+      <div className="pb-5 pt-12">
+        <h1 className="m-0 break-words font-display text-[clamp(44px,9vw,96px)] font-black leading-[0.95] tracking-[-0.02em] [text-wrap:balance]">
+          {info ? libraryName(info.root) : '谱库'}
+        </h1>
+        {scanning && (
+          <p className="mono mt-3 text-xs text-muted-foreground">
+            正在扫描文件夹，已经扫到的谱子可以先看。
+          </p>
+        )}
+      </div>
+      <Staff />
+
+      <div className="grid gap-10 pb-20 pt-7 min-[861px]:grid-cols-[minmax(0,1.55fr)_minmax(0,1fr)] min-[861px]:gap-14">
+        <section aria-label="目录" className="min-w-0">
+          <p className="label mb-2.5">目 录</p>
+          {categories.length === 0 ? (
+            <Notice>
+              谱库里还没有找到谱子。请确认电脑上的谱库文件夹，然后点右上角「重新扫描」。
+            </Notice>
+          ) : (
+            <ol className="m-0 list-none p-0">
+              {categories.map((c, i) => (
+                <li key={c.id} className="border-t border-border last:border-b">
+                  <Link
+                    href={categoryHref(c)}
+                    className="group grid min-h-11 grid-cols-[44px_minmax(0,auto)_minmax(1rem,1fr)_auto] items-baseline gap-2.5 py-3.5"
+                  >
+                    <span className="mono text-[13px] text-muted-foreground">
+                      {contentsNumber(c.id, i)}
+                    </span>
+                    <span className="font-display text-[26px] font-black tracking-[0.01em] transition-colors group-hover:text-primary max-[860px]:text-[22px]">
+                      {c.name}
+                    </span>
+                    <span aria-hidden className="leader" />
+                    <span className="mono text-[15px]">{c.files.toLocaleString('zh-CN')}</span>
+                  </Link>
+                  {c.groups.length > 1 && (
+                    <div className="-mt-1.5 flex flex-wrap gap-x-[22px] gap-y-0.5 pb-3.5 pl-[54px]">
+                      {c.groups.map((g) => (
+                        <Link
+                          key={g.id}
+                          href={hrefGroup(g)}
+                          className="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-primary"
+                        >
+                          {g.name}
+                          <span className="mono ml-1 text-[11px]">
+                            {g.files.toLocaleString('zh-CN')}
+                          </span>
+                        </Link>
+                      ))}
+                    </div>
+                  )}
+                </li>
+              ))}
+            </ol>
+          )}
+        </section>
+
+        <aside className="min-w-0">
+          <Favorites />
+          <Recent />
+        </aside>
+      </div>
+    </>
+  )
+}
+
+/** ★ 我的收藏: the first five starred scores, then the link to all of them. */
+function Favorites() {
+  const { items, loaded } = useFavorites()
   return (
     <section>
-      <h2 className="mb-3 px-1 font-display text-lg font-black">分类</h2>
-      <ul className="grid grid-cols-2 gap-3 sm:grid-cols-3">
-        {categories.map((c, i) => {
-          const fret = INLAY_FRETS[i % INLAY_FRETS.length]!
-          return (
-            <li key={c.id}>
-              <Link
-                href={categoryHref(c)}
-                className={cx(
-                  PANEL,
-                  'pluck group flex h-full min-h-32 flex-col justify-between gap-3 p-4 transition-colors hover:border-primary/40',
-                )}
-              >
-                <span className="flex items-start justify-between gap-2">
-                  <span className="mono text-[11px] text-muted-foreground">
-                    {String(i + 1).padStart(2, '0')}
-                  </span>
-                  <span className="inlay" aria-hidden>
-                    <i />
-                    {fret % 12 === 0 && <i />}
-                  </span>
-                </span>
-                <span className="min-w-0">
-                  <span className="block break-words font-display text-xl font-black leading-tight">
-                    {c.name}
-                  </span>
-                  <span className="mt-1 block truncate text-xs text-muted-foreground">
-                    {c.groups.length > 1
-                      ? c.groups
-                          .slice(0, 3)
-                          .map((g) => g.name)
-                          .join(' · ') + (c.groups.length > 3 ? ' …' : '')
-                      : `${c.groups[0]?.artists.toLocaleString('zh-CN') ?? 0} 位${c.groups[0]?.noun ?? '歌手'}`}
-                  </span>
-                </span>
-                <span className="block">
-                  <span className="mono text-xs text-foreground/80">
-                    {c.files.toLocaleString('zh-CN')}
-                  </span>
-                  <span className="ml-1 text-[11px] text-muted-foreground">份</span>
-                  {/* how big the category is, as a string's length */}
-                  <span
-                    aria-hidden
-                    className="mt-2 block h-[2px] rounded-full bg-primary/70"
-                    style={{ width: `${Math.max(6, (c.files / most) * 100)}%` }}
-                  />
-                </span>
-              </Link>
-            </li>
-          )
-        })}
-      </ul>
+      <p className="label mb-2.5">★ 我的收藏</p>
+      {items.length === 0 ? (
+        <p className="py-2.5 text-sm text-muted-foreground">
+          {loaded ? '还没有收藏。打开任意歌手，点谱子旁边的 ☆ 试试。' : '正在读取…'}
+        </p>
+      ) : (
+        <>
+          <ul className="m-0 list-none p-0">
+            {items.slice(0, 5).map((f) => (
+              <li key={f.path}>
+                <ScoreLine
+                  title={f.title}
+                  artist={f.artist}
+                  format={f.format}
+                  href={hrefViewer({
+                    path: f.path,
+                    format: f.format,
+                    pages: f.pages,
+                    title: f.title,
+                    artist: f.artist,
+                  })}
+                />
+              </li>
+            ))}
+          </ul>
+          {items.length > 5 && (
+            <Link
+              href={HREF_FAVORITES}
+              className="mt-2.5 inline-flex min-h-11 items-center rounded-lg border border-border px-3 text-sm transition-colors hover:border-foreground"
+            >
+              全部 {items.length} 个 →
+            </Link>
+          )}
+        </>
+      )}
+    </section>
+  )
+}
+
+/** 最 近 看 过: the scores opened on this device. */
+function Recent() {
+  const [items] = useState<RecentItem[]>(() => readRecent())
+  return (
+    <section id="recent" className="mt-10 scroll-mt-16">
+      <p className="label mb-2.5">最 近 看 过</p>
+      {items.length === 0 ? (
+        <p className="py-2.5 text-sm text-muted-foreground">还没有看过的谱。</p>
+      ) : (
+        <ul className="m-0 list-none p-0">
+          {items.slice(0, 5).map((r) => {
+            const format = isScoreFormat(r.format) ? r.format : 'other'
+            return (
+              <li key={r.path}>
+                <ScoreLine
+                  title={r.title}
+                  artist={r.artist}
+                  format={format}
+                  href={hrefViewer({
+                    path: r.path,
+                    format,
+                    pages: r.pages,
+                    title: r.title,
+                    artist: r.artist,
+                  })}
+                />
+              </li>
+            )
+          })}
+        </ul>
+      )}
     </section>
   )
 }
