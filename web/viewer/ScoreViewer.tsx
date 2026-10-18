@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
 import { errorText, fetchBytes, fileUrl, type PracticeUpdate } from '../lib/api'
@@ -6,6 +6,11 @@ import { clampTranspose } from '../lib/transpose'
 import { cx } from '../lib/classes'
 import { loadPracticeFor, practiceFor, savePractice, savePracticeOnExit } from '../lib/practice'
 import { Notice } from '../components/ui'
+import { useBand } from '../lib/band'
+import { useMe } from '../lib/session'
+import { useLiveSync, type LivePlayer } from './liveSync'
+import { LiveBar } from './LiveBar'
+import { trackLabels } from './trackNames'
 import {
   alphaTabUrls,
   applyTranspose,
@@ -67,6 +72,8 @@ interface Props {
   title: string
   artist: string
   pages: string[]
+  /** Opened from the band's setlist: that band song's id ('' otherwise). */
+  band: string
 }
 
 /** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
@@ -97,7 +104,7 @@ const sameBars = (a: [number, number] | null, b: [number, number] | null) =>
   a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1])
 
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
-export function ScoreViewer({ path, title, artist, pages }: Props) {
+export function ScoreViewer({ path, title, artist, pages, band }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -131,6 +138,19 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
   const [restoreNote, setRestoreNote] = useState('')
+  const me = useMe()
+  const { state: bandState } = useBand()
+  const bandSong = band ? bandState?.songs.find((x) => x.id === band) : undefined
+  /** The track this member plays in the band song (lowest index when several). */
+  const myTrack = (() => {
+    if (!bandSong || !me) return null
+    const mine = Object.entries(bandSong.parts)
+      .filter(([, uid]) => uid === me.id)
+      .map(([i]) => Number(i))
+      .sort((x, y) => x - y)
+    return mine[0] ?? null
+  })()
+  const bandSpeed = bandSong?.rehearsalSpeedPct ?? null
   const star = useStar({
     path,
     format: 'score' as ScoreFormat,
@@ -169,6 +189,8 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     score,
   }
   const selRef = useRef(false)
+  const bandSpeedRef = useRef<number | null>(bandSpeed)
+  bandSpeedRef.current = bandSpeed
   const gapTimer = useRef<number | undefined>(undefined)
   const openedPath = useRef('')
   const playerReadyRef = useRef(false)
@@ -180,6 +202,44 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     window.clearTimeout(gapTimer.current)
     gapTimer.current = undefined
   }
+
+  // 一起播放: the band song's shared transport drives this player.
+  const livePlayer = useMemo<LivePlayer>(
+    () => ({
+      startAt(tick, pct) {
+        const a = api.current
+        if (!a) return
+        cancelGap()
+        if (a.playerState === 1) a.pause()
+        a.playbackSpeed = pct / 100
+        setSpeedPct(pct)
+        a.tickPosition = tick
+        a.play()
+      },
+      pause(tick) {
+        const a = api.current
+        if (!a) return
+        cancelGap()
+        a.pause()
+        a.tickPosition = tick
+      },
+      seek(tick) {
+        if (api.current) api.current.tickPosition = tick
+      },
+      setSpeed(pct) {
+        if (api.current) api.current.playbackSpeed = pct / 100
+        setSpeedPct(pct)
+      },
+      currentTick: () => api.current?.tickPosition ?? 0,
+      currentSpeed: () => live.current.speedPct,
+    }),
+    [],
+  )
+  const together = useLiveSync(bandSong ? bandSong.id : null, me?.id ?? null, livePlayer)
+  const leaderId = together.connected ? (together.state?.leaderId ?? null) : null
+  /** Someone else leads: this player follows and its own transport keys wait. */
+  const following = leaderId !== null && leaderId !== me?.id
+  const leading = leaderId !== null && leaderId === me?.id
 
   useEffect(() => {
     if (phase !== 'loading') return
@@ -318,7 +378,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           void loadPracticeFor(path).then((r) => {
             if (disposed) return
             if (r) {
-              setSpeedPct(r.speedPct)
+              if (bandSpeedRef.current === null) setSpeedPct(r.speedPct)
               setMute(new Set(r.muted.filter((i) => i < s.tracks.length)))
               const bars =
                 r.loopBars && r.loopBars[1] <= s.masterBars.length ? r.loopBars : null
@@ -453,6 +513,20 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     }
   }, [path, soundFontChoice])
 
+  // Band song: show this member's own part, play along with the others, at the band's speed.
+  const bandApplied = useRef('')
+  useEffect(() => {
+    if (!score || !bandSong) return
+    const key = `${bandSong.id}:${path}`
+    if (bandApplied.current === key) return
+    bandApplied.current = key
+    if (myTrack !== null && myTrack < score.tracks.length) {
+      setTrack(myTrack)
+      setFollowAlong(true)
+    }
+    if (bandSpeed !== null) setSpeedPct(bandSpeed)
+  }, [score, bandSong, myTrack, bandSpeed, path])
+
   // Track shown on the sheet.
   useEffect(() => {
     const a = api.current
@@ -485,6 +559,13 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     a.loadMidiForScore()
   }, [transpose, score])
 
+  const togetherRef = useRef(together)
+  togetherRef.current = together
+  useEffect(() => {
+    if (!leading) return
+    const t = togetherRef.current
+    if (t.state && t.state.speedPct !== speedPct) t.speed(speedPct)
+  }, [speedPct, leading])
   useEffect(() => {
     if (api.current) api.current.playbackSpeed = speedPct / 100
     const c = clock.current
@@ -580,6 +661,16 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   const playable = ready && !soundFailed
   const togglePlay = () => {
     if (!playable) return
+    if (following) {
+      setRestoreNote('正在跟随主控播放，由主控开始和暂停。')
+      window.setTimeout(() => setRestoreNote(''), 3000)
+      return
+    }
+    if (leading) {
+      if (playing) together.pause()
+      else together.play()
+      return
+    }
     if (gapTimer.current !== undefined) {
       // Paused between two passes: stay stopped.
       cancelGap()
@@ -598,7 +689,12 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   }
   const backToStart = () => {
     const a = api.current
-    if (!a || !playable) return
+    if (!a || !playable || following) return
+    if (leading) {
+      together.seek(a.playbackRange?.startTick ?? 0)
+      if (playing) together.pause()
+      return
+    }
     cancelGap()
     const start = a.playbackRange?.startTick ?? 0
     a.stop()
@@ -672,6 +768,13 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   }
   const loaded = phase === 'ready'
   const sound: 'loading' | 'ready' | 'off' = soundFailed ? 'off' : ready ? 'ready' : 'loading'
+  const trackNames = useMemo(
+    () =>
+      trackLabels(score?.tracks ?? []).map((l, i) =>
+        l.original ? `${l.zh}（${l.original}）` : l.zh || `音轨 ${i + 1}`,
+      ),
+    [score],
+  )
   const shownTrack = tracks[track]
   const showFretboard = prefs.fretboard && shownTrack !== undefined && hasFretboard(shownTrack)
   const status =
@@ -684,6 +787,20 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   return (
     <div className="score-bleed">
       <style>{SHEET_CSS}</style>
+      {bandSong && (
+        <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
+          <LiveBar
+            live={together}
+            members={bandState?.members ?? []}
+            myId={me?.id ?? null}
+          />
+          {myTrack !== null && (
+            <p className="mt-1 text-xs text-muted-foreground">
+              你在这首歌里弹「{trackNames[myTrack] ?? `音轨 ${myTrack + 1}`}」，已自动显示你的声部并静音它，其他声部照常伴奏。
+            </p>
+          )}
+        </div>
+      )}
       {phase === 'error' && (
         <div className="px-4">
           <Notice tone="error">{message}</Notice>
@@ -769,7 +886,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           onCountIn={() => setCountIn((v) => !v)}
           metro={metro}
           onMetro={() => setMetro((v) => !v)}
-          tracks={tracks.map((t, i) => t.name.trim() || `音轨 ${i + 1}`)}
+          tracks={trackNames}
           track={track}
           onShowTrack={setTrack}
           solo={solo}

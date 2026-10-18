@@ -68,7 +68,7 @@ const configExample = `# 谱库网页版的设置。复制一份改名为 config
 # 谱库文件夹的完整路径（Mac 上以 / 开头；Windows 上例如 F:\\吉他谱\\吉他谱库）
 SCORES_ROOT="/Users/你的名字/吉他谱库"
 
-# 访问密码，至少 8 个字符
+# 管理员账号 admin 的初始密码，至少 8 个字符（第一次启动时用它创建账号；之后在网页「我的账号」里改密码）
 SCORES_PASSWORD="换成你自己的密码"
 
 # 端口
@@ -112,7 +112,7 @@ const plist = `<?xml version="1.0" encoding="UTF-8"?>
 
 const readme = `# 谱库网页版
 
-在 Mac mini 上运行一个**只读、带密码**的小服务器，出门用手机也能搜谱、看谱（GP 谱显示六线谱、能播放和变调；图片谱、PDF、文本谱都能看；可以下载原文件）。
+在 Mac mini 上运行一个**只读、带账号登录**的小服务器，出门用手机也能搜谱、看谱、练习（GP 谱显示六线谱、能播放、变调和循环练习；图片谱、PDF、文本谱都能看；可以下载原文件），还能和乐队成员一起排练。
 
 这个文件夹由律动工坊项目生成（版本 ${version}），整个文件夹拷到 Mac 上就能用。
 
@@ -126,7 +126,7 @@ const readme = `# 谱库网页版
 | \`启动.command\` / \`start.sh\` | Mac 上启动（双击 \`启动.command\`） |
 | \`启动.bat\` | Windows 上启动（在这台电脑上先试用） |
 | \`com.groovelab.scores.plist\` | Mac 开机自动运行的配置 |
-| \`data/\` | 运行后自动生成：扫描缓存和登录密钥 |
+| \`data/\` | 运行后自动生成：账号、收藏、练习记录、乐队歌单、扫描缓存和登录密钥（**备份它**） |
 
 高品质音色（MuseScore General 38 MB、FluidR3 142 MB）已包含在 \`web/alphatab/soundfont/\` 里；不想占空间可以删掉这两个 \`.sf3\` / \`.sf2\` 文件，网页里就只显示标准音色。
 
@@ -134,7 +134,7 @@ const readme = `# 谱库网页版
 
 1. 把 \`config.example.env\` 复制一份，改名为 \`config.env\`，填好：
    \`SCORES_ROOT="F:\\吉他谱\\吉他谱库"\`、\`SCORES_PASSWORD="至少 8 位的密码"\`。
-2. 双击 \`启动.bat\`。第一次会扫描整个谱库（约一两分钟），看到「已启动」后，浏览器打开 **http://localhost:8790**，输入密码。
+2. 双击 \`启动.bat\`。第一次会扫描整个谱库（约一两分钟），看到「已启动」后，浏览器打开 **http://localhost:8790**，用账号登录（第一次用 admin 和 SCORES_PASSWORD）。
 3. 关掉那个黑色窗口，网页就停了。
 
 ## 放到 Mac mini 上
@@ -153,7 +153,7 @@ const readme = `# 谱库网页版
 1. Mac 和手机都装 **Tailscale**，用同一个账号登录。
 2. 在 Mac 上查它的 Tailscale IP：终端运行 \`tailscale ip -4\`（类似 \`100.x.y.z\`）。
 3. 把 \`config.env\` 里的 \`HOST\` 改成这个 IP，重新启动。
-4. 手机打开 \`http://Mac的名字:8790\`（或 \`http://100.x.y.z:8790\`），输入密码。
+4. 手机打开 \`http://Mac的名字:8790\`（或 \`http://100.x.y.z:8790\`），用账号登录（第一次用 admin 和 SCORES_PASSWORD）。
 
 Tailscale 只在你自己的设备之间建立加密通道。**不要在路由器上做端口转发**，那样整个互联网都能看到这个登录页。
 
@@ -166,6 +166,15 @@ Tailscale 只在你自己的设备之间建立加密通道。**不要在路由�
    launchctl load -w ~/Library/LaunchAgents/com.groovelab.scores.plist
    \`\`\`
 3. 停止并取消自启：\`launchctl unload -w ~/Library/LaunchAgents/com.groovelab.scores.plist\`。运行记录在 \`/tmp/groovelab-scores.log\`。
+
+## 账号和乐队
+
+- 第一次启动会自动创建管理员账号：用户名 \`admin\`，密码是 \`config.env\` 里的 \`SCORES_PASSWORD\`。登录后在「我的账号」里改掉它。
+- 在「成员」页给乐队成员建账号：可以选「可看完整谱库」，不选的话他只能看乐队歌单里的谱子。
+- 成员要从外面访问，推荐在 Tailscale 里把这台 Mac「共享」给他的 Tailscale 账号（Share machine），仍然**不要做端口转发**。
+- 「乐队」页：排练歌单、给每首歌分配声部（成员打开时自动显示自己的声部并静音它）、统一排练速度、备注、每人的练习进度。
+- 「找乐队谱」：服务器第一次启动后会在后台把所有 GP 谱的音轨读一遍（几万个文件约半小时），期间网页照常可用，读完的结果保存在 \`data/\` 里。
+- 「一起播放」：大家打开同一首歌，一个人点「成为主控」，他按播放 / 暂停时，所有人的谱子同时开始和停下。
 
 ## 加了新谱子之后
 

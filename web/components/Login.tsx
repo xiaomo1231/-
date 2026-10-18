@@ -1,10 +1,11 @@
 import { useState, type FormEvent } from 'react'
+import type { UserInfo } from '@/songs/scoreServerTypes'
 import { api, ApiError, errorText } from '../lib/api'
 import { buttonClass } from '../lib/classes'
 import { Staff } from './ui'
 
 function loginMessage(e: unknown): string {
-  if (e instanceof ApiError && e.status === 401) return '密码不对，请再试一次。'
+  if (e instanceof ApiError && e.status === 401) return '用户名或密码不对。'
   if (e instanceof ApiError && e.status === 429) return e.message
   return errorText(e)
 }
@@ -14,27 +15,31 @@ export function LoginScreen({
   onLoggedIn,
 }: {
   notice: string | null
-  onLoggedIn: () => void
+  onLoggedIn: (u: UserInfo) => void
 }) {
+  const [username, setUsername] = useState('')
   const [password, setPassword] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(notice)
 
   const submit = async (e: FormEvent<HTMLFormElement>) => {
     e.preventDefault()
-    if (!password || busy) return
+    if (!username || !password || busy) return
     setBusy(true)
     setError(null)
     try {
-      await api.login(password)
+      const user = await api.login(username, password)
       setPassword('')
-      onLoggedIn()
+      onLoggedIn(user)
     } catch (err) {
       setError(loginMessage(err))
     } finally {
       setBusy(false)
     }
   }
+
+  const field =
+    'h-12 w-full rounded-lg border border-border bg-card px-4 text-base text-foreground outline-none transition-colors focus:border-primary'
 
   return (
     <main className="gutter grid min-h-dvh place-items-center py-10">
@@ -48,17 +53,31 @@ export function LoginScreen({
 
         <form onSubmit={submit} className="mt-8 space-y-4">
           <label className="block space-y-2">
-            <span className="text-sm text-muted-foreground">输入密码，打开你的吉他谱</span>
+            <span className="text-sm text-muted-foreground">用户名</span>
+            <input
+              type="text"
+              name="username"
+              autoComplete="username"
+              autoCapitalize="none"
+              autoCorrect="off"
+              autoFocus
+              value={username}
+              onChange={(e) => setUsername(e.target.value)}
+              className={field}
+            />
+          </label>
+          <label className="block space-y-2">
+            <span className="text-sm text-muted-foreground">密码</span>
             <input
               type="password"
               name="password"
               autoComplete="current-password"
-              autoFocus
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              className="h-12 w-full rounded-lg border border-border bg-card px-4 text-base text-foreground outline-none transition-colors focus:border-primary"
+              className={field}
             />
           </label>
+          <p className="text-xs text-muted-foreground">账号由乐队管理员创建。</p>
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}
@@ -66,7 +85,7 @@ export function LoginScreen({
           )}
           <button
             type="submit"
-            disabled={busy || !password}
+            disabled={busy || !username || !password}
             className={buttonClass('primary') + ' h-12 w-full text-base'}
           >
             {busy ? '正在打开…' : '打开谱库'}

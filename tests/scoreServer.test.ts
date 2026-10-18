@@ -28,6 +28,10 @@ import {
 } from '../server/catalog'
 import {
   applyPracticeUpdate,
+  loadPracticeByUser,
+  progressFor,
+  savePracticeByUser,
+  type PracticeByUser,
   MAX_ADD_SECONDS,
   MAX_PRACTICE,
   parsePracticePath,
@@ -42,8 +46,11 @@ import {
   MAX_FAVORITES,
   parseFavoriteInput,
   parseFavoritePath,
+  loadFavoritesByUser,
   removeFavorite,
   sanitizeFavorites,
+  saveFavoritesByUser,
+  type FavoritesByUser,
   upsertFavorite,
   type FavoriteItem,
 } from '../server/favorites'
@@ -714,6 +721,172 @@ describe('practice records (server/practice.ts)', () => {
       expect(a.maxSpeedPct).toBe(0)
       expect(b.totalSeconds).toBe(3)
       expect(b.maxSpeedPct).toBe(150)
+    })
+  })
+})
+
+describe('per-user persistence (favourites and practice)', () => {
+  const root = path.resolve(os.tmpdir(), 'gl-root')
+  const inRoot = inRootOf(root)
+  const dirs: string[] = []
+  const freshDir = () => {
+    const d = fs.mkdtempSync(path.join(os.tmpdir(), 'gl-persist-'))
+    dirs.push(d)
+    return d
+  }
+  afterAll(() => {
+    for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
+  })
+
+  const fav = (p: string, addedAt: number): FavoriteItem => ({
+    path: p,
+    format: 'score',
+    pages: [],
+    title: p,
+    artist: '',
+    addedAt,
+  })
+  const prac = (p: string, over: Partial<PracticeRecord> = {}): PracticeRecord => ({
+    path: p,
+    title: p,
+    artist: '',
+    speedPct: 100,
+    loopBars: null,
+    muted: [],
+    totalSeconds: 0,
+    maxSpeedPct: 0,
+    firstAt: 0,
+    lastAt: 0,
+    ...over,
+  })
+
+  describe('favourites', () => {
+    it('migrates an old single-list file to the admin account', async () => {
+      const dir = freshDir()
+      fs.writeFileSync(
+        path.join(dir, 'favorites.json'),
+        JSON.stringify([fav('1-华语/a.gp5', 5), { not: 'valid' }]),
+      )
+      const map = await loadFavoritesByUser(dir, inRoot, 'admin-1')
+      expect([...map.keys()]).toEqual(['admin-1'])
+      expect(map.get('admin-1')!.map((f) => f.path)).toEqual(['1-华语/a.gp5'])
+      // Nothing is rewritten until the next save.
+      expect(JSON.parse(fs.readFileSync(path.join(dir, 'favorites.json'), 'utf8'))).toHaveLength(2)
+
+      await saveFavoritesByUser(dir, map)
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, 'favorites.json'), 'utf8'))
+      expect(stored.version).toBe(2)
+      expect(Object.keys(stored.users)).toEqual(['admin-1'])
+      expect(stored.users['admin-1']).toHaveLength(1)
+    })
+
+    it('returns an empty map when the file is missing', async () => {
+      const map = await loadFavoritesByUser(freshDir(), inRoot, 'admin-1')
+      expect(map.size).toBe(0)
+    })
+
+    it('sets a corrupt file aside and starts empty', async () => {
+      const dir = freshDir()
+      fs.writeFileSync(path.join(dir, 'favorites.json'), '{ broken')
+      const map = await loadFavoritesByUser(dir, inRoot, 'admin-1')
+      expect(map.size).toBe(0)
+      expect(fs.existsSync(path.join(dir, 'favorites.json'))).toBe(false)
+      expect(fs.readdirSync(dir).some((n) => n.startsWith('favorites.json.broken-'))).toBe(true)
+    })
+
+    it('round-trips the v2 map and keeps each user isolated', async () => {
+      const dir = freshDir()
+      const map: FavoritesByUser = new Map([
+        ['admin-1', [fav('a.gp5', 2), fav('b.gp5', 1)]],
+        ['user-2', [fav('b.gp5', 3)]],
+      ])
+      await saveFavoritesByUser(dir, map)
+      const back = await loadFavoritesByUser(dir, inRoot, 'admin-1')
+      expect(back.get('admin-1')).toEqual(map.get('admin-1'))
+      expect(back.get('user-2')).toEqual(map.get('user-2'))
+
+      // Removing from one user leaves the other user's copy of the same score.
+      back.set('admin-1', removeFavorite(back.get('admin-1')!, 'b.gp5'))
+      expect(back.get('admin-1')!.map((f) => f.path)).toEqual(['a.gp5'])
+      expect(back.get('user-2')!.map((f) => f.path)).toEqual(['b.gp5'])
+    })
+
+    it('drops invalid entries per user and ignores unknown versions', async () => {
+      const dir = freshDir()
+      fs.writeFileSync(
+        path.join(dir, 'favorites.json'),
+        JSON.stringify({
+          version: 2,
+          users: { u1: [fav('ok.gp5', 1), fav('../bad.gp5', 2)], u2: 'junk' },
+        }),
+      )
+      const map = await loadFavoritesByUser(dir, inRoot, 'admin-1')
+      expect(map.get('u1')!.map((f) => f.path)).toEqual(['ok.gp5'])
+      expect(map.get('u2')).toEqual([])
+
+      fs.writeFileSync(path.join(dir, 'favorites.json'), JSON.stringify({ version: 9, users: {} }))
+      expect((await loadFavoritesByUser(dir, inRoot, 'admin-1')).size).toBe(0)
+    })
+  })
+
+  describe('practice', () => {
+    const P = 'a.gp5'
+
+    it('migrates an old single-list file to the admin account', async () => {
+      const dir = freshDir()
+      fs.writeFileSync(
+        path.join(dir, 'practice.json'),
+        JSON.stringify([{ ...prac(P), title: 't', totalSeconds: 9, lastAt: 4 }]),
+      )
+      const map = await loadPracticeByUser(dir, inRoot, 'admin-1')
+      expect([...map.keys()]).toEqual(['admin-1'])
+      expect(map.get('admin-1')![0]).toMatchObject({ path: P, totalSeconds: 9 })
+
+      await savePracticeByUser(dir, map)
+      const stored = JSON.parse(fs.readFileSync(path.join(dir, 'practice.json'), 'utf8'))
+      expect(stored.version).toBe(2)
+      expect(Object.keys(stored.users)).toEqual(['admin-1'])
+    })
+
+    it('returns an empty map when the file is missing and sets a corrupt one aside', async () => {
+      const dir = freshDir()
+      expect((await loadPracticeByUser(dir, inRoot, 'admin-1')).size).toBe(0)
+      fs.writeFileSync(path.join(dir, 'practice.json'), 'nope[')
+      expect((await loadPracticeByUser(dir, inRoot, 'admin-1')).size).toBe(0)
+      expect(fs.readdirSync(dir).some((n) => n.startsWith('practice.json.broken-'))).toBe(true)
+    })
+
+    it('round-trips the v2 map and keeps each user isolated', async () => {
+      const dir = freshDir()
+      const map: PracticeByUser = new Map([
+        ['admin-1', [prac(P, { totalSeconds: 30, lastAt: 10 })]],
+        ['user-2', [prac(P, { totalSeconds: 5, lastAt: 20 }), prac('b.gp5', { lastAt: 1 })]],
+      ])
+      await savePracticeByUser(dir, map)
+      const back = await loadPracticeByUser(dir, inRoot, 'admin-1')
+      expect(back.get('admin-1')).toEqual(map.get('admin-1'))
+      expect(back.get('user-2')!.map((r) => r.path)).toEqual(['a.gp5', 'b.gp5'])
+      expect(back.get('user-2')![0]!.totalSeconds).toBe(5)
+    })
+  })
+
+  describe('progressFor', () => {
+    it('lists only the users with a record for the path, most recent first', () => {
+      const byUser: PracticeByUser = new Map([
+        ['u1', [prac('x.gp5', { totalSeconds: 60, maxSpeedPct: 120, lastAt: 100 })]],
+        ['u2', [prac('y.gp5', { lastAt: 999 })]],
+        ['u3', [prac('x.gp5', { totalSeconds: 5, maxSpeedPct: 80, lastAt: 300 })]],
+        ['u4', []],
+      ])
+      expect(progressFor(byUser, 'x.gp5')).toEqual([
+        { userId: 'u3', totalSeconds: 5, maxSpeedPct: 80, lastAt: 300 },
+        { userId: 'u1', totalSeconds: 60, maxSpeedPct: 120, lastAt: 100 },
+      ])
+    })
+
+    it('returns an empty list when nobody practised the path', () => {
+      expect(progressFor(new Map([['u1', [prac('y.gp5')]]]), 'x.gp5')).toEqual([])
+      expect(progressFor(new Map(), 'x.gp5')).toEqual([])
     })
   })
 })

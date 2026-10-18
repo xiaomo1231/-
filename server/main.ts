@@ -1,11 +1,12 @@
 /**
  * 谱库服务 (read-only): serves the student's own guitar-score folder to their
- * own browser, behind a password. Nothing is uploaded, nothing is written to
- * the folder. Run it with `node server-dist/server.mjs` (see server/README.md).
+ * own browser and their band's, behind accounts. Nothing is uploaded, nothing is
+ * written to the folder. Run it with `node server-dist/server.mjs` (see server/README.md).
  *
  * Configuration (environment variables):
  *   SCORES_ROOT      required  absolute path of the score folder
- *   SCORES_PASSWORD  required  access password, at least 8 characters
+ *   SCORES_PASSWORD  required  first password of the admin account "admin" (at least 8 characters;
+ *                              used only while SCORES_DATA has no accounts yet)
  *   PORT             default 8790
  *   HOST             default 127.0.0.1 (use 0.0.0.0 or the Tailscale IP on purpose)
  *   SCORES_DATA      default ~/.groovelab-scores (scan cache and session secret)
@@ -30,24 +31,50 @@ import {
 import {
   createSerialQueue,
   inRootOf,
-  loadFavorites,
+  loadFavoritesByUser,
   parseFavoriteInput,
   parseFavoritePath,
   removeFavorite,
-  saveFavorites,
+  saveFavoritesByUser,
   upsertFavorite,
   type FavoriteItem,
+  type FavoritesByUser,
   type InRoot,
 } from './favorites'
 import {
   applyPracticeUpdate,
-  loadPractice,
+  loadPracticeByUser,
   parsePracticePath,
   parsePracticeUpdate,
+  progressFor,
   removePractice,
-  savePractice,
-  type PracticeRecord,
+  savePracticeByUser,
+  type PracticeByUser,
 } from './practice'
+import {
+  createSession,
+  parseLogin,
+  parseNewUser,
+  parseUpdateMe,
+  parseUpdateUser,
+  publicUser,
+  UserError,
+  UserStore,
+  verifySession,
+  type StoredUser,
+} from './users'
+import {
+  BandError,
+  BandStore,
+  bandState,
+  parseAddSong,
+  parseRename,
+  parseReorder,
+  parseUpdateSong,
+} from './band'
+import { LiveHub, parseLiveCommand } from './live'
+import { EnsembleIndex } from './ensembles'
+import type { BandState } from '../src/songs/scoreServerTypes'
 import {
   loadFromFiles,
   readCache,
@@ -59,16 +86,13 @@ import {
 import {
   attachmentDisposition,
   createRateLimiter,
-  createSessionToken,
   decodeText,
   decodeUrlPath,
   mimeFor,
   parseRange,
-  passwordMatches,
   readCookie,
   resolveInside,
   resolveRealFile,
-  verifySessionToken,
 } from './util'
 
 const SESSION_COOKIE = 'gl_session'
@@ -176,10 +200,14 @@ let loaded: LoadedLibrary | null = null
 let scanning = false
 const limiter = createRateLimiter(LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS)
 let inRoot: InRoot
-let favorites: FavoriteItem[] = []
+let users: UserStore
+let band: BandStore
+let favorites: FavoritesByUser = new Map()
 const favoriteQueue = createSerialQueue()
-let practice: PracticeRecord[] = []
+let practice: PracticeByUser = new Map()
 const practiceQueue = createSerialQueue()
+const live = new LiveHub()
+let ensembles: EnsembleIndex
 /** The unfiltered "most versions" ranking, per library build (a new scan makes a new object). */
 const topCache = new WeakMap<LoadedLibrary, RankedSong[]>()
 
@@ -196,6 +224,7 @@ async function refreshLibrary(useCache: boolean): Promise<void> {
       if (cached) {
         loaded = loadFromFiles(cached.files, cached.scannedAt)
         log(`已从缓存载入：${cached.files.length} 个文件。`)
+        startEnsembles(loaded)
         return
       }
     }
@@ -203,6 +232,7 @@ async function refreshLibrary(useCache: boolean): Promise<void> {
     const files = await scanFolder(cfg.root, log)
     const scannedAt = Date.now()
     loaded = loadFromFiles(files, scannedAt)
+    startEnsembles(loaded)
     try {
       await writeCache(cfg.dataDir, cfg.root, scannedAt, files)
     } catch (err) {
@@ -245,8 +275,28 @@ function sessionCookie(value: string, maxAge: number, secure: boolean): string {
   return `${SESSION_COOKIE}=${value}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${maxAge}${secure ? '; Secure' : ''}`
 }
 
-const isLoggedIn = (req: http.IncomingMessage): boolean =>
-  verifySessionToken(readCookie(req.headers.cookie, SESSION_COOKIE), secret)
+function setSession(req: http.IncomingMessage, res: http.ServerResponse, u: StoredUser): void {
+  const token = createSession(secret, u, Date.now(), SESSION_MAX_AGE * 1000)
+  res.setHeader('Set-Cookie', sessionCookie(token, SESSION_MAX_AGE, isSecure(req)))
+}
+
+/** The signed-in account, or null (no cookie, expired, account removed or password changed since). */
+function currentUser(req: http.IncomingMessage): StoredUser | null {
+  const s = verifySession(readCookie(req.headers.cookie, SESSION_COOKIE), secret, Date.now())
+  if (!s) return null
+  const u = users.get(s.userId)
+  return u && u.sessionVersion === s.version ? u : null
+}
+
+const canBrowse = (u: StoredUser) => u.role === 'admin' || u.libraryAccess
+
+function requireBrowse(u: StoredUser): void {
+  if (!canBrowse(u)) throw new HttpError(403, '你的账号只能查看乐队歌单里的谱子。')
+}
+
+function requireAdmin(u: StoredUser): void {
+  if (u.role !== 'admin') throw new HttpError(403, '只有管理员可以这样做。')
+}
 
 // ---------------------------------------------------------------------------
 // API
@@ -267,51 +317,64 @@ async function handleFavorites(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   p: string,
+  uid: string,
 ): Promise<void> {
   if (p === '/api/favorites') {
-    if (req.method === 'GET') return sendJson(res, 200, favorites)
+    if (req.method === 'GET') return sendJson(res, 200, favorites.get(uid) ?? [])
     if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
     const body = await readJsonBody(req, MAX_FAVORITE_BODY)
     const item = orBadRequest(parseFavoriteInput(body, inRoot, Date.now()))
-    const next = await favoriteQueue(() => persistFavorites((list) => upsertFavorite(list, item)))
+    const next = await favoriteQueue(() =>
+      persistFavorites(uid, (list) => upsertFavorite(list, item)),
+    )
     return sendJson(res, 200, next)
   }
   // POST /api/favorites/remove
   if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
   const body = await readJsonBody(req, MAX_FAVORITE_BODY)
   const rel = orBadRequest(parseFavoritePath(body, inRoot))
-  const next = await favoriteQueue(() => persistFavorites((list) => removeFavorite(list, rel)))
+  const next = await favoriteQueue(() =>
+    persistFavorites(uid, (list) => removeFavorite(list, rel)),
+  )
   return sendJson(res, 200, next)
 }
 
-/** Applies `change` to the favourites, writes the file, then keeps the new list in memory. */
+/** Changes one account's favourites (or drops the account's list), writes the file, then keeps the result. */
 async function persistFavorites(
-  change: (list: FavoriteItem[]) => FavoriteItem[],
+  uid: string,
+  change: ((list: FavoriteItem[]) => FavoriteItem[]) | null,
 ): Promise<FavoriteItem[]> {
-  const next = change(favorites)
+  const next = new Map(favorites)
+  let list: FavoriteItem[] = []
+  if (change) {
+    list = change(favorites.get(uid) ?? [])
+    next.set(uid, list)
+  } else next.delete(uid)
   try {
-    await saveFavorites(cfg.dataDir, next)
+    await saveFavoritesByUser(cfg.dataDir, next)
   } catch (err) {
     log(`收藏保存失败：${errorText(err)}`)
     throw new HttpError(500, '收藏保存失败，请检查 SCORES_DATA 文件夹是否可写。')
   }
   favorites = next
-  return next
+  return list
 }
 
 async function handlePractice(
   req: http.IncomingMessage,
   res: http.ServerResponse,
   p: string,
+  uid: string,
 ): Promise<void> {
-  if (p === '/api/practice' && req.method === 'GET') return sendJson(res, 200, practice)
+  if (p === '/api/practice' && req.method === 'GET')
+    return sendJson(res, 200, practice.get(uid) ?? [])
   if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
   const body = await readJsonBody(req, MAX_FAVORITE_BODY)
   if (p === '/api/practice') {
     const update = orBadRequest(parsePracticeUpdate(body, inRoot))
     const record = await practiceQueue(async () => {
-      const r = applyPracticeUpdate(practice, update, Date.now())
-      await persistPractice(r.list)
+      const r = applyPracticeUpdate(practice.get(uid) ?? [], update, Date.now())
+      await persistPractice(new Map(practice).set(uid, r.list))
       return r.record
     })
     return sendJson(res, 200, record)
@@ -319,17 +382,17 @@ async function handlePractice(
   // POST /api/practice/remove
   const rel = orBadRequest(parsePracticePath(body, inRoot))
   const next = await practiceQueue(async () => {
-    const list = removePractice(practice, rel)
-    await persistPractice(list)
+    const list = removePractice(practice.get(uid) ?? [], rel)
+    await persistPractice(new Map(practice).set(uid, list))
     return list
   })
   return sendJson(res, 200, next)
 }
 
 /** Writes the practice records, then keeps them in memory. */
-async function persistPractice(next: PracticeRecord[]): Promise<void> {
+async function persistPractice(next: PracticeByUser): Promise<void> {
   try {
-    await savePractice(cfg.dataDir, next)
+    await savePracticeByUser(cfg.dataDir, next)
   } catch (err) {
     log(`练习记录保存失败：${errorText(err)}`)
     throw new HttpError(500, '练习记录保存失败，请检查 SCORES_DATA 文件夹是否可写。')
@@ -337,8 +400,164 @@ async function persistPractice(next: PracticeRecord[]): Promise<void> {
   practice = next
 }
 
-function libraryInfo(): unknown {
+/** Account and band errors carry their own status. */
+function asHttp(err: unknown): never {
+  if (err instanceof UserError || err instanceof BandError)
+    throw new HttpError(err.status, err.message)
+  throw err
+}
+
+const storedUsers = (): StoredUser[] =>
+  users
+    .list()
+    .map((u) => users.get(u.id))
+    .filter((u): u is StoredUser => u !== undefined)
+
+async function handleUsers(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  p: string,
+  me: StoredUser,
+): Promise<void> {
+  if (p === '/api/me/update') {
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const body = orBadRequest(parseUpdateMe(await readJsonBody(req)))
+    const info = await users.updateMe(me.id, body).catch(asHttp)
+    // A new password signs out the other devices; this one gets a fresh session.
+    const fresh = users.get(me.id)
+    if (fresh && body.newPassword) setSession(req, res, fresh)
+    return sendJson(res, 200, info)
+  }
+  requireAdmin(me)
+  if (p === '/api/users') {
+    if (req.method === 'GET') return sendJson(res, 200, users.list())
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const body = orBadRequest(parseNewUser(await readJsonBody(req), storedUsers()))
+    await users.create(body).catch(asHttp)
+    log(`新建账号：${body.username}`)
+    return sendJson(res, 200, users.list())
+  }
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  if (p === '/api/users/update') {
+    const body = orBadRequest(parseUpdateUser(await readJsonBody(req), storedUsers()))
+    await users.update(body).catch(asHttp)
+    return sendJson(res, 200, users.list())
+  }
+  if (p !== '/api/users/remove') return sendJson(res, 404, { error: '找不到这个接口。' })
+  const body = await readJsonBody(req)
+  const id = typeof body.id === 'string' ? body.id : ''
+  if (id === me.id) throw new HttpError(400, '不能删除自己的账号。')
+  await users.remove(id).catch(asHttp)
+  // Their part assignments, favourites and practice go with the account.
+  await band.dropUser(id).catch(asHttp)
+  await favoriteQueue(() => persistFavorites(id, null))
+  await practiceQueue(async () => {
+    const next = new Map(practice)
+    next.delete(id)
+    await persistPractice(next)
+  })
+  log(`删除账号：${id}`)
+  return sendJson(res, 200, users.list())
+}
+
+function currentBand(): BandState {
+  return bandState(band, users.list(), (path) => progressFor(practice, path))
+}
+
+async function handleBand(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  p: string,
+  me: StoredUser,
+): Promise<void> {
+  if (p === '/api/band') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    return sendJson(res, 200, currentBand())
+  }
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+  const now = Date.now()
+  if (p === '/api/band/songs/add') {
+    // Adding a song means picking it from the library.
+    requireBrowse(me)
+    await band.add(orBadRequest(parseAddSong(body, inRoot)), me.id, now).catch(asHttp)
+  } else if (p === '/api/band/songs/update') {
+    const u = orBadRequest(parseUpdateSong(body, (id) => users.get(id) !== undefined))
+    await band.update(u, now).catch(asHttp)
+  } else if (p === '/api/band/songs/remove') {
+    await band.remove(typeof body.id === 'string' ? body.id : '').catch(asHttp)
+  } else if (p === '/api/band/songs/reorder') {
+    const ids = orBadRequest(
+      parseReorder(
+        body,
+        band.songs().map((x) => x.id),
+      ),
+    )
+    await band.reorder(ids).catch(asHttp)
+  } else if (p === '/api/band/rename') {
+    await band.rename(orBadRequest(parseRename(body))).catch(asHttp)
+  } else return sendJson(res, 404, { error: '找不到这个接口。' })
+  return sendJson(res, 200, currentBand())
+}
+
+async function handleLive(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  if (url.pathname === '/api/live/events') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const songId = url.searchParams.get('songId') ?? ''
+    if (!band.get(songId)) return sendJson(res, 404, { error: '这首歌不在乐队歌单里。' })
+    live.subscribe(songId, me.id, req, res)
+    return
+  }
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  const cmd = orBadRequest(parseLiveCommand(await readJsonBody(req)))
+  if (!band.get(cmd.songId)) return sendJson(res, 404, { error: '这首歌不在乐队歌单里。' })
+  const r = live.command(me.id, cmd)
+  if ('error' in r) return sendJson(res, r.status, { error: r.error })
+  return sendJson(res, 200, r.state)
+}
+
+/** Every score file of the library, for the background track reader (找乐队谱). */
+function startEnsembles(lib: LoadedLibrary): void {
+  const files: Array<{ path: string; title: string; artist: string }> = []
+  for (const [artistId, songs] of lib.lib.songs) {
+    const artist = lib.lib.artistById.get(artistId)?.name ?? ''
+    for (const song of songs)
+      for (const v of song.versions)
+        if (v.file.format === 'score') files.push({ path: v.file.path, title: song.title, artist })
+  }
+  void ensembles.start(files)
+}
+
+/** GET /api/ensembles: a search narrows to the matching songs' files first. */
+function queryEnsembles(url: URL): unknown {
+  const q = (url.searchParams.get('q') ?? '').trim()
+  if ([...q].length > MAX_QUERY_LENGTH) throw new HttpError(400, '搜索内容太长。')
+  const num = (k: string, d: number) => {
+    const v = Number(url.searchParams.get(k) ?? d)
+    return Number.isFinite(v) ? Math.max(0, Math.floor(v)) : d
+  }
+  let paths: Set<string> | undefined
+  if (q) {
+    const lib = requireLibrary()
+    const result = search(lib.lib, lib.index, q, tools)
+    paths = new Set(result.songs.flatMap((r) => r.song.versions.map((v) => v.file.path)))
+  }
+  return ensembles.query({
+    paths,
+    need: url.searchParams.get('need') ?? '',
+    offset: num('offset', 0),
+    limit: num('limit', 50),
+  })
+}
+
+function libraryInfo(u: StoredUser): unknown {
   const root = path.basename(cfg.root) || 'root'
+  if (!canBrowse(u)) return { root, scannedAt: 0, files: 0, scanning: false, categories: [] }
   if (!loaded) return { root, scannedAt: 0, files: 0, scanning: true, categories: [] }
   return {
     root,
@@ -366,16 +585,29 @@ async function handleApi(
     return sendJson(res, 200, { ok: true })
   }
 
-  if (!isLoggedIn(req)) return sendJson(res, 401, { error: '请先登录。' })
+  const me = currentUser(req)
+  if (!me) return sendJson(res, 401, { error: '请先登录。' })
 
-  if (p === '/api/favorites' || p === '/api/favorites/remove') return handleFavorites(req, res, p)
-  if (p === '/api/practice' || p === '/api/practice/remove') return handlePractice(req, res, p)
+  if (p === '/api/favorites' || p === '/api/favorites/remove')
+    return handleFavorites(req, res, p, me.id)
+  if (p === '/api/practice' || p === '/api/practice/remove')
+    return handlePractice(req, res, p, me.id)
+  if (p === '/api/me/update' || p === '/api/users' || p.startsWith('/api/users/'))
+    return handleUsers(req, res, p, me)
+  if (p === '/api/band' || p.startsWith('/api/band/')) return handleBand(req, res, p, me)
+  if (p === '/api/live/events' || p === '/api/live/command') return handleLive(req, res, url, me)
 
-  const routes: Record<string, { method: string; run: () => Promise<unknown> | unknown }> = {
-    '/api/me': { method: 'GET', run: () => ({ ok: true }) },
-    '/api/library': { method: 'GET', run: libraryInfo },
+  const routes: Record<
+    string,
+    { method: string; browse?: boolean; run: () => Promise<unknown> | unknown }
+  > = {
+    '/api/me': { method: 'GET', run: () => publicUser(me) },
+    '/api/time': { method: 'GET', run: () => ({ now: Date.now() }) },
+    '/api/library': { method: 'GET', run: () => libraryInfo(me) },
+    '/api/ensembles': { method: 'GET', browse: true, run: () => queryEnsembles(url) },
     '/api/artists': {
       method: 'GET',
+      browse: true,
       run: () => {
         const group = url.searchParams.get('group')
         if (!group) throw new HttpError(400, '缺少 group 参数。')
@@ -384,6 +616,7 @@ async function handleApi(
     },
     '/api/songs': {
       method: 'GET',
+      browse: true,
       run: () => {
         const artist = url.searchParams.get('artist')
         if (!artist) throw new HttpError(400, '缺少 artist 参数。')
@@ -392,6 +625,7 @@ async function handleApi(
     },
     '/api/search': {
       method: 'GET',
+      browse: true,
       run: () => {
         const q = (url.searchParams.get('q') ?? '').trim()
         if ([...q].length > MAX_QUERY_LENGTH) throw new HttpError(400, '搜索内容太长。')
@@ -405,6 +639,7 @@ async function handleApi(
     },
     '/api/top': {
       method: 'GET',
+      browse: true,
       run: () => {
         const opts = orBadRequest(parseCatalogParams(url.searchParams))
         const lib = requireLibrary()
@@ -428,6 +663,7 @@ async function handleApi(
     '/api/rescan': {
       method: 'POST',
       run: () => {
+        requireAdmin(me)
         if (scanning) throw new HttpError(409, '正在扫描，请稍候。')
         void refreshLibrary(false)
         return { ok: true, scanning: true }
@@ -437,12 +673,14 @@ async function handleApi(
 
   if (p === '/api/text') {
     if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    requireBrowse(me)
     return handleText(res, url.searchParams.get('p') ?? '')
   }
 
   const route = routes[p]
   if (!route) return sendJson(res, 404, { error: '找不到这个接口。' })
   if (req.method !== route.method) return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  if (route.browse) requireBrowse(me)
   const status = p === '/api/rescan' ? 202 : 200
   const body = await route.run()
   sendJson(res, status, body)
@@ -451,18 +689,16 @@ async function handleApi(
 async function handleLogin(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   const ip = req.socket.remoteAddress ?? 'unknown'
   if (limiter.isBlocked(ip)) return sendJson(res, 429, { error: '尝试次数太多，10 分钟后再试。' })
-  const body = await readJsonBody(req)
-  const password = typeof body.password === 'string' ? body.password : ''
-  if (!password) return sendJson(res, 400, { error: '请输入密码。' })
-  if (!passwordMatches(password, cfg.password)) {
+  const body = orBadRequest(parseLogin(await readJsonBody(req)))
+  const u = await users.login(body.username, body.password)
+  if (!u) {
     limiter.recordFailure(ip)
     log(`登录失败（来自 ${ip}）。`)
-    return sendJson(res, 401, { error: '密码不对。' })
+    return sendJson(res, 401, { error: '用户名或密码不对。' })
   }
   limiter.clear(ip)
-  const token = createSessionToken(secret)
-  res.setHeader('Set-Cookie', sessionCookie(token, SESSION_MAX_AGE, isSecure(req)))
-  sendJson(res, 200, { ok: true })
+  setSession(req, res, u)
+  sendJson(res, 200, publicUser(u))
 }
 
 async function handleText(res: http.ServerResponse, rel: string): Promise<void> {
@@ -487,13 +723,17 @@ async function handleFile(
   res: http.ServerResponse,
   url: URL,
 ): Promise<void> {
-  if (!isLoggedIn(req)) return sendJson(res, 401, { error: '请先登录。' })
+  const me = currentUser(req)
+  if (!me) return sendJson(res, 401, { error: '请先登录。' })
   if (req.method !== 'GET' && req.method !== 'HEAD')
     return sendJson(res, 405, { error: '不支持这种请求方式。' })
 
   const rel = decodeUrlPath(url.pathname.slice('/files/'.length))
   const real = rel === null ? null : await resolveRealFile(cfg.root, realRoot, rel)
   if (!real || rel === null) return sendJson(res, 404, { error: '找不到文件。' })
+  // Members without library access open only the band's setlist.
+  if (!canBrowse(me) && !band.hasPath(rel))
+    return sendJson(res, 403, { error: '你的账号只能查看乐队歌单里的谱子。' })
 
   const st = await fs.promises.stat(real)
   const size = st.size
@@ -633,12 +873,20 @@ async function main(): Promise<void> {
   secret = await loadSecret(cfg.dataDir)
   inRoot = inRootOf(cfg.root)
   try {
-    favorites = await loadFavorites(cfg.dataDir, inRoot)
+    users = await UserStore.load(cfg.dataDir, cfg.password)
+  } catch (err) {
+    console.error(`账号文件读取失败：${errorText(err)}`)
+    process.exit(1)
+  }
+  try {
+    favorites = await loadFavoritesByUser(cfg.dataDir, inRoot, users.adminId())
   } catch (err) {
     console.error(`收藏文件读取失败：${errorText(err)}`)
     process.exit(1)
   }
-  practice = await loadPractice(cfg.dataDir, inRoot)
+  practice = await loadPracticeByUser(cfg.dataDir, inRoot, users.adminId())
+  band = await BandStore.load(cfg.dataDir, inRoot)
+  ensembles = new EnsembleIndex(cfg.root, cfg.dataDir)
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 
   const server = http.createServer(onRequest)

@@ -1,10 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { api, errorText, type LibraryInfo } from '../lib/api'
+import { api, errorText, type LibraryInfo, type UserInfo } from '../lib/api'
 import { cx } from '../lib/classes'
 import { useFavorites } from '../lib/favorites'
-import { libraryName } from '../lib/format'
 import { LibraryContext, type LibraryValue } from '../lib/libraryContext'
-import { HREF_FAVORITES, hrefSearch, navigate, useRoute, type Route } from '../lib/route'
+import { useMe } from '../lib/session'
+import {
+  HREF_ACCOUNT,
+  HREF_BAND,
+  HREF_FAVORITES,
+  HREF_USERS,
+  hrefSearch,
+  navigate,
+  useRoute,
+  type Route,
+} from '../lib/route'
 import { Link } from './Link'
 import { Notice } from './ui'
 import { Home } from '../pages/Home'
@@ -13,12 +22,27 @@ import { ArtistsPage } from '../pages/ArtistsPage'
 import { SongsPage } from '../pages/SongsPage'
 import { SearchPage } from '../pages/SearchPage'
 import { FavoritesPage } from '../pages/FavoritesPage'
+import { BandPage } from '../pages/BandPage'
+import { BandSongPage } from '../pages/BandSongPage'
+import { EnsemblesPage } from '../pages/EnsemblesPage'
+import { AccountPage } from '../pages/AccountPage'
+import { UsersPage } from '../pages/UsersPage'
 import { Viewer } from '../viewer/Viewer'
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
 const ICON_BUTTON =
   'grid h-11 min-w-11 place-items-center rounded-lg px-2 text-muted-foreground transition-colors hover:bg-card hover:text-foreground disabled:opacity-40'
+
+/** Pages that read the score library; members without library access get the band page instead. */
+const LIBRARY_ROUTES: ReadonlySet<Route['kind']> = new Set<Route['kind']>([
+  'home',
+  'category',
+  'group',
+  'artist',
+  'search',
+  'favorites',
+])
 
 /** Goes to 目录 and scrolls to 最近看过 (the phone's 「最近」 tab). */
 function showRecent() {
@@ -36,11 +60,16 @@ function showRecent() {
 /** The signed-in page: the library state (shared by every page), the top bar and the current page. */
 export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   const route = useRoute()
+  const me = useMe()
   const { items: favorites } = useFavorites()
   const [info, setInfo] = useState<LibraryInfo | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [version, setVersion] = useState(0)
   const polling = useRef(false)
+
+  const isAdmin = me?.role === 'admin'
+  // Members without library access only see the band (their setlists) and their account.
+  const libraryHidden = me !== null && me.role === 'member' && !me.libraryAccess
 
   /** Reads the library until the scan has finished, then refreshes every page. */
   const poll = useCallback(async () => {
@@ -74,13 +103,14 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   }, [poll])
 
   useEffect(() => {
-    void load()
-  }, [load])
+    if (!libraryHidden) void load()
+  }, [load, libraryHidden])
 
   // Ctrl/⌘ + K opens 搜索谱 (or focuses its field when it is already open).
   const routeKind = route.kind
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
+      if (libraryHidden) return
       if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault()
         if (routeKind === 'search') document.getElementById('song-search')?.focus()
@@ -89,7 +119,7 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
     }
     window.addEventListener('keydown', onKey)
     return () => window.removeEventListener('keydown', onKey)
-  }, [routeKind])
+  }, [routeKind, libraryHidden])
 
   const rescan = useCallback(async () => {
     setError(null)
@@ -106,7 +136,11 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
     api
       .logout()
       .catch(() => undefined)
-      .finally(onLoggedOut)
+      // A fresh page: favourites, practice and the band from this account are not kept in memory.
+      .finally(() => {
+        onLoggedOut()
+        window.location.reload()
+      })
   }
 
   const scanning = info?.scanning ?? false
@@ -123,6 +157,9 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   )
 
   const onViewer = route.kind === 'viewer'
+  // Band and account pages do not need the library, so they never wait for it.
+  const pageReady =
+    info !== null || onViewer || libraryHidden || !LIBRARY_ROUTES.has(route.kind)
 
   return (
     <LibraryContext.Provider value={value}>
@@ -132,67 +169,81 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
           style={{ paddingTop: 'env(safe-area-inset-top)' }}
         >
           <div className="gutter mx-auto flex h-[54px] w-full max-w-[1180px] items-center gap-3">
-            <Link href="#/" className="flex min-w-0 flex-1 items-baseline gap-2.5">
-              <span className="font-display text-xl font-black tracking-[0.02em]">谱库</span>
-              <small className="mono min-w-0 truncate text-[11px] text-muted-foreground">
-                {scanning
-                  ? '正在扫描文件夹…'
-                  : info
-                    ? `${libraryName(info.root)} · ${info.files.toLocaleString('zh-CN')}`
-                    : ' '}
-              </small>
-            </Link>
-
             <Link
-              href={hrefSearch()}
-              ariaLabel="搜索谱"
-              className="hidden h-9 items-center gap-2.5 rounded-lg border border-border px-3 text-sm text-muted-foreground transition-colors hover:bg-card min-[861px]:flex"
+              href={libraryHidden ? HREF_BAND : '#/'}
+              className="flex min-w-0 flex-1 items-baseline gap-2.5"
             >
-              <svg
-                width="16"
-                height="16"
-                viewBox="0 0 24 24"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2.2"
-                strokeLinecap="round"
-                aria-hidden="true"
-              >
-                <circle cx="10.5" cy="10.5" r="6.5" />
-                <path d="M15.5 15.5 21 21" />
-              </svg>
-              <span>搜索谱</span>
-              <kbd className="mono rounded-[4px] border border-border px-1.5 text-[11px]">
-                Ctrl K
-              </kbd>
+              <span className="font-display text-xl font-black tracking-[0.02em]">谱库</span>
             </Link>
 
+            {!libraryHidden && (
+              <Link
+                href={hrefSearch()}
+                ariaLabel="搜索谱"
+                className="hidden h-9 items-center gap-2.5 rounded-lg border border-border px-3 text-sm text-muted-foreground transition-colors hover:bg-card min-[861px]:flex"
+              >
+                <svg
+                  width="16"
+                  height="16"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  aria-hidden="true"
+                >
+                  <circle cx="10.5" cy="10.5" r="6.5" />
+                  <path d="M15.5 15.5 21 21" />
+                </svg>
+                <span>搜索谱</span>
+                <kbd className="mono rounded-[4px] border border-border px-1.5 text-[11px]">
+                  Ctrl K
+                </kbd>
+              </Link>
+            )}
+
+            {!libraryHidden && (
+              <Link
+                href={HREF_FAVORITES}
+                ariaLabel={`我的收藏，${favorites.length} 个`}
+                className="hidden h-9 items-center gap-1.5 rounded-lg px-3 text-foreground transition-colors hover:bg-card min-[861px]:flex"
+              >
+                <span aria-hidden className="text-primary">
+                  ★
+                </span>
+                <span className="mono text-xs text-primary">{favorites.length}</span>
+              </Link>
+            )}
+
             <Link
-              href={HREF_FAVORITES}
-              ariaLabel={`我的收藏，${favorites.length} 个`}
+              href={HREF_BAND}
               className="hidden h-9 items-center gap-1.5 rounded-lg px-3 text-foreground transition-colors hover:bg-card min-[861px]:flex"
             >
               <span aria-hidden className="text-primary">
-                ★
+                ♫
               </span>
-              <span className="mono text-xs text-primary">{favorites.length}</span>
+              <span className="text-sm">乐队</span>
             </Link>
 
-            <button
-              type="button"
-              onClick={() => value.rescan()}
-              disabled={scanning || !info}
-              className={ICON_BUTTON}
-              aria-label={scanning ? '正在扫描' : '重新扫描'}
-              title="重新扫描"
-            >
-              <span
-                aria-hidden
-                className={cx('text-lg leading-none', scanning && 'inline-block animate-spin')}
+            {me && <AccountLinks me={me} />}
+
+            {isAdmin && (
+              <button
+                type="button"
+                onClick={() => value.rescan()}
+                disabled={scanning || !info}
+                className={ICON_BUTTON}
+                aria-label={scanning ? '正在扫描' : '重新扫描'}
+                title="重新扫描"
               >
-                ↻
-              </span>
-            </button>
+                <span
+                  aria-hidden
+                  className={cx('text-lg leading-none', scanning && 'inline-block animate-spin')}
+                >
+                  ↻
+                </span>
+              </button>
+            )}
             <button
               type="button"
               onClick={logout}
@@ -216,8 +267,8 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
               : 'gutter max-w-[1180px] pb-[max(2rem,env(safe-area-inset-bottom))] pt-2 max-[860px]:pb-[calc(72px_+_env(safe-area-inset-bottom,0px))]',
           )}
         >
-          {info || onViewer ? (
-            renderRoute(route)
+          {pageReady ? (
+            renderRoute(route, libraryHidden)
           ) : error ? (
             <Notice tone="error">
               <p>{error}</p>
@@ -234,17 +285,63 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
           )}
         </main>
 
-        {!onViewer && <TabBar route={route} />}
+        {!onViewer && <TabBar route={route} libraryHidden={libraryHidden} />}
       </div>
     </LibraryContext.Provider>
   )
 }
 
-/** The phone's bottom navigation: 目录 / 搜索 / 收藏 / 最近. */
-function TabBar({ route }: { route: Route }) {
-  const current = route.kind === 'search' ? 'search' : route.kind === 'favorites' ? 'fav' : 'toc'
+/** Top-bar account entries: 成员 (admins only) and the signed-in user's name, both to their pages. */
+function AccountLinks({ me }: { me: UserInfo }) {
+  return (
+    <>
+      {me.role === 'admin' && (
+        <Link
+          href={HREF_USERS}
+          className="flex h-9 items-center rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+        >
+          成员
+        </Link>
+      )}
+      <Link
+        href={HREF_ACCOUNT}
+        ariaLabel={`我的账号：${me.displayName}`}
+        className="flex h-9 max-w-[10rem] items-center gap-1.5 rounded-lg px-2.5 text-sm text-foreground transition-colors hover:bg-card"
+      >
+        <svg
+          width="16"
+          height="16"
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+          aria-hidden="true"
+          className="shrink-0"
+        >
+          <circle cx="12" cy="8" r="4" />
+          <path d="M4 21c0-4.4 3.6-7 8-7s8 2.6 8 7" />
+        </svg>
+        <span className="hidden truncate min-[861px]:inline">{me.displayName}</span>
+      </Link>
+    </>
+  )
+}
+
+/** The phone's bottom navigation: 目录 / 搜索 / 乐队 / 收藏 / 最近, or 乐队 / 我的 without library access. */
+function TabBar({ route, libraryHidden }: { route: Route; libraryHidden: boolean }) {
+  const current =
+    route.kind === 'band' || route.kind === 'bandSong' || route.kind === 'ensembles'
+      ? 'band'
+      : route.kind === 'account' || route.kind === 'users'
+        ? 'me'
+        : route.kind === 'search'
+          ? 'search'
+          : route.kind === 'favorites'
+            ? 'fav'
+            : 'toc'
   const tab = (
-    id: 'toc' | 'search' | 'fav' | 'recent',
+    id: 'toc' | 'search' | 'band' | 'fav' | 'recent' | 'me',
     icon: string,
     label: string,
     onClick: () => void,
@@ -277,18 +374,24 @@ function TabBar({ route }: { route: Route }) {
   return (
     <nav
       aria-label="主导航"
-      className="fixed inset-x-0 bottom-0 z-[35] grid grid-cols-4 gap-1 border-t border-border bg-background/95 px-4 pt-1.5 backdrop-blur-[12px] min-[861px]:hidden"
+      className={cx(
+        'fixed inset-x-0 bottom-0 z-[35] grid gap-1 border-t border-border bg-background/95 px-4 pt-1.5 backdrop-blur-[12px] min-[861px]:hidden',
+        libraryHidden ? 'grid-cols-2' : 'grid-cols-5',
+      )}
       style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}
     >
-      {tab('toc', '☰', '目录', () => navigate('#/'))}
-      {tab('search', '⌕', '搜索', () => navigate(hrefSearch()))}
-      {tab('fav', '★', '收藏', () => navigate(HREF_FAVORITES))}
-      {tab('recent', '◷', '最近', showRecent)}
+      {!libraryHidden && tab('toc', '☰', '目录', () => navigate('#/'))}
+      {!libraryHidden && tab('search', '⌕', '搜索', () => navigate(hrefSearch()))}
+      {tab('band', '♫', '乐队', () => navigate(HREF_BAND))}
+      {!libraryHidden && tab('fav', '★', '收藏', () => navigate(HREF_FAVORITES))}
+      {!libraryHidden && tab('recent', '◷', '最近', showRecent)}
+      {libraryHidden && tab('me', '☺', '我的', () => navigate(HREF_ACCOUNT))}
     </nav>
   )
 }
 
-function renderRoute(route: Route) {
+function renderRoute(route: Route, libraryHidden: boolean) {
+  if (libraryHidden && LIBRARY_ROUTES.has(route.kind)) return <BandPage />
   switch (route.kind) {
     case 'home':
       return <Home />
@@ -302,7 +405,18 @@ function renderRoute(route: Route) {
       return <SearchPage q={route.q} />
     case 'favorites':
       return <FavoritesPage />
+    case 'band':
+      return <BandPage />
+    case 'bandSong':
+      return <BandSongPage key={route.id} id={route.id} />
+    case 'ensembles':
+      return <EnsemblesPage q={route.q} need={route.need} />
+    case 'account':
+      return <AccountPage />
+    case 'users':
+      return <UsersPage />
     case 'viewer':
+      // The viewer takes the whole route, including `band` (the setlist it was opened from).
       return <Viewer key={route.path} route={route} />
   }
 }

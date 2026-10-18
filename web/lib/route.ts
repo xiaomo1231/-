@@ -9,6 +9,8 @@ export interface ViewerRoute {
   pages: string[]
   title: string
   artist: string
+  /** Opened from the band's setlist: that band song's id (parts, rehearsal speed, 一起播放). */
+  band: string
 }
 
 export type Route =
@@ -18,6 +20,11 @@ export type Route =
   | { kind: 'artist'; id: string; name: string }
   | { kind: 'search'; q: string }
   | { kind: 'favorites' }
+  | { kind: 'band' }
+  | { kind: 'bandSong'; id: string }
+  | { kind: 'ensembles'; q: string; need: string }
+  | { kind: 'account' }
+  | { kind: 'users' }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -48,6 +55,12 @@ export function parseHash(hash: string): Route {
   }
   if (path === '/s') return { kind: 'search', q: qs.get('q') ?? '' }
   if (path === '/f') return { kind: 'favorites' }
+  if (path === '/b') return { kind: 'band' }
+  const bs = /^\/b\/s\/(.+)$/.exec(path)
+  if (bs) return { kind: 'bandSong', id: decode(bs[1] ?? '') }
+  if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
+  if (path === '/me') return { kind: 'account' }
+  if (path === '/users') return { kind: 'users' }
   if (path === '/v') {
     return {
       kind: 'viewer',
@@ -56,6 +69,7 @@ export function parseHash(hash: string): Route {
       pages: parsePages(qs.get('pages')),
       title: qs.get('title') ?? '',
       artist: qs.get('artist') ?? '',
+      band: qs.get('b') ?? '',
     }
   }
   return { kind: 'home' }
@@ -67,6 +81,19 @@ export function hrefSearch(q = ''): string {
 }
 
 export const HREF_FAVORITES = '#/f'
+export const HREF_BAND = '#/b'
+export const HREF_ACCOUNT = '#/me'
+export const HREF_USERS = '#/users'
+
+export function hrefBandSong(id: string): string {
+  return `#/b/s/${enc(id)}`
+}
+
+/** 找乐队谱, optionally searched and filtered (need: comma list such as "guitar2,keys"). */
+export function hrefEnsembles(q = '', need = ''): string {
+  const parts = [q && `q=${enc(q)}`, need && `need=${enc(need)}`].filter(Boolean)
+  return parts.length ? `#/e?${parts.join('&')}` : '#/e'
+}
 
 export function hrefCategory(id: string): string {
   return `#/c/${enc(id)}`
@@ -86,10 +113,13 @@ export function hrefViewer(v: {
   pages?: string[]
   title: string
   artist: string
+  /** Band song id when opened from the setlist. */
+  band?: string
 }): string {
   const parts = [`p=${enc(v.path)}`, `f=${enc(v.format)}`]
   if (v.pages && v.pages.length > 0) parts.push(`pages=${enc(JSON.stringify(v.pages))}`)
   parts.push(`title=${enc(v.title)}`, `artist=${enc(v.artist)}`)
+  if (v.band) parts.push(`b=${enc(v.band)}`)
   return `#/v?${parts.join('&')}`
 }
 

@@ -6,6 +6,22 @@ import type {
   ScoreSong,
 } from '@/songs/scoreLibraryTypes'
 
+import type {
+  AddBandSongBody,
+  BandState,
+  EnsembleResult,
+  LiveCommand,
+  LiveState,
+  LoginBody,
+  NewUserBody,
+  UpdateBandSongBody,
+  UpdateMeBody,
+  UpdateUserBody,
+  UserInfo,
+} from '@/songs/scoreServerTypes'
+
+export type * from '@/songs/scoreServerTypes'
+
 /** A starred score (kept on the server, so every device sees the same list). */
 export interface FavoriteItem {
   path: string
@@ -142,13 +158,42 @@ const enc = encodeURIComponent
 
 export const api = {
   /** Resolves when the session cookie is valid; rejects with a 401 ApiError otherwise. */
-  async me(): Promise<void> {
+  /** The signed-in account; rejects with a 401 ApiError when the session is gone. */
+  async me(): Promise<UserInfo> {
     const res = await fetch('/api/me', { credentials: 'same-origin', cache: 'no-store' })
     if (res.status === 401) throw new ApiError(401, '')
     if (!res.ok) throw await failure(res)
+    return (await res.json()) as UserInfo
   },
-  login: (password: string) =>
-    call<{ ok: boolean }>('/api/login', { body: { password }, quietAuth: true }),
+  login: (username: string, password: string) =>
+    call<UserInfo>('/api/login', { body: { username, password } satisfies LoginBody, quietAuth: true }),
+  updateMe: (b: UpdateMeBody) => call<UserInfo>('/api/me/update', { body: b }),
+  // accounts (admin)
+  users: (signal?: AbortSignal) => call<UserInfo[]>('/api/users', { signal }),
+  addUser: (b: NewUserBody) => call<UserInfo[]>('/api/users', { body: b }),
+  updateUser: (b: UpdateUserBody) => call<UserInfo[]>('/api/users/update', { body: b }),
+  removeUser: (id: string) => call<UserInfo[]>('/api/users/remove', { body: { id } }),
+  // band
+  band: (signal?: AbortSignal) => call<BandState>('/api/band', { signal }),
+  addBandSong: (b: AddBandSongBody) => call<BandState>('/api/band/songs/add', { body: b }),
+  updateBandSong: (b: UpdateBandSongBody) =>
+    call<BandState>('/api/band/songs/update', { body: b }),
+  removeBandSong: (id: string) => call<BandState>('/api/band/songs/remove', { body: { id } }),
+  reorderBandSongs: (ids: string[]) =>
+    call<BandState>('/api/band/songs/reorder', { body: { ids } }),
+  renameBand: (name: string) => call<BandState>('/api/band/rename', { body: { name } }),
+  // 找乐队谱
+  ensembles: (
+    o: { q?: string; need?: string; offset?: number; limit?: number },
+    signal?: AbortSignal,
+  ) =>
+    call<EnsembleResult>(
+      `/api/ensembles?q=${enc(o.q ?? '')}&need=${enc(o.need ?? '')}&offset=${o.offset ?? 0}&limit=${o.limit ?? 50}`,
+      { signal },
+    ),
+  // 一起播放
+  serverTime: () => call<{ now: number }>('/api/time'),
+  liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),
   logout: () => call<unknown>('/api/logout', { method: 'POST' }),
   library: (signal?: AbortSignal) => call<LibraryInfo>('/api/library', { signal }),
   rescan: () => call<unknown>('/api/rescan', { method: 'POST' }),

@@ -199,19 +199,49 @@ export function sanitizePractice(raw: unknown, inRoot: InRoot): PracticeRecord[]
   return out.sort((a, b) => b.lastAt - a.lastAt).slice(0, MAX_PRACTICE)
 }
 
+/** On-disk format version: `{ version, users: { [userId]: records[] } }`. */
+export const PRACTICE_VERSION = 2
+
+/** Each account's practice records, keyed by user id. */
+export type PracticeByUser = Map<string, PracticeRecord[]>
+
 /**
- * Reads the stored records once at startup. A missing file is an empty list;
- * a damaged one is set aside with a warning and the list starts empty.
+ * Turns the parsed file into per-user lists. A plain array is the old
+ * single-list format and belongs to `adminId`; the v2 object holds one list per
+ * user. Anything else is an empty map.
  */
-export async function loadPractice(dataDir: string, inRoot: InRoot): Promise<PracticeRecord[]> {
+export function practiceFromFile(raw: unknown, inRoot: InRoot, adminId: string): PracticeByUser {
+  const out: PracticeByUser = new Map()
+  if (Array.isArray(raw)) {
+    out.set(adminId, sanitizePractice(raw, inRoot))
+    return out
+  }
+  if (!raw || typeof raw !== 'object') return out
+  const rec = raw as Record<string, unknown>
+  if (rec.version !== PRACTICE_VERSION || !rec.users || typeof rec.users !== 'object') return out
+  for (const [userId, list] of Object.entries(rec.users as Record<string, unknown>))
+    out.set(userId, sanitizePractice(list, inRoot))
+  return out
+}
+
+/**
+ * Reads every account's records once at startup. A missing file is an empty
+ * map; a damaged one is set aside with a warning. An old single-list file is
+ * migrated to `adminId` and rewritten in the v2 format on the next save.
+ */
+export async function loadPracticeByUser(
+  dataDir: string,
+  inRoot: InRoot,
+  adminId: string,
+): Promise<PracticeByUser> {
   const file = path.join(dataDir, PRACTICE_FILE)
   let text: string
   try {
     text = await fs.promises.readFile(file, 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
     console.warn(`[谱库] 练习记录读取失败，已当作空列表：${(err as Error).message}`)
-    return []
+    return new Map()
   }
   let raw: unknown
   try {
@@ -219,12 +249,44 @@ export async function loadPractice(dataDir: string, inRoot: InRoot): Promise<Pra
   } catch {
     console.warn(`[谱库] 练习记录文件损坏，已改名保留并从空列表开始：${file}`)
     await fs.promises.rename(file, `${file}.broken-${Date.now()}`).catch(() => {})
-    return []
+    return new Map()
   }
-  return sanitizePractice(raw, inRoot)
+  return practiceFromFile(raw, inRoot, adminId)
 }
 
-/** Writes the list atomically (temp file, then rename). */
-export async function savePractice(dataDir: string, list: PracticeRecord[]): Promise<void> {
-  await writeFileAtomic(path.join(dataDir, PRACTICE_FILE), JSON.stringify(list))
+/** Writes every account's records atomically (temp file, then rename). */
+export async function savePracticeByUser(dataDir: string, byUser: PracticeByUser): Promise<void> {
+  const users: Record<string, PracticeRecord[]> = {}
+  for (const [userId, list] of byUser) users[userId] = list
+  await writeFileAtomic(
+    path.join(dataDir, PRACTICE_FILE),
+    JSON.stringify({ version: PRACTICE_VERSION, users }),
+  )
+}
+
+/** One account's totals for a score, for the band page. */
+export interface PracticeProgress {
+  userId: string
+  totalSeconds: number
+  maxSpeedPct: number
+  lastAt: number
+}
+
+/**
+ * Which accounts practised the score at `path`, most recent first. Accounts
+ * without a record for it are left out.
+ */
+export function progressFor(byUser: PracticeByUser, path: string): PracticeProgress[] {
+  const out: PracticeProgress[] = []
+  for (const [userId, list] of byUser) {
+    const rec = list.find((r) => r.path === path)
+    if (!rec) continue
+    out.push({
+      userId,
+      totalSeconds: rec.totalSeconds,
+      maxSpeedPct: rec.maxSpeedPct,
+      lastAt: rec.lastAt,
+    })
+  }
+  return out.sort((a, b) => b.lastAt - a.lastAt)
 }

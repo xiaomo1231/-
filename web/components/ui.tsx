@@ -59,13 +59,14 @@ export function PageBar({
   title: string
   subtitle?: string
   fallback: string
+  /** '' hides the back link (a page that is itself the home). */
   back?: string
   children?: ReactNode
 }) {
   return (
     <header className="flex flex-wrap items-end gap-x-4 gap-y-2 pb-[18px] pt-9">
       <div className="min-w-0 flex-1 basis-64">
-        <BackLink label={back} fallback={fallback} />
+        {back && <BackLink label={back} fallback={fallback} />}
         <h1 className="m-0 break-words font-display text-[clamp(36px,7vw,64px)] font-black leading-none tracking-[-0.01em]">
           {title}
         </h1>

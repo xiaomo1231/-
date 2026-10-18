@@ -117,14 +117,47 @@ export function sanitizeFavorites(raw: unknown, inRoot: InRoot): FavoriteItem[] 
   return out.slice(0, MAX_FAVORITES)
 }
 
-/** Reads the stored list once at startup. A missing file is an empty list; a damaged one is set aside. */
-export async function loadFavorites(dataDir: string, inRoot: InRoot): Promise<FavoriteItem[]> {
+/** On-disk format version: `{ version, users: { [userId]: items[] } }`. */
+export const FAVORITES_VERSION = 2
+
+/** Each account's favourites, keyed by user id. */
+export type FavoritesByUser = Map<string, FavoriteItem[]>
+
+/**
+ * Turns the parsed file into per-user lists. A plain array is the old
+ * single-list format and belongs to `adminId`; the v2 object holds one list per
+ * user. Anything else is an empty map.
+ */
+export function favoritesFromFile(raw: unknown, inRoot: InRoot, adminId: string): FavoritesByUser {
+  const out: FavoritesByUser = new Map()
+  if (Array.isArray(raw)) {
+    out.set(adminId, sanitizeFavorites(raw, inRoot))
+    return out
+  }
+  if (!raw || typeof raw !== 'object') return out
+  const rec = raw as Record<string, unknown>
+  if (rec.version !== FAVORITES_VERSION || !rec.users || typeof rec.users !== 'object') return out
+  for (const [userId, list] of Object.entries(rec.users as Record<string, unknown>))
+    out.set(userId, sanitizeFavorites(list, inRoot))
+  return out
+}
+
+/**
+ * Reads every account's favourites once at startup. A missing file is an empty
+ * map; a damaged one is set aside. An old single-list file is migrated to
+ * `adminId` and rewritten in the v2 format on the next save.
+ */
+export async function loadFavoritesByUser(
+  dataDir: string,
+  inRoot: InRoot,
+  adminId: string,
+): Promise<FavoritesByUser> {
   const file = path.join(dataDir, FAVORITE_FILE)
   let text: string
   try {
     text = await fs.promises.readFile(file, 'utf8')
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new Map()
     throw err
   }
   let raw: unknown
@@ -133,14 +166,19 @@ export async function loadFavorites(dataDir: string, inRoot: InRoot): Promise<Fa
   } catch {
     // Keep the damaged file for the student to look at; start with an empty list.
     await fs.promises.rename(file, `${file}.broken-${Date.now()}`).catch(() => {})
-    return []
+    return new Map()
   }
-  return sanitizeFavorites(raw, inRoot)
+  return favoritesFromFile(raw, inRoot, adminId)
 }
 
-/** Writes the list atomically (temp file, then rename), readable by the owner only. */
-export async function saveFavorites(dataDir: string, list: FavoriteItem[]): Promise<void> {
-  await writeFileAtomic(path.join(dataDir, FAVORITE_FILE), JSON.stringify(list))
+/** Writes every account's favourites atomically (temp file, then rename), readable by the owner only. */
+export async function saveFavoritesByUser(dataDir: string, byUser: FavoritesByUser): Promise<void> {
+  const users: Record<string, FavoriteItem[]> = {}
+  for (const [userId, list] of byUser) users[userId] = list
+  await writeFileAtomic(
+    path.join(dataDir, FAVORITE_FILE),
+    JSON.stringify({ version: FAVORITES_VERSION, users }),
+  )
 }
 
 /**

@@ -42,7 +42,16 @@ export function Viewer({ route }: { route: ViewerRoute }) {
   let bar: ReactNode = null
   switch (format) {
     case 'score':
-      body = <ScoreViewer key={path} path={path} title={title} artist={artist} pages={pages} />
+      body = (
+        <ScoreViewer
+          key={path}
+          path={path}
+          title={title}
+          artist={artist}
+          pages={pages}
+          band={route.band}
+        />
+      )
       break
     case 'image':
       body = <ImageViewer paths={pages} />
