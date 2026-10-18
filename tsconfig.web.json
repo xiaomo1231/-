@@ -1,0 +1,8 @@
+{
+  "extends": "./tsconfig.app.json",
+  "compilerOptions": {
+    "tsBuildInfoFile": "./node_modules/.tmp/tsconfig.web.tsbuildinfo",
+    "types": ["vite/client"]
+  },
+  "include": ["web", "src/songs/scoreLibraryTypes.ts"]
+}

@@ -31,6 +31,10 @@ npm run dev
 | `npm run app` | 用 Electron 打开应用版（先 `npm run build`；`GROOVELAB_DEV_URL=http://localhost:5174` 可改为加载开发服务器） |
 | `npm run package` | 打包应用版（免安装）→ `release/律动工坊-<版本>-win-x64.zip` |
 
+## 谱库网页版（Mac mini）
+
+在 Mac mini 上跑一个只读、带密码的小服务器，出门用手机也能搜谱、看谱（GP 谱直接显示六线谱并可播放、变调，图片谱 / PDF / 文本谱都能看，可下载原文件）。构建：`npm run build:server`；部署和外网访问（推荐 Tailscale，不要在路由器上开端口）见 [server/README.md](server/README.md)。
+
 ## 当前版本 0.31.0
 
 - **收藏与最近打开**：谱库左上多了「★ 收藏」和「最近打开」。每个谱子旁边、看谱页标题旁都有星标；最近打开的 100 个文件自动记下，点一下直接再打开（图片谱会带上全部页）。

@@ -18,6 +18,9 @@
     "postinstall": "node scripts/copy-alphatab.mjs && node scripts/copy-ort.mjs",
     "app": "node scripts/build-electron.mjs && electron .",
     "package": "npm run build && node scripts/build-electron.mjs && node scripts/package-app.mjs",
+    "build:web": "vite build --config vite.web.config.ts",
+    "build:server": "npm run build:web && node scripts/build-server.mjs",
+    "server": "node server-dist/server.mjs",
     "install:local": "node scripts/install-local.mjs"
   },
   "dependencies": {
