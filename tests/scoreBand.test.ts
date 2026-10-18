@@ -318,6 +318,63 @@ describe('BandStore', () => {
   })
 })
 
+describe('comboId on band songs', () => {
+  const ID = 'a1b2c3d4e5f6'
+
+  it('parseUpdateSong accepts null or a 12-hex id, and leaves the field out when absent', () => {
+    expect(parseUpdateSong({ id: 'a', comboId: ID }, isUser)).toEqual({ ok: true, value: { id: 'a', comboId: ID } })
+    expect(parseUpdateSong({ id: 'a', comboId: null }, isUser)).toEqual({ ok: true, value: { id: 'a', comboId: null } })
+    const none = parseUpdateSong({ id: 'a', status: 'ready' }, isUser)
+    expect(none.ok && 'comboId' in none.value).toBe(false)
+  })
+
+  it.each(['', 'a1b2c3d4e5', 'A1B2C3D4E5F6', 'a1b2c3d4e5f6a', 'g1b2c3d4e5f6', 7])('parseUpdateSong rejects comboId %j', (c) => {
+    expect(parseUpdateSong({ id: 'a', comboId: c }, isUser).ok).toBe(false)
+  })
+
+  it('a new song has comboId null, and update sets and clears it', async () => {
+    const store = await BandStore.load(dir, inRoot)
+    const a = await store.add({ path: 'a.gp5', title: 'A', artist: 'X' }, 'u1', 100)
+    expect(a.comboId).toBeNull()
+    const set = await store.update({ id: a.id, comboId: ID }, 200)
+    expect(set.comboId).toBe(ID)
+    expect(readFile().songs[0].comboId).toBe(ID)
+    const cleared = await store.update({ id: a.id, comboId: null }, 300)
+    expect(cleared.comboId).toBeNull()
+    const kept = await store.update({ id: a.id, note: '备注' }, 400)
+    expect(kept.comboId).toBeNull()
+  })
+
+  it('an update without comboId keeps the stored one', async () => {
+    const store = await BandStore.load(dir, inRoot)
+    const a = await store.add({ path: 'a.gp5', title: 'A', artist: 'X' }, 'u1', 100)
+    await store.update({ id: a.id, comboId: ID }, 200)
+    const next = await store.update({ id: a.id, status: 'ready' }, 300)
+    expect(next.comboId).toBe(ID)
+  })
+
+  it('load treats a row without comboId (or with a bad one) as null', async () => {
+    fs.writeFileSync(
+      path.join(dir, 'band.json'),
+      JSON.stringify({
+        version: 1,
+        name: '乐队',
+        songs: [
+          { id: 'old', path: 'a.gp5', title: 'A', artist: '', status: 'ready', parts: {}, note: '', rehearsalSpeedPct: null, addedBy: 'u1', addedAt: 1, updatedAt: 1 },
+          { id: 'odd', path: 'b.gp5', title: 'B', artist: '', status: 'ready', parts: {}, note: '', rehearsalSpeedPct: null, comboId: 'nope', addedBy: 'u1', addedAt: 1, updatedAt: 1 },
+          { id: 'new', path: 'c.gp5', title: 'C', artist: '', status: 'ready', parts: {}, note: '', rehearsalSpeedPct: null, comboId: ID, addedBy: 'u1', addedAt: 1, updatedAt: 1 },
+        ],
+      }),
+    )
+    const store = await BandStore.load(dir, inRoot)
+    expect(store.songs().map((s) => [s.id, s.comboId])).toEqual([
+      ['old', null],
+      ['odd', null],
+      ['new', ID],
+    ])
+  })
+})
+
 describe('bandState', () => {
   it('lists songs in setlist order with members and progress keyed by song id', async () => {
     const store = await BandStore.load(dir, inRoot)

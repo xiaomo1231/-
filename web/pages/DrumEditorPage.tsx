@@ -9,6 +9,8 @@ import { goBack, hrefViewer, navigate } from '../lib/route'
 import { Notice, Seg, Staff } from '../components/ui'
 import { chooseEncoding, loadAlphaTab, type Score } from '../viewer/alphaTab'
 import { DrumEditorGrid } from '../viewer/DrumEditorGrid'
+import { DrumKey } from '../viewer/DrumKey'
+import { DrumPreview } from '../viewer/DrumPreview'
 import { trackLabels, type TrackLabel } from '../viewer/trackNames'
 
 type History = ReturnType<typeof createHistory>
@@ -93,6 +95,9 @@ export function DrumEditorPage({ path, title, artist }: { path: string; title: s
   const [clip, setClip] = useState<DrumBar[] | null>(null)
   const [showAll, setShowAll] = useState(false)
   const [repeatTo, setRepeatTo] = useState('')
+  /** The bar last edited by a cell toggle: the preview shows the bars around it when nothing is selected. */
+  const [lastBar, setLastBar] = useState<number | null>(null)
+  const [keyOpen, setKeyOpen] = useState(false)
 
   const [genOpen, setGenOpen] = useState(false)
   const [engine, setEngine] = useState<Engine>('template')
@@ -175,6 +180,7 @@ export function DrumEditorPage({ path, title, artist }: { path: string; title: s
     if (!base) return
     const b = base.bars[bar]
     if (!b) return
+    setLastBar(bar)
     const bars = base.bars.slice()
     bars[bar] = toggleHit(b, step, piece, VEL_OF[vel])
     setDraft({ ...base, bars, edited: true, updatedAt: Date.now() })
@@ -435,6 +441,9 @@ export function DrumEditorPage({ path, title, artist }: { path: string; title: s
   const viewerHref = hrefViewer({ path, format: 'score', title, artist })
   const playHref = `${viewerHref}&drums=1`
   const hasSelection = selection !== null
+  // Preview: the selected bars (at most 4), else the 4 bars around the last edited bar.
+  const previewFirst = selection ? selection[0] : Math.max(0, (lastBar ?? 0) - 1)
+  const previewLast = selection ? selection[1] : previewFirst + 3
   const panelOpen = genOpen || live === null
   const status = !live
     ? ''
@@ -728,6 +737,24 @@ export function DrumEditorPage({ path, title, artist }: { path: string; title: s
         {panelOpen && <div className="pt-4">{genPanel}</div>}
 
         <p className="mono pt-4 text-xs text-muted-foreground">{selectedText}</p>
+        <div className="pt-2">
+          <DrumPreview part={live} first={previewFirst} last={previewLast} />
+          <div className="pt-2">
+            <button
+              type="button"
+              aria-expanded={keyOpen}
+              onClick={() => setKeyOpen((o) => !o)}
+              className={buttonClass('ghost')}
+            >
+              鼓谱图例 {keyOpen ? '▴' : '▾'}
+            </button>
+            {keyOpen && (
+              <div className="pt-2">
+                <DrumKey pieces={pieces} />
+              </div>
+            )}
+          </div>
+        </div>
         <div className="pt-2">
           <DrumEditorGrid
             part={live}

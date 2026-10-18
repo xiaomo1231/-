@@ -37,11 +37,20 @@ const CHANNEL_COUNT = 16
 
 // alphaTab enum values (alphaTab.d.ts). Kept numeric so this module stays light.
 const DYN_P = 2
-const DYN_MF = 4
+const DYN_F = 5
 const DYN_FF = 6
 const DYN_FFF = 7
 const ACCENT_NONE = 0
+const ACCENT_NORMAL = 1
 const ACCENT_HEAVY = 2
+/** alphaTab BeamDirection (Up = 0, Down = 1) and SimileMark.Simple, as numbers. */
+const STEM_UP = 0
+const STEM_DOWN = 1
+const SIMILE_SIMPLE = 1
+/** Pieces written on the feet voice (voice 1, stems down); everything else is on the hands voice (voice 0, stems up). */
+const FEET_PIECES: ReadonlySet<DrumPiece> = new Set<DrumPiece>(['kick', 'hihatPedal'])
+/** A repeated bar is written out again after this many simile bars in a row. */
+const MAX_SIMILE_RUN = 3
 const DURATION_WHOLE = 1
 const DURATION_SIXTEENTH = 16
 /** Typical MIDI velocity of each dynamic (PPP … FFF), for the guide-rhythm velocities. */
@@ -62,27 +71,29 @@ export function pieceMidi(piece: DrumPiece): number {
 
 /**
  * Notation of each kit piece for a track's own articulation list (same order as DRUM_PIECES):
- * element name, staff line (Guitar Pro steps: 1 = top line) and note head family, taken from
- * alphaTab's built-in GM articulations.
+ * element name, staff line and note head family. Positions follow the PAS (Percussion Art
+ * Society) convention. Guitar Pro steps: odd = line, even = space, 1 = top line, 9 = bottom line,
+ * 0 = space above the staff, -1 = first ledger line above, 10 = space below the staff.
+ * Open hi-hat is the circled x (alphaTab's own GM head for it) instead of a technique symbol.
  */
 const ARTICULATION_LOOK: Record<DrumPiece, { name: string; staffLine: number; head: 'black' | 'x' | 'heavyX' | 'heavyXHat' | 'circleX' | 'diamond' | 'triangle' }> = {
-  crash: { name: 'Crash High', staffLine: -2, head: 'heavyX' },
+  crash: { name: 'Crash High', staffLine: -1, head: 'heavyX' },
   china: { name: 'China', staffLine: -3, head: 'heavyXHat' },
   splash: { name: 'Splash', staffLine: -2, head: 'x' },
-  ride: { name: 'Ride', staffLine: 0, head: 'x' },
-  rideBell: { name: 'Ride Bell', staffLine: 0, head: 'diamond' },
-  hihatOpen: { name: 'Charley (open)', staffLine: -1, head: 'circleX' },
-  hihatClosed: { name: 'Charley', staffLine: -1, head: 'x' },
-  hihatPedal: { name: 'Charley (pedal)', staffLine: 9, head: 'x' },
-  tomHigh: { name: 'Tom High', staffLine: 2, head: 'black' },
+  ride: { name: 'Ride', staffLine: 1, head: 'x' },
+  rideBell: { name: 'Ride Bell', staffLine: 1, head: 'diamond' },
+  hihatOpen: { name: 'Charley (open)', staffLine: 0, head: 'circleX' },
+  hihatClosed: { name: 'Charley', staffLine: 0, head: 'x' },
+  hihatPedal: { name: 'Charley (pedal)', staffLine: 10, head: 'x' },
+  tomHigh: { name: 'Tom High', staffLine: 3, head: 'black' },
   tomMid: { name: 'Tom Low', staffLine: 5, head: 'black' },
-  snare: { name: 'Snare', staffLine: 3, head: 'black' },
-  sideStick: { name: 'Snare (side stick)', staffLine: 3, head: 'x' },
+  snare: { name: 'Snare', staffLine: 4, head: 'black' },
+  sideStick: { name: 'Snare (side stick)', staffLine: 4, head: 'x' },
   tomFloor: { name: 'Tom Very Low', staffLine: 6, head: 'black' },
-  kick: { name: 'Kick Drum', staffLine: 7, head: 'black' },
+  kick: { name: 'Kick Drum', staffLine: 8, head: 'black' },
   cowbell: { name: 'Cowbell Medium', staffLine: 0, head: 'triangle' },
-  tambourine: { name: 'Tambourine', staffLine: 3, head: 'triangle' },
-  clap: { name: 'Hand Clap', staffLine: 3, head: 'black' },
+  tambourine: { name: 'Tambourine', staffLine: 2, head: 'triangle' },
+  clap: { name: 'Hand Clap', staffLine: 4, head: 'black' },
 }
 
 /** The track's articulation list: one entry per kit piece, notes refer to it by index. */
@@ -263,8 +274,17 @@ export function partFromTrack(
   const track = score.tracks[trackIndex]
   if (!track) throw new Error(`partFromTrack: no track ${trackIndex}`)
   const order = new Map(DRUM_PIECES.map((p, i) => [p.id, i]))
-  const bars: DrumBar[] = score.masterBars.map((mb, i) => {
+  const bars: DrumBar[] = []
+  score.masterBars.forEach((mb, i) => {
     const staffBars = track.staves.map((s) => s.bars[i]).filter((b): b is model.Bar => !!b)
+    // A simile bar written without notes repeats the bar before it (see buildDrumTrack).
+    const repeatsPrevious = staffBars.length > 0
+      && staffBars.every((b) => b.simileMark === SIMILE_SIMPLE && b.voices.every((v) => v.beats.every((beat) => beat.notes.length === 0)))
+    if (repeatsPrevious && i > 0 && bars[i - 1]) {
+      const prev = bars[i - 1]!
+      bars.push({ ...prev, hits: prev.hits.map((h) => ({ ...h })) })
+      return
+    }
     const spq = gridForBar(staffBars)
     const steps = barSteps({ num: mb.timeSignatureNumerator, den: mb.timeSignatureDenominator, stepsPerQuarter: spq })
     const best = new Map<string, DrumHit>()
@@ -286,12 +306,12 @@ export function partFromTrack(
       }
     }
     const hits = [...best.values()].sort((a, b) => a.step - b.step || (order.get(a.piece) ?? 0) - (order.get(b.piece) ?? 0))
-    return {
+    bars.push({
       num: mb.timeSignatureNumerator,
       den: mb.timeSignatureDenominator,
       stepsPerQuarter: spq,
       hits,
-    }
+    })
   })
   return {
     version: 1,
@@ -333,35 +353,59 @@ function piecesFor(spq: 3 | 4 | 6): Piece[] {
   return out.sort((a, b) => b.steps - a.steps)
 }
 
-/** Splits a run of `length` steps starting at `start` into note values, keeping beats aligned where possible. */
-function splitRun(start: number, length: number, spq: 3 | 4 | 6): Piece[] {
-  const candidates = piecesFor(spq)
-  const out: Piece[] = []
-  let pos = start
-  let rem = length
-  while (rem > 0) {
-    const pick = candidates.find((c) => c.steps <= rem && pos % c.steps === 0)
-      ?? candidates.find((c) => c.steps <= rem)
-    if (!pick) break
-    out.push(pick)
-    pos += pick.steps
-    rem -= pick.steps
-  }
-  return out
+/** Beat length in grid steps, and whether the meter is compound (6/8, 9/8, 12/8, 3/8: beat = dotted quarter). */
+function beatGrid(num: number, den: number, spq: 3 | 4 | 6): { beatSteps: number; compound: boolean } {
+  const compound = den === 8 && num % 3 === 0
+  const beatQuarters = compound ? 1.5 : 4 / den
+  return { beatSteps: beatQuarters * spq, compound }
 }
 
-/** Beats for one bar: each hit step starts a beat; the gaps are rests; a hit-free bar is one whole rest. */
-function layoutBar(steps: number, spq: 3 | 4 | 6, hitsByStep: Map<number, DrumHit[]>): Array<{ piece: Piece; hits: DrumHit[] }> {
+/** True when the open interval (pos, end) contains a beat boundary. Beat boundaries may be fractional (6/8 triplet grid). */
+function crossesBeat(pos: number, end: number, beatSteps: number): boolean {
+  const next = (Math.floor(pos / beatSteps + 1e-9) + 1) * beatSteps
+  return next < end - 1e-9
+}
+
+function startsOnBeat(pos: number, beatSteps: number): boolean {
+  const q = pos / beatSteps
+  return Math.abs(q - Math.round(q)) < 1e-9
+}
+
+/**
+ * Whether a value may start at `pos`. A note (a hit) never crosses a beat boundary, so a hit
+ * is written as quarters, dotted eighths and so on, not as a sustained half or whole note.
+ * A rest may cross a boundary only when it is a half or whole rest starting on a beat (simple
+ * meters); compound meters never use half or whole values, they group by dotted quarters.
+ */
+function fitsBeat(piece: Piece, pos: number, beatSteps: number, compound: boolean, isNote: boolean): boolean {
+  if (!crossesBeat(pos, pos + piece.steps, beatSteps)) return true
+  if (isNote) return false
+  const longValue = piece.duration <= 2
+  return longValue && !compound && startsOnBeat(pos, beatSteps)
+}
+
+/**
+ * The note value that starts at `pos` in a run of `rem` steps (no hit before the run ends):
+ * the longest one that fits the beats, else the longest that fits the run.
+ */
+function pickPiece(candidates: Piece[], pos: number, rem: number, beatSteps: number, compound: boolean, isNote: boolean): Piece {
+  const fitting = candidates.find((c) => c.steps <= rem && fitsBeat(c, pos, beatSteps, compound, isNote))
+  const pick = fitting ?? candidates.find((c) => c.steps <= rem)
+  if (!pick) throw new Error(`pickPiece: no note value fits ${rem} steps`)
+  return pick
+}
+
+/** One voice of a bar: each hit step starts a note value, the gaps are rests. Covers every step of the bar. */
+function layoutVoice(steps: number, spq: 3 | 4 | 6, beatSteps: number, compound: boolean, hitsByStep: Map<number, DrumHit[]>): Array<{ piece: Piece; hits: DrumHit[] }> {
+  const candidates = piecesFor(spq)
   const hitSteps = [...hitsByStep.keys()].sort((a, b) => a - b)
-  if (hitSteps.length === 0) return [{ piece: { steps, duration: DURATION_WHOLE, dots: 0, tuplet: false }, hits: [] }]
   const out: Array<{ piece: Piece; hits: DrumHit[] }> = []
   let pos = 0
   while (pos < steps) {
-    const hits = hitsByStep.get(pos) ?? []
     const next = hitSteps.find((s) => s > pos) ?? steps
-    const pieces = splitRun(pos, next - pos, spq)
-    pieces.forEach((piece, k) => out.push({ piece, hits: k === 0 ? hits : [] }))
-    pos = next
+    const piece = pickPiece(candidates, pos, next - pos, beatSteps, compound, hitsByStep.has(pos))
+    out.push({ piece, hits: hitsByStep.get(pos) ?? [] })
+    pos += piece.steps
   }
   return out
 }
@@ -391,15 +435,115 @@ function moveOffDrumChannel(score: model.Score): void {
   }
 }
 
+/** Options for buildDrumTrack. */
+export interface DrumTrackOptions {
+  /**
+   * Write a bar that repeats the bar before it as a simile mark (% sign), without notes, when the
+   * hits, meter and grid are identical and the bar starts no section. At most 3 in a row; every
+   * 4th repeat is written out again. Playback is unchanged: alphaTab plays the previous bar.
+   * Default true.
+   */
+  simile?: boolean
+}
+
+/** Hits of one bar, split by voice: hands (voice 0) and feet (voice 1). */
+function splitHits(hits: DrumHit[]): { hands: DrumHit[]; feet: DrumHit[] } {
+  return {
+    hands: hits.filter((h) => !FEET_PIECES.has(h.piece)),
+    feet: hits.filter((h) => FEET_PIECES.has(h.piece)),
+  }
+}
+
+function sameHits(a: DrumHit[], b: DrumHit[]): boolean {
+  return a.length === b.length && a.every((h, i) => h.step === b[i]!.step && h.piece === b[i]!.piece && h.vel === b[i]!.vel)
+}
+
+/**
+ * Which bars of `part` are written as simile marks. A bar qualifies when it does not start a
+ * section, neither it nor the bar before it has a tempo change, its meter and grid match the bar
+ * before, and its hits are identical. Runs are capped at MAX_SIMILE_RUN so every 4th repeat is
+ * written out.
+ */
+function simileFlags(score: model.Score, part: DrumPart): boolean[] {
+  const flags = score.masterBars.map(() => false)
+  // Bars whose tempo changes (a tempo marking that differs from the tempo before it).
+  const tempoChanged: boolean[] = []
+  let bpm = score.tempo
+  for (const mb of score.masterBars) {
+    tempoChanged.push(mb.tempoAutomations.some((t) => t.value !== bpm))
+    if (mb.tempoAutomations.length > 0) bpm = mb.tempoAutomations[mb.tempoAutomations.length - 1]!.value
+  }
+  let run = 0
+  for (let i = 1; i < score.masterBars.length && i < part.bars.length; i++) {
+    const mb = score.masterBars[i]!
+    const bar = part.bars[i]!
+    const prev = part.bars[i - 1]!
+    // Empty bars stay rests: a % sign means "play the previous bar again", not "rest".
+    const qualifies = bar.hits.length > 0 && !mb.section
+      && !tempoChanged[i]
+      && !tempoChanged[i - 1]
+      && bar.num === prev.num && bar.den === prev.den && bar.stepsPerQuarter === prev.stepsPerQuarter
+      && sameHits(bar.hits, prev.hits)
+    if (qualifies && run < MAX_SIMILE_RUN) {
+      flags[i] = true
+      run++
+    } else {
+      run = 0
+    }
+  }
+  return flags
+}
+
+/** Appends one voice's beats for `slices`; the feet voice (voice 1) is placed with stems down. */
+function fillVoice(at: AT, voice: model.Voice, slices: Array<{ piece: Piece; hits: DrumHit[] }>, voiceIndex: number): void {
+  for (const { piece, hits } of slices) {
+    const beat = new at.model.Beat()
+    beat.duration = piece.duration as model.Duration
+    beat.dots = piece.dots
+    if (piece.tuplet) {
+      beat.tupletNumerator = 3
+      beat.tupletDenominator = 2
+    }
+    // F is alphaTab's default: no dynamic mark is printed (accents and ghost notes carry the level).
+    beat.dynamics = DYN_F as model.DynamicValue
+    beat.preferredBeamDirection = voiceIndex === 0 ? STEM_UP : STEM_DOWN
+    for (const hit of hits) {
+      const note = new at.model.Note()
+      note.percussionArticulation = DRUM_PIECES.findIndex((p) => p.id === hit.piece)
+      note.isGhost = hit.vel === 1
+      note.accentuated = (hit.vel === 3 ? ACCENT_NORMAL : ACCENT_NONE) as model.AccentuationType
+      beat.addNote(note)
+    }
+    voice.addBeat(beat)
+  }
+}
+
+/**
+ * Adds a voice that alphaTab treats as empty (one beat flagged isEmpty: not drawn, not counted as
+ * a second voice). Every bar keeps two voices because alphaTab chains a voice to the same voice of
+ * the next bar, so a missing voice 1 breaks the score.
+ */
+function addEmptyVoice(at: AT, bar: model.Bar): void {
+  const voice = new at.model.Voice()
+  bar.addVoice(voice)
+  const beat = new at.model.Beat()
+  beat.isEmpty = true
+  voice.addBeat(beat)
+}
+
 /**
  * Appends a new percussion track built from `part` to `score` and finishes the score, so
  * `api.renderScore(score, [index])` and playback work. Each master bar gets one bar; a part
  * with fewer bars leaves the rest as whole-bar rests. Pitched tracks that used MIDI channel 9
  * are moved to a free channel so the drum kit is the only thing on channel 9.
  *
+ * Standard drum notation: voice 0 holds the hands (cymbals, hi-hat, snare, toms, …) with stems
+ * up, voice 1 holds the feet (kick, hi-hat pedal) with stems down. A bar without feet hits has no
+ * feet voice. Accents are normal accents, ghost notes are ghost notes.
+ *
  * @returns the new track (its index is `track.index`).
  */
-export function buildDrumTrack(at: AT, score: model.Score, part: DrumPart, name = '鼓（自动）'): model.Track {
+export function buildDrumTrack(at: AT, score: model.Score, part: DrumPart, name = '鼓（自动）', options: DrumTrackOptions = {}): model.Track {
   moveOffDrumChannel(score)
   const track = new at.model.Track()
   track.name = name
@@ -413,45 +557,71 @@ export function buildDrumTrack(at: AT, score: model.Score, part: DrumPart, name 
   staff.showTablature = false
   score.addTrack(track)
 
+  const simile = options.simile === false ? score.masterBars.map(() => false) : simileFlags(score, part)
   score.masterBars.forEach((mb, i) => {
     const spq: 3 | 4 | 6 = part.bars[i]?.stepsPerQuarter ?? 4
     const steps = barSteps({ num: mb.timeSignatureNumerator, den: mb.timeSignatureDenominator, stepsPerQuarter: spq })
-    const hitsByStep = new Map<number, DrumHit[]>()
-    for (const hit of part.bars[i]?.hits ?? []) {
-      if (hit.step < 0 || hit.step >= steps) continue
-      const list = hitsByStep.get(hit.step) ?? []
-      list.push(hit)
-      hitsByStep.set(hit.step, list)
-    }
+    const { beatSteps, compound } = beatGrid(mb.timeSignatureNumerator, mb.timeSignatureDenominator, spq)
 
     const bar = new at.model.Bar()
     // The percussion clef, so the sheet (and a GP file written from it) shows a drum staff.
     bar.clef = at.model.Clef.Neutral
     staff.addBar(bar)
-    const voice = new at.model.Voice()
-    bar.addVoice(voice)
-    for (const { piece, hits } of layoutBar(steps, spq, hitsByStep)) {
-      const beat = new at.model.Beat()
-      beat.duration = piece.duration as model.Duration
-      beat.dots = piece.dots
-      if (piece.tuplet) {
-        beat.tupletNumerator = 3
-        beat.tupletDenominator = 2
-      }
-      beat.dynamics = DYN_MF as model.DynamicValue
+
+    if (simile[i]) {
+      // Playback follows the previous bar (MidiFileGenerator), so the notes are not needed here.
+      bar.simileMark = SIMILE_SIMPLE as model.SimileMark
+      addEmptyVoice(at, bar)
+      addEmptyVoice(at, bar)
+      return
+    }
+
+    const { hands, feet } = splitHits(part.bars[i]?.hits ?? [])
+    const toMap = (hits: DrumHit[]) => {
+      const map = new Map<number, DrumHit[]>()
       for (const hit of hits) {
-        const note = new at.model.Note()
-        note.percussionArticulation = DRUM_PIECES.findIndex((p) => p.id === hit.piece)
-        note.isGhost = hit.vel === 1
-        note.accentuated = (hit.vel === 3 ? ACCENT_HEAVY : ACCENT_NONE) as model.AccentuationType
-        beat.addNote(note)
+        if (hit.step < 0 || hit.step >= steps) continue
+        const list = map.get(hit.step) ?? []
+        list.push(hit)
+        map.set(hit.step, list)
       }
-      voice.addBeat(beat)
+      return map
+    }
+    const handsMap = toMap(hands)
+    const feetMap = toMap(feet)
+
+    const handsVoice = new at.model.Voice()
+    bar.addVoice(handsVoice)
+    const handsSlices = handsMap.size === 0
+      ? [{ piece: { steps, duration: DURATION_WHOLE, dots: 0, tuplet: false }, hits: [] }]
+      : layoutVoice(steps, spq, beatSteps, compound, handsMap)
+    fillVoice(at, handsVoice, handsSlices, 0)
+
+    if (feetMap.size === 0) addEmptyVoice(at, bar)
+    else {
+      const feetVoice = new at.model.Voice()
+      bar.addVoice(feetVoice)
+      fillVoice(at, feetVoice, layoutVoice(steps, spq, beatSteps, compound, feetMap), 1)
     }
   })
 
   score.finish(new at.Settings())
   return track
+}
+
+/**
+ * Converts an existing percussion track of a loaded score into a standard-notation copy: the
+ * track is read with partFromTrack and written again with buildDrumTrack as `${name}（标准鼓谱）`.
+ * The copy is appended to the score and finished.
+ *
+ * @returns the index of the new track.
+ */
+export function standardizeDrumTrack(at: AT, score: model.Score, trackIndex: number): number {
+  const source = score.tracks[trackIndex]
+  if (!source) throw new Error(`standardizeDrumTrack: no track ${trackIndex}`)
+  const part = partFromTrack(score, trackIndex, { path: '', title: score.title, artist: score.artist, updatedBy: '' })
+  const copy = buildDrumTrack(at, score, part, `${source.name}（标准鼓谱）`)
+  return copy.index
 }
 
 /** Removes a track and renumbers the rest. To rebuild a generated track: removeTrack, then buildDrumTrack. */

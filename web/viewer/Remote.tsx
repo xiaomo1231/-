@@ -16,7 +16,9 @@ import {
   STAFF_OPTIONS,
   ZOOM_OPTIONS,
   DRUM_VIEW_OPTIONS,
+  VOCAL_STAFF_OPTIONS,
   type DrumView,
+  type VocalStaff,
   type SheetMode,
   type StaffMode,
 } from './scorePrefs'
@@ -186,6 +188,10 @@ export interface RemoteProps {
   staff: StaffMode
   /** Shown under the notation choices when the shown track cannot follow them. */
   staffHint: string
+  /** The shown track is a singer's part: offer 简谱 / 五线谱 instead of the tab choices. */
+  isVocalTrack: boolean
+  vocalStaff: VocalStaff
+  onVocalStaff: (v: VocalStaff) => void
   /** The shown track is a drum track: offer 鼓谱网格 / 五线谱 / 文字鼓谱. */
   isDrumTrack: boolean
   drumView: DrumView
@@ -773,7 +779,25 @@ function ViewPop({ p }: { p: RemoteProps }) {
   return (
     <div className="gl-pop" role="dialog" aria-label="谱面">
       <h4>谱 面</h4>
-      <div className="gl-chips">
+      {p.isVocalTrack && (
+        <>
+          <div className="gl-chips">
+            {VOCAL_STAFF_OPTIONS.map((o) => (
+              <button
+                key={o.value}
+                type="button"
+                className="gl-pill"
+                aria-pressed={p.vocalStaff === o.value}
+                onClick={() => p.onVocalStaff(o.value)}
+              >
+                {o.label}
+              </button>
+            ))}
+          </div>
+          <p className="gl-hint">主唱 / 旋律轨用简谱或五线谱显示，不显示吉他六线谱。</p>
+        </>
+      )}
+      <div className="gl-chips" hidden={p.isVocalTrack}>
         {STAFF_OPTIONS.map((o) => (
           <button
             key={o.value}

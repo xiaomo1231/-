@@ -7,18 +7,26 @@ import { cx } from '../lib/classes'
 import { loadPracticeFor, practiceFor, savePractice, savePracticeOnExit } from '../lib/practice'
 import { Notice } from '../components/ui'
 import { useBand } from '../lib/band'
-import { useMe } from '../lib/session'
+import { canBrowseLibrary, useMe } from '../lib/session'
+import { hrefCombine } from '../lib/combos'
 import { useLiveSync, type LivePlayer } from './liveSync'
 import { LiveBar } from './LiveBar'
 import { trackLabels } from './trackNames'
-import { buildDrumTrack, exportGp, findDrumTrack, partFromTrack } from '@/songs/drumScore'
-import { visiblePieces } from '@/songs/drumPart'
+import {
+  buildDrumTrack,
+  exportGp,
+  findDrumTrack,
+  partFromTrack,
+  standardizeDrumTrack,
+} from '@/songs/drumScore'
+import { combine, exportCombined, unrollRepeats } from '@/songs/combineScores'
+import { usedPieces, visiblePieces } from '@/songs/drumPart'
 import type { DrumPart } from '@/songs/drumTypes'
 import { api as server } from '../lib/api'
 import { hrefDrums } from '../lib/route'
-import { DrumGrid, DrumLegend } from './DrumGrid'
+import { DrumKey } from './DrumKey'
+import { SheetsPanel } from './SheetsPanel'
 import { DrumTab } from './DrumTab'
-import { cursorFor } from './drumView'
 import {
   alphaTabUrls,
   applyTranspose,
@@ -38,6 +46,8 @@ import {
   sheetResources,
   staveProfileOf,
   staffFor,
+  prepareNotation,
+  isVocalTrack,
   type ScorePrefs,
   type StaffMode,
   type SheetMode,
@@ -85,6 +95,8 @@ interface Props {
   band: string
   /** Opened from the drum editor's 试听: show the drum part first. */
   showDrums: boolean
+  /** 组合乐队谱 recipe id ('' = the file as it is). */
+  combo: string
 }
 
 /** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
@@ -115,7 +127,7 @@ const sameBars = (a: [number, number] | null, b: [number, number] | null) =>
   a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1])
 
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
-export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Props) {
+export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -149,12 +161,15 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
   const [collapsed, setCollapsed] = useState(false)
   const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
   const [restoreNote, setRestoreNote] = useState('')
+  const [sheetsOpen, setSheetsOpen] = useState(false)
   /** The saved drum part (if any), the track built from it, and the file's own drum track. */
   const [drums, setDrums] = useState<{
     part: DrumPart | null
     added: number | null
     original: number | null
-  }>({ part: null, added: null, original: null })
+    /** A standard-notation copy of the file's own drum track: drawn in its place, never played. */
+    std: number | null
+  }>({ part: null, added: null, original: null, std: null })
   const me = useMe()
   const { state: bandState } = useBand()
   const bandSong = band ? bandState?.songs.find((x) => x.id === band) : undefined
@@ -349,7 +364,46 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
         let fileBytes = bytes
         let drumTrack: number | null = null
         let fileDrums: number | null = null
-        if (savedDrums) {
+        // 组合乐队谱: the recipe's parts from several versions, put onto this (base) file.
+        if (combo) {
+          const recipe = await server.combo(combo, ac.signal)
+          const load = async (p: string, unroll: boolean) => {
+            const b = p === path ? bytes : await fetchBytes(fileUrl(p), ac.signal)
+            const settings = new at.Settings()
+            settings.importer.encoding = chooseEncoding(at, b)
+            const sc = at.importer.ScoreLoader.loadScoreFromBytes(b, settings)
+            return unroll ? unrollRepeats(at, sc) : sc
+          }
+          const base = await load(recipe.base, recipe.baseUnrollRepeats)
+          const parts = []
+          for (const pt of recipe.parts) parts.push({ ...pt, score: await load(pt.path, pt.unrollRepeats) })
+          if (disposed) return
+          const out = combine(at, base, parts, { keepBaseTracks: [] })
+          fileBytes = exportCombined(at, out.score)
+          if (out.warnings.length) {
+            setRestoreNote(`组合乐队谱：${out.warnings.slice(0, 3).join('；')}`)
+            window.setTimeout(() => setRestoreNote(''), 8000)
+          }
+        }
+        let stdTrack: number | null = null
+        if (!combo && !savedDrums) {
+          // The file's own drum track, redrawn in standard drum notation (hands up, feet down,
+          // standard positions, % for repeated bars); the original keeps playing.
+          try {
+            const settings = new at.Settings()
+            settings.importer.encoding = chooseEncoding(at, bytes)
+            const copy = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings)
+            const own = findDrumTrack(copy)
+            if (own !== null) {
+              stdTrack = standardizeDrumTrack(at, copy, own)
+              fileBytes = exportGp(at, copy)
+            }
+          } catch {
+            stdTrack = null
+            fileBytes = bytes
+          }
+        }
+        if (savedDrums && !combo) {
           try {
             const settings = new at.Settings()
             settings.importer.encoding = chooseEncoding(at, bytes)
@@ -396,7 +450,8 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
           // A saved drum part plays instead of the file's own drums (that track is muted).
           const added = drumTrack !== null && drumTrack < s.tracks.length ? drumTrack : null
           const original = added !== null ? fileDrums : findDrumTrack(s)
-          setDrums({ part: added !== null ? savedDrums : null, added, original })
+          const std = stdTrack !== null && stdTrack < s.tracks.length ? stdTrack : null
+          setDrums({ part: added !== null ? savedDrums : null, added, original, std })
           if (showDrumsRef.current && (added ?? original) !== null) setTrack((added ?? original)!)
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
@@ -564,7 +619,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
       api.current?.destroy()
       api.current = null
     }
-  }, [path, soundFontChoice])
+  }, [path, soundFontChoice, combo])
 
   // Band song: show this member's own part, play along with the others, at the band's speed.
   const bandApplied = useRef('')
@@ -580,18 +635,21 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
     if (bandSpeed !== null) setSpeedPct(bandSpeed)
     // Keyboard players and singers read notes: tab alone hides them (some files write the
     // keyboard part as guitar tab), so show the standard staff above it.
-    if ((me?.instrument === 'keys' || me?.instrument === 'vocal') && live.current.prefs.staff === 'Tab')
+    if (me?.instrument === 'keys' && live.current.prefs.staff === 'Tab')
       setPrefs((p) => ({ ...p, staff: 'ScoreTab' }))
   }, [score, bandSong, myTrack, bandSpeed, path, me?.instrument])
 
   // Track shown on the sheet.
   useEffect(() => {
     const a = api.current
-    const t = score?.tracks[track]
+    const own = score?.tracks[track]
+    // The file's drum track is drawn from its standard-notation copy.
+    const t =
+      track === drums.original && drums.std !== null ? (score?.tracks[drums.std] ?? own) : own
     const at = window.alphaTab
     if (a && t && at) {
-      // Drums, piano and other parts without tab are drawn in 五线谱 whatever 谱面 says.
-      const want = staveProfileOf(at, staffFor(t, live.current.prefs.staff))
+      // Singers' parts in 简谱 / 五线谱; drums, piano and other parts without tab in 五线谱.
+      const want = prepareNotation(at, t, live.current.prefs)
       if (a.settings.display.staveProfile !== want) {
         a.settings.display.staveProfile = want as never
         a.updateSettings()
@@ -599,22 +657,22 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
       a.renderTracks([t])
     }
     setActiveNotes([])
-  }, [track, score])
+  }, [track, score, drums])
 
   // Notation and sheet: staff profile, zoom and colours (one re-render for all three).
   useEffect(() => {
     const a = api.current
     const at = window.alphaTab
     if (!a || !score || !at) return
-    a.settings.display.staveProfile = staveProfileOf(
-      at,
-      staffFor(score.tracks[live.current.track], prefs.staff),
+    const shown = score.tracks[live.current.track]
+    a.settings.display.staveProfile = (
+      shown ? prepareNotation(at, shown, prefs) : staveProfileOf(at, prefs.staff)
     ) as never
     a.settings.display.scale = effectiveScale(prefs)
     a.settings.fillFromJson({ display: { resources: sheetResources(prefs.sheet) } } as never)
     a.updateSettings()
     a.render()
-  }, [prefs.staff, prefs.zoom, prefs.sheet, score]) // eslint-disable-line react-hooks/exhaustive-deps
+  }, [prefs.staff, prefs.vocalStaff, prefs.zoom, prefs.sheet, score]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => savePrefs(prefs), [prefs])
 
@@ -657,7 +715,8 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
         metroOnly ||
           mute.has(i) ||
           (followAlong && i === track) ||
-          (drums.added !== null && i === drums.original),
+          (drums.added !== null && i === drums.original) ||
+          i === drums.std,
       ),
     )
   }, [mute, followAlong, metroOnly, track, score, drums])
@@ -853,23 +912,20 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
   )
   const shownTrack = tracks[track]
   const isDrumTrack = Boolean(shownTrack?.isPercussion || shownTrack?.staves[0]?.isPercussion)
-  /** The drum part shown as a grid / text: the saved one, or the file's drum track converted. */
-  const viewPart = useMemo<DrumPart | null>(() => {
-    if (!score || !isDrumTrack || prefs.drumView === 'staff') return null
+  /** The shown drum track as a step grid: the saved part, or the file's drum track converted. */
+  const drumPart = useMemo<DrumPart | null>(() => {
+    if (!score || !isDrumTrack) return null
     if (track === drums.added) return drums.part
     try {
       return partFromTrack(score, track, { path, title, artist, updatedBy: '' })
     } catch {
       return null
     }
-  }, [score, isDrumTrack, prefs.drumView, track, drums, path, title, artist])
-  const drumSections = useMemo(
-    () => (score?.masterBars ?? []).map((m) => m.section?.text || null),
-    [score],
-  )
+  }, [score, isDrumTrack, track, drums, path, title, artist])
+  /** 文字鼓谱 replaces the sheet; 标准鼓谱 is the sheet itself. */
+  const viewPart = prefs.drumView === 'tab' ? drumPart : null
   const drumPieces = useMemo(() => (viewPart ? visiblePieces(viewPart) : []), [viewPart])
-  const barStarts = useMemo(() => (score?.masterBars ?? []).map((m) => m.start), [score])
-  const drumCursor = viewPart ? cursorFor(viewPart, time.tick, barStarts) : null
+  const keyPieces = useMemo(() => (drumPart ? usedPieces(drumPart) : []), [drumPart])
   const gridShown = viewPart !== null
   // Back from the grid / text view: the sheet was laid out while hidden, draw it again.
   const wasGrid = useRef(false)
@@ -877,7 +933,8 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
     if (wasGrid.current && !gridShown) api.current?.render()
     wasGrid.current = gridShown
   }, [gridShown])
-  const showFretboard = prefs.fretboard && shownTrack !== undefined && hasFretboard(shownTrack)
+  const showFretboard =
+    prefs.fretboard && shownTrack !== undefined && hasFretboard(shownTrack) && !isVocalTrack(shownTrack)
   const status =
     loop && loopState
       ? loopState.done
@@ -902,6 +959,30 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
           )}
         </div>
       )}
+      {/* 上传的简谱: many band scores have no singer's part; members upload one here. */}
+      <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
+        {me && canBrowseLibrary(me) && (
+          <a
+            href={hrefCombine(path, combo || undefined)}
+            className="mr-4 text-xs text-muted-foreground underline-offset-4 hover:underline"
+          >
+            {combo ? '编辑这个组合乐队谱 →' : '组合乐队谱（从不同版本挑声部）→'}
+          </a>
+        )}
+        <button
+          type="button"
+          className="text-xs text-muted-foreground underline-offset-4 hover:underline"
+          aria-expanded={sheetsOpen}
+          onClick={() => setSheetsOpen((v) => !v)}
+        >
+          {sheetsOpen ? '收起简谱 / 歌词谱 ▴' : '简谱 / 歌词谱（上传的）▾'}
+        </button>
+        {sheetsOpen && (
+          <div className="mt-2">
+            <SheetsPanel path={path} />
+          </div>
+        )}
+      </div>
       {phase === 'error' && (
         <div className="px-4">
           <Notice tone="error">{message}</Notice>
@@ -958,28 +1039,16 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
         )}
         {gridShown && viewPart && (
           <div className="pb-4">
-            {prefs.drumView === 'grid' ? (
-              <>
-                <DrumGrid
-                  part={viewPart}
-                  cursor={drumCursor}
-                  pieces={drumPieces}
-                  sections={drumSections}
-                  onSeekBar={(b) => {
-                    const start = barStarts[b]
-                    if (api.current && start !== undefined) api.current.tickPosition = start
-                  }}
-                />
-                <div className="mt-3">
-                  <DrumLegend pieces={drumPieces} />
-                </div>
-              </>
-            ) : (
-              <DrumTab part={viewPart} pieces={drumPieces} />
-            )}
+            <DrumTab part={viewPart} pieces={drumPieces} />
           </div>
         )}
         <div ref={host} className={cx('at-surface w-full', gridShown && 'hidden')} />
+        {isDrumTrack && !gridShown && loaded && keyPieces.length > 0 && (
+          <div className="mt-6 px-1">
+            <p className="mb-2 text-xs text-[color:var(--sheet-dim)]">鼓谱图例</p>
+            <DrumKey pieces={keyPieces} />
+          </div>
+        )}
       </div>
 
       {loaded && score && (
@@ -1010,7 +1079,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
           onCountIn={() => setCountIn((v) => !v)}
           metro={metro}
           onMetro={() => setMetro((v) => !v)}
-          tracks={trackNames}
+          tracks={drums.std !== null ? trackNames.slice(0, drums.std) : trackNames}
           track={track}
           onShowTrack={setTrack}
           solo={solo}
@@ -1025,9 +1094,14 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Pro
           drumEditHref={hrefDrums({ path, title, artist })}
           hasDrumPart={drums.part !== null}
           staff={prefs.staff}
+          isVocalTrack={shownTrack !== undefined && isVocalTrack(shownTrack)}
+          vocalStaff={prefs.vocalStaff}
+          onVocalStaff={(v) => setPrefs((p) => ({ ...p, vocalStaff: v }))}
           staffHint={
-            shownTrack && staffFor(shownTrack, prefs.staff) !== prefs.staff
-              ? '这一轨没有六线谱（鼓、键盘、人声等），自动用五线谱显示。'
+            shownTrack &&
+            !isVocalTrack(shownTrack) &&
+            staffFor(shownTrack, prefs.staff) !== prefs.staff
+              ? '这一轨没有六线谱（鼓、键盘等），自动用五线谱显示。'
               : ''
           }
           onStaff={(s: StaffMode) => setPrefs((p) => ({ ...p, staff: s }))}

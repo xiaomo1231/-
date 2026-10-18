@@ -79,6 +79,8 @@ export interface BandSong {
   note: string
   /** Speed everybody practises at, 15–175; null = the player's own choice. */
   rehearsalSpeedPct: number | null
+  /** A combined band score (组合乐队谱) used instead of `path`, or null. Optional for older rows. */
+  comboId?: string | null
   addedBy: string
   addedAt: number
   updatedAt: number
@@ -112,6 +114,7 @@ export interface AddBandSongBody {
 /** POST /api/band/songs/update */
 export interface UpdateBandSongBody {
   id: string
+  comboId?: string | null
   status?: SongStatus
   parts?: Record<string, string>
   note?: string
@@ -180,3 +183,85 @@ export type LiveCommand =
   | { songId: string; type: 'pause'; tick: number }
   | { songId: string; type: 'seek'; tick: number }
   | { songId: string; type: 'speed'; speedPct: number }
+
+// ---------------------------------------------------------------------------
+// songs: the versions of one song, and the song's key (歌曲标识)
+// ---------------------------------------------------------------------------
+
+/** GET /api/song?path=: the song a file belongs to and all its playable versions. */
+export interface SongInfo {
+  /** Library song id (`${artistId}#${normalized title}`): uploads and combos hang on it. */
+  songKey: string
+  title: string
+  artist: string
+  /** Score-format files (GP / MusicXML) of this song, the given one included. */
+  versions: Array<{ path: string; label: string; tags: string[]; size: number }>
+}
+
+// ---------------------------------------------------------------------------
+// uploaded sheets (上传的简谱)
+// ---------------------------------------------------------------------------
+
+export type SheetKind = 'image' | 'pdf'
+
+/** One uploaded file (an image page or a PDF) attached to a song; kept in SCORES_DATA/sheets/. */
+export interface SheetUpload {
+  id: string
+  songKey: string
+  /** What it is, e.g. "主唱简谱", up to 40 chars. */
+  label: string
+  kind: SheetKind
+  /** Original file name (for display / download). */
+  fileName: string
+  size: number
+  /** Order among the song's uploads (page order). */
+  order: number
+  uploadedBy: string
+  uploadedAt: number
+}
+
+/** POST /api/sheets/upload?path=<score file>&label=<text>&name=<file name> with the raw file as body. */
+export interface SheetUploadQuery {
+  path: string
+  label: string
+  name: string
+}
+
+// ---------------------------------------------------------------------------
+// combined band score (组合乐队谱)
+// ---------------------------------------------------------------------------
+
+/** One part taken from a version of the song. */
+export interface ComboPart {
+  /** Source file (a version of the same song). */
+  path: string
+  /** Track index in that file. */
+  track: number
+  /** Shown name (defaults to the track's Chinese name). */
+  name: string
+  /** Bars to shift the part: +2 = it starts 2 bars later than in its file. */
+  offsetBars: number
+  /** Semitones to transpose the part (−12…12). */
+  transpose: number
+  /** Expand repeat signs of the source file before aligning (when versions write repeats differently). */
+  unrollRepeats: boolean
+}
+
+/** A recipe, not a file: the base version gives bars, tempo and sections; parts are copied onto it. */
+export interface ComboRecipe {
+  id: string
+  songKey: string
+  title: string
+  artist: string
+  /** Base version: its bars, tempo, sections; its own tracks are not included unless listed in `parts`. */
+  base: string
+  baseUnrollRepeats: boolean
+  parts: ComboPart[]
+  createdBy: string
+  updatedAt: number
+}
+
+/** POST /api/combos/save (id empty = new). */
+export interface SaveComboBody {
+  recipe: Omit<ComboRecipe, 'createdBy' | 'updatedAt' | 'id'> & { id: string | null }
+}

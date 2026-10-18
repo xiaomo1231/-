@@ -44,13 +44,14 @@ export function Viewer({ route }: { route: ViewerRoute }) {
     case 'score':
       body = (
         <ScoreViewer
-          key={path}
+          key={path + route.combo}
           path={path}
           title={title}
           artist={artist}
           pages={pages}
           band={route.band}
           showDrums={route.drums}
+          combo={route.combo}
         />
       )
       break

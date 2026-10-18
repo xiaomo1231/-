@@ -9,6 +9,7 @@ import {
   partFromTrack,
   removeTrack,
   songBars,
+  standardizeDrumTrack,
 } from '@/songs/drumScore'
 import type { DrumPart } from '@/songs/drumTypes'
 
@@ -207,6 +208,162 @@ describe('partFromTrack', () => {
   })
 })
 
+// Nine 4/4 bars of identical guitar; section A starts bar 0, section B starts bar 5.
+const REPEAT_SONG = String.raw`\title "Repeat" \tempo 120 \ts 4 4
+\track "Guitar"
+\tuning (E4 B3 G3 D3 A2 E2)
+\section "A"
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |
+\section "B"
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |
+3.3.4 3.3.4 3.3.4 3.3.4 |`
+
+/** Nine identical bars: kick on 1 and 3 (feet), snare on 2 and 4 and closed hats on eighths (hands). */
+function repeatPart(): DrumPart {
+  const hits: DrumPart['bars'][number]['hits'] = [
+    { step: 0, piece: 'hihatClosed', vel: 2 },
+    { step: 0, piece: 'kick', vel: 2 },
+    { step: 2, piece: 'hihatClosed', vel: 2 },
+    { step: 4, piece: 'hihatClosed', vel: 2 },
+    { step: 4, piece: 'snare', vel: 2 },
+    { step: 6, piece: 'hihatClosed', vel: 2 },
+    { step: 8, piece: 'hihatClosed', vel: 2 },
+    { step: 8, piece: 'kick', vel: 2 },
+    { step: 10, piece: 'hihatClosed', vel: 2 },
+    { step: 12, piece: 'hihatClosed', vel: 2 },
+    { step: 12, piece: 'snare', vel: 2 },
+    { step: 14, piece: 'hihatClosed', vel: 2 },
+  ]
+  return {
+    ...handPart(),
+    bars: Array.from({ length: 9 }, () => ({ num: 4, den: 4, stepsPerQuarter: 4 as const, hits: hits.map((h) => ({ ...h })) })),
+  }
+}
+
+/** alphaTab SimileMark.Simple. */
+const SIMILE = 1
+
+describe('standard drum notation', () => {
+  it('writes hands on voice 0 (stems up) and feet on voice 1 (stems down)', () => {
+    const score = loadSong()
+    const track = buildDrumTrack(at, score, handPart())
+    const bar0 = track.staves[0]!.bars[0]!
+    expect(bar0.voices).toHaveLength(2)
+    const hands = bar0.voices[0]!.beats.flatMap((b) => b.notes.map((n) => n.percussionArticulation))
+    const feet = bar0.voices[1]!.beats.flatMap((b) => b.notes.map((n) => n.percussionArticulation))
+    const pieceAt = (idx: number) => track.percussionArticulations[idx]!.outputMidiNumber
+    expect(hands.map(pieceAt).sort()).toEqual([42, 42, 38].sort())
+    expect(feet.map(pieceAt)).toEqual([36])
+    // alphaTab BeamDirection: Up = 0, Down = 1
+    expect(bar0.voices[0]!.beats.every((b) => b.preferredBeamDirection === 0)).toBe(true)
+    expect(bar0.voices[1]!.beats.every((b) => b.preferredBeamDirection === 1)).toBe(true)
+  })
+
+  it('gives each voice its own rests and leaves an empty feet voice when there are no feet hits', () => {
+    const score = loadSong()
+    const track = buildDrumTrack(at, score, handPart())
+    // bar 0 (6/8): hands hit on steps 1, 3, 6 of 9 => the hands voice has rests in between
+    const hands0 = track.staves[0]!.bars[0]!.voices[0]!.beats
+    expect(hands0.some((b) => b.isRest)).toBe(true)
+    // bar 1 (4/4, no hits at all): hands hold one whole rest, no feet voice
+    const bar1 = track.staves[0]!.bars[1]!
+    expect(bar1.voices[0]!.beats).toHaveLength(1)
+    expect(bar1.voices[0]!.beats[0]!.isRest).toBe(true)
+    expect(bar1.voices).toHaveLength(2)
+    expect(bar1.voices[1]!.isEmpty).toBe(true)
+    // bar 2: feet voice is rests and notes; every beat's duration is a legal note value for the grid
+    const feet2 = track.staves[0]!.bars[2]!.voices[1]!.beats
+    expect(feet2.filter((b) => !b.isRest)).toHaveLength(2)
+  })
+
+  it('fills every voice of every bar exactly, and never crosses a beat with a note', () => {
+    const track = buildDrumTrack(at, at.importer.ScoreLoader.loadAlphaTex(REPEAT_SONG), repeatPart())
+    for (const bar of track.staves[0]!.bars) {
+      for (const voice of bar.voices) {
+        if (voice.isEmpty) continue
+        const total = voice.beats.reduce((sum, beat) => sum + beat.playbackDuration, 0)
+        expect(total).toBe(3840) // 4/4 = 4 quarters = 3840 ticks
+        let at16 = 0
+        for (const beat of voice.beats) {
+          // a note never spans a beat (quarter) boundary: start and end lie in the same quarter
+          if (!beat.isRest) {
+            const startQ = Math.floor(at16 / 960)
+            const endQ = Math.floor((at16 + beat.playbackDuration - 1) / 960)
+            expect(endQ).toBe(startQ)
+          }
+          at16 += beat.playbackDuration
+        }
+      }
+    }
+  })
+
+  it('marks repeated bars with a simile sign, but never a section start and never more than 3 in a row', () => {
+    const s9 = at.importer.ScoreLoader.loadAlphaTex(REPEAT_SONG)
+    const track = buildDrumTrack(at, s9, repeatPart())
+    const flags = track.staves[0]!.bars.map((b) => b.simileMark === SIMILE)
+    // 0: section A start; 1-3: repeats; 4: section B start; 5-7: repeats; 8: 4th repeat in a row written out
+    expect(flags).toEqual([false, true, true, true, false, true, true, true, false])
+  })
+
+  it('keeps MIDI events identical with and without simile marks', () => {
+    const a = at.importer.ScoreLoader.loadAlphaTex(REPEAT_SONG)
+    buildDrumTrack(at, a, repeatPart())
+    const b = at.importer.ScoreLoader.loadAlphaTex(REPEAT_SONG)
+    buildDrumTrack(at, b, repeatPart(), '鼓', { simile: false })
+    expect(noteOns(a, 9)).toEqual(noteOns(b, 9))
+    expect(noteOns(a, 9).length).toBeGreaterThan(0)
+  })
+
+  it('reads back the same hits from simile bars (partFromTrack round trip)', () => {
+    const score = at.importer.ScoreLoader.loadAlphaTex(REPEAT_SONG)
+    const part = repeatPart()
+    buildDrumTrack(at, score, part)
+    const back = partFromTrack(score, 1, META)
+    expect(back.bars.map((b) => b.hits)).toEqual(part.bars.map((b) => b.hits))
+    expect(back.bars.map((b) => b.stepsPerQuarter)).toEqual(part.bars.map((b) => b.stepsPerQuarter))
+  })
+
+  it('survives GP7 export and reload: two voices, simile marks, percussion clef', () => {
+    const score = at.importer.ScoreLoader.loadAlphaTex(REPEAT_SONG)
+    const part = repeatPart()
+    buildDrumTrack(at, score, part)
+    const reloaded = at.importer.ScoreLoader.loadScoreFromBytes(exportGp(at, score))
+    const idx = findDrumTrack(reloaded)!
+    const bars = reloaded.tracks[idx]!.staves[0]!.bars
+    expect(bars[0]!.clef).toBe(at.model.Clef.Neutral)
+    expect(bars[0]!.voices.filter((v) => !v.isEmpty).length).toBe(2)
+    expect(bars.map((b) => b.simileMark === SIMILE)).toEqual([false, true, true, true, false, true, true, true, false])
+    const back = partFromTrack(reloaded, idx, META)
+    expect(back.bars.map((b) => b.hits)).toEqual(part.bars.map((b) => b.hits))
+  })
+
+  it('standardizeDrumTrack appends a standard copy of a percussion track', () => {
+    const score = loadSong()
+    buildDrumTrack(at, score, handPart(), '原鼓')
+    const copyIndex = standardizeDrumTrack(at, score, 1)
+    expect(copyIndex).toBe(2)
+    expect(score.tracks[2]!.name).toBe('原鼓（标准鼓谱）')
+    expect(score.tracks[2]!.isPercussion).toBe(true)
+    expect(partFromTrack(score, 2, META).bars.map((b) => b.hits)).toEqual(handPart().bars.map((b) => b.hits))
+  })
+
+  it('pins the PAS staff positions of the kit (kick on space 1, snare on space 3)', () => {
+    const track = buildDrumTrack(at, loadSong(), handPart())
+    const line = (midi: number) => track.percussionArticulations.find((a) => a.outputMidiNumber === midi)!.staffLine
+    expect(line(36)).toBe(8)
+    expect(line(38)).toBe(4)
+    expect(line(51)).toBe(1)
+    expect(line(42)).toBe(0)
+    expect(line(44)).toBeGreaterThan(9)
+  })
+})
+
 const REAL = 'F:\\吉他谱\\吉他谱库\\1-华语\\男歌手\\周杰伦\\晴天\\晴天.gp5'
 describe.skipIf(!existsSync(REAL))('real Guitar Pro file (read only)', () => {
   it('reads the drum track of 晴天.gp5 with kick, snare and hi-hat', () => {
@@ -224,5 +381,20 @@ describe.skipIf(!existsSync(REAL))('real Guitar Pro file (read only)', () => {
     expect(pieces.has('snare')).toBe(true)
     // 晴天 writes its hi-hat on GM key 44 (pedal hi-hat), which maps to hihatPedal
     expect(pieces.has('hihatClosed') || pieces.has('hihatOpen') || pieces.has('hihatPedal')).toBe(true)
+  })
+})
+
+describe.skipIf(!existsSync(REAL))('standardizeDrumTrack on the real file (read only)', () => {
+  it('appends a standard-notation copy with the same hits as the original drum track', () => {
+    const score = at.importer.ScoreLoader.loadScoreFromBytes(new Uint8Array(readFileSync(REAL)))
+    const meta = { path: REAL, title: '晴天', artist: '周杰伦', updatedBy: 'test' }
+    const original = partFromTrack(score, 2, meta)
+    const count = score.tracks.length
+    const index = standardizeDrumTrack(at, score, 2)
+    expect(index).toBe(count)
+    expect(score.tracks[index]!.name).toBe(`${score.tracks[2]!.name}（标准鼓谱）`)
+    expect(score.tracks[index]!.isPercussion).toBe(true)
+    const copy = partFromTrack(score, index, meta)
+    expect(copy.bars.map((b) => b.hits)).toEqual(original.bars.map((b) => b.hits))
   })
 })

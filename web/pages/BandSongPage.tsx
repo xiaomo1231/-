@@ -1,13 +1,16 @@
 import { useEffect, useState } from 'react'
-import { errorText, fetchBytes, fileUrl, type MemberProgress, type SongStatus, type UserInfo } from '../lib/api'
+import { api, errorText, fetchBytes, fileUrl, type MemberProgress, type SongStatus, type UserInfo } from '../lib/api'
 import { removeSong, STATUS_LABELS, updateSong, useBand } from '../lib/band'
 import { cx, SELECT } from '../lib/classes'
 import { fmtDuration } from '../lib/practice'
 import { HREF_BAND, hrefViewer, navigate } from '../lib/route'
+import { hrefCombine } from '../lib/combos'
+import type { ComboRecipe } from '../lib/api'
 import { INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { Link } from '../components/Link'
 import { Notice, PageBar, Seg, Staff } from '../components/ui'
 import { chooseEncoding, loadAlphaTab } from '../viewer/alphaTab'
+import { SheetsPanel } from '../viewer/SheetsPanel'
 import { trackLabels } from '../viewer/trackNames'
 
 type Speed = 'own' | 'set'
@@ -50,13 +53,36 @@ export function BandSongPage({ id }: { id: string }) {
   const [partsDraft, setPartsDraft] = useState<Parts>(() => song?.parts ?? {})
   const [tracks, setTracks] = useState<Tracks>({ status: 'loading' })
   const [confirmDelete, setConfirmDelete] = useState(false)
+  /** 组合乐队谱 of this song (recipes made on the 组合 page). */
+  const [combos, setCombos] = useState<ComboRecipe[]>([])
+  const comboId = song?.comboId ?? null
+  const combo = combos.find((c) => c.id === comboId) ?? null
+
+  useEffect(() => {
+    if (!songPath) return
+    let cancelled = false
+    api
+      .combos(songPath)
+      .then((list) => {
+        if (!cancelled) setCombos(list)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [songPath])
 
   // Keep the drafts in step with what the server holds (after a save, or a first read).
   useEffect(() => setNoteDraft(note), [note])
   useEffect(() => setPartsDraft(JSON.parse(partsKey) as Parts), [partsKey])
 
-  // Read the file's tracks in the browser (parsed only, not rendered).
+  // Read the file's tracks in the browser (parsed only, not rendered). With a 组合乐队谱
+  // the tracks are the recipe's parts, in order.
   useEffect(() => {
+    if (combo) {
+      setTracks({ status: 'ready', labels: combo.parts.map((p) => ({ zh: p.name, original: '' })) })
+      return
+    }
     if (!songPath) return
     let cancelled = false
     setTracks({ status: 'loading' })
@@ -80,7 +106,7 @@ export function BandSongPage({ id }: { id: string }) {
     return () => {
       cancelled = true
     }
-  }, [songPath])
+  }, [songPath, combo])
 
   if (!state) {
     return (
@@ -188,18 +214,57 @@ export function BandSongPage({ id }: { id: string }) {
 
       <div className="max-w-[640px] pt-6">
         <Link
-          href={hrefViewer({
-            path: song.path,
-            format: 'score',
-            title: song.title,
-            artist: song.artist,
-            band: song.id,
-          })}
+          href={
+            combo
+              ? hrefViewer({
+                  path: combo.base,
+                  format: 'score',
+                  title: song.title,
+                  artist: song.artist,
+                  band: song.id,
+                }) + `&combo=${encodeURIComponent(combo.id)}`
+              : hrefViewer({
+                  path: song.path,
+                  format: 'score',
+                  title: song.title,
+                  artist: song.artist,
+                  band: song.id,
+                })
+          }
           className="inline-flex min-h-14 w-full items-center justify-center rounded-lg bg-primary px-6 text-lg font-bold text-primary-foreground transition-colors hover:bg-primary-strong active:opacity-80 sm:w-auto"
         >
           开始排练 →
         </Link>
       </div>
+
+      {/* which score the band rehearses: the setlist file, or a 组合乐队谱 of the song */}
+      <section aria-labelledby="song-score" className="max-w-[640px] pt-8">
+        <h2 id="song-score" className="label m-0">
+          排练用的谱
+        </h2>
+        <select
+          className="mt-3 h-11 w-full rounded-lg border border-border bg-card px-3 text-sm"
+          value={comboId ?? ''}
+          disabled={busy !== null}
+          onChange={(e) => {
+            const v = e.target.value || null
+            void run('combo', () => updateSong({ id: song.id, comboId: v, parts: {} }))
+          }}
+        >
+          <option value="">歌单里的原谱</option>
+          {combos.map((c) => (
+            <option key={c.id} value={c.id}>
+              组合乐队谱：{c.parts.map((p) => p.name).join(' + ')}
+            </option>
+          ))}
+        </select>
+        <p className="mt-2 text-xs text-muted-foreground">
+          换谱后声部要重新分配。
+          <a className="ml-1 underline-offset-4 hover:underline" href={hrefCombine(song.path, comboId ?? undefined)}>
+            {comboId ? '编辑这个组合 →' : '从不同版本组合一份乐队谱 →'}
+          </a>
+        </p>
+      </section>
 
       {notice && (
         <div className="max-w-[640px] pt-4">
@@ -361,6 +426,16 @@ export function BandSongPage({ id }: { id: string }) {
             </div>
           </>
         )}
+      </section>
+
+      {/* 主唱简谱 */}
+      <section aria-labelledby="song-sheets" className="max-w-[640px] pt-8">
+        <h2 id="song-sheets" className="label m-0">
+          主唱简谱
+        </h2>
+        <div className="pt-2.5">
+          <SheetsPanel path={song.path} />
+        </div>
       </section>
 
       {/* practice */}

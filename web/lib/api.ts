@@ -9,7 +9,12 @@ import type {
 import type {
   AddBandSongBody,
   BandState,
+  ComboRecipe,
   EnsembleResult,
+  SaveComboBody,
+  SheetUpload,
+  SheetUploadQuery,
+  SongInfo,
   LiveCommand,
   LiveState,
   LoginBody,
@@ -209,6 +214,35 @@ export const api = {
   saveDrums: (part: DrumPart) =>
     call<DrumPart>('/api/drums/save', { body: { part } satisfies SaveDrumsBody }),
   removeDrums: (path: string) => call<{ ok: boolean }>('/api/drums/remove', { body: { path } }),
+  // 歌曲的各版本、上传的简谱、组合乐队谱
+  song: (path: string, signal?: AbortSignal) =>
+    call<SongInfo>(`/api/song?path=${enc(path)}`, { signal }),
+  sheets: (path: string, signal?: AbortSignal) =>
+    call<SheetUpload[]>(`/api/sheets?path=${enc(path)}`, { signal }),
+  /** Raw upload (no multipart): the file is the body. */
+  async uploadSheet(q: SheetUploadQuery, file: Blob): Promise<SheetUpload[]> {
+    const res = await fetch(
+      `/api/sheets/upload?path=${enc(q.path)}&label=${enc(q.label)}&name=${enc(q.name)}`,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      },
+    )
+    if (res.status === 401) throw unauthorized()
+    if (!res.ok) throw await failure(res)
+    return (await res.json()) as SheetUpload[]
+  },
+  removeSheet: (id: string) => call<SheetUpload[]>('/api/sheets/remove', { body: { id } }),
+  reorderSheets: (path: string, ids: string[]) =>
+    call<SheetUpload[]>('/api/sheets/reorder', { body: { path, ids } }),
+  combos: (path: string, signal?: AbortSignal) =>
+    call<ComboRecipe[]>(`/api/combos?path=${enc(path)}`, { signal }),
+  combo: (id: string, signal?: AbortSignal) =>
+    call<ComboRecipe>(`/api/combos/get?id=${enc(id)}`, { signal }),
+  saveCombo: (b: SaveComboBody) => call<ComboRecipe>('/api/combos/save', { body: b }),
+  removeCombo: (id: string) => call<{ ok: boolean }>('/api/combos/remove', { body: { id } }),
   // 一起播放
   serverTime: () => call<{ now: number }>('/api/time'),
   liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),
@@ -250,4 +284,9 @@ export async function fetchBytes(url: string, signal?: AbortSignal): Promise<Uin
   if (res.status === 401) throw unauthorized()
   if (!res.ok) throw await failure(res)
   return new Uint8Array(await res.arrayBuffer())
+}
+
+/** An uploaded sheet's file (image or PDF), served with the session cookie. */
+export function sheetFileUrl(id: string): string {
+  return `/api/sheets/file?id=${encodeURIComponent(id)}`
 }

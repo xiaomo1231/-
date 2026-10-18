@@ -30,6 +30,8 @@ const STATUSES: readonly SongStatus[] = ['learning', 'ready', 'maybe']
 
 /** Track index as a string key: "0".."63", no leading zeros. */
 const TRACK_KEY = /^(?:0|[1-9]|[1-5]\d|6[0-3])$/
+/** A 组合乐队谱 recipe id (see server/combos.ts). */
+const COMBO_ID = /^[0-9a-f]{12}$/
 
 export class BandError extends Error {
   status: number
@@ -69,6 +71,12 @@ export function parseUpdateSong(
   const id = body.id
   if (typeof id !== 'string' || !id || id.length > 64) return { ok: false, error: '找不到这首歌。' }
   const out: UpdateBandSongBody = { id }
+
+  if (body.comboId !== undefined) {
+    const c = body.comboId
+    if (c !== null && (typeof c !== 'string' || !COMBO_ID.test(c))) return { ok: false, error: '组合乐队谱编号不对。' }
+    out.comboId = c as string | null
+  }
 
   if (body.status !== undefined) {
     if (!isStatus(body.status)) return { ok: false, error: '歌曲状态必须是 learning、ready 或 maybe。' }
@@ -157,6 +165,8 @@ function sanitizeSongs(raw: unknown, inRoot: InRoot): BandSong[] {
     const addedAt = num(rec.addedAt, 0)
     const speed = rec.rehearsalSpeedPct
     out.push({
+      // Rows saved before combos have no comboId: treat as null.
+      comboId: typeof rec.comboId === 'string' && COMBO_ID.test(rec.comboId) ? rec.comboId : null,
       id: rec.id,
       path: p,
       title: typeof rec.title === 'string' ? rec.title : '',
@@ -260,6 +270,7 @@ export class BandStore {
         parts: {},
         note: '',
         rehearsalSpeedPct: null,
+        comboId: null,
         addedBy: userId,
         addedAt: now,
         updatedAt: now,
@@ -280,6 +291,7 @@ export class BandStore {
         parts: body.parts !== undefined ? { ...body.parts } : old.parts,
         note: body.note ?? old.note,
         rehearsalSpeedPct: body.rehearsalSpeedPct !== undefined ? body.rehearsalSpeedPct : old.rehearsalSpeedPct,
+        comboId: body.comboId !== undefined ? body.comboId : (old.comboId ?? null),
         updatedAt: now,
       }
       await this.commit(this.list.map((s) => (s.id === old.id ? updated : s)))

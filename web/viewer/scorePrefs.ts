@@ -21,13 +21,22 @@ export interface ScorePrefs {
   trainer: TrainerConfig
   /** How a drum track is shown: 五线谱 (alphaTab), 鼓谱网格 or 文字鼓谱. */
   drumView: DrumView
+  /** How a singer's (主唱 / 旋律) track is shown: 简谱 or 五线谱 — never as guitar tab. */
+  vocalStaff: VocalStaff
 }
+
+export type VocalStaff = 'Numbered' | 'Score'
+
+export const VOCAL_STAFF_OPTIONS: ReadonlyArray<{ value: VocalStaff; label: string }> = [
+  { value: 'Numbered', label: '简谱' },
+  { value: 'Score', label: '五线谱' },
+]
 
 export type DrumView = 'staff' | 'grid' | 'tab'
 
+/** The grid is for editing (编辑鼓谱); reading uses standard drum notation or the text tab. */
 export const DRUM_VIEW_OPTIONS: ReadonlyArray<{ value: DrumView; label: string }> = [
-  { value: 'grid', label: '鼓谱网格' },
-  { value: 'staff', label: '五线谱' },
+  { value: 'staff', label: '标准鼓谱' },
   { value: 'tab', label: '文字鼓谱' },
 ]
 
@@ -62,7 +71,8 @@ const DEFAULT: ScorePrefs = {
   fretboard: false,
   soundFont: 'basic',
   trainer: DEFAULT_TRAINER,
-  drumView: 'grid',
+  drumView: 'staff',
+  vocalStaff: 'Numbered',
 }
 
 export function loadPrefs(): ScorePrefs {
@@ -80,6 +90,7 @@ export function loadPrefs(): ScorePrefs {
         ? (v.soundFont as SoundFontId)
         : DEFAULT.soundFont,
       trainer: normalizeTrainer(v.trainer),
+      vocalStaff: v.vocalStaff === 'Score' ? 'Score' : 'Numbered',
       drumView: DRUM_VIEW_OPTIONS.some((o) => o.value === v.drumView)
         ? (v.drumView as DrumView)
         : DEFAULT.drumView,
@@ -156,4 +167,50 @@ export function hasTab(track: {
 /** The notation for a track: the student's choice for guitar and bass; drums, piano, vocals and other non-tab parts always in 五线谱. */
 export function staffFor(track: Parameters<typeof hasTab>[0] | undefined, chosen: StaffMode): StaffMode {
   return !track || hasTab(track) ? chosen : 'Score'
+}
+
+/** A singer's part: named so (主唱 / 人声 / vocal / melody / 旋律 / 和声…) or a voice sound (GM 52–54, 85). */
+export function isVocalTrack(track: {
+  name: string
+  isPercussion?: boolean
+  playbackInfo: { program: number }
+}): boolean {
+  if (track.isPercussion) return false
+  if (/主唱|人声|唱|和声|旋律|vocal|voice|vox|melody|harmony|lead\s*voc|sing/i.test(track.name))
+    return true
+  const p = track.playbackInfo.program
+  return (p >= 52 && p <= 54) || p === 85
+}
+
+type NotationTrack = Parameters<typeof hasTab>[0] &
+  Parameters<typeof isVocalTrack>[0] & {
+    staves: ReadonlyArray<{
+      showNumbered: boolean
+      showStandardNotation: boolean
+      showTablature: boolean
+      showSlash: boolean
+    }>
+  }
+
+/**
+ * Sets up the notation of the shown track: a singer's part as 简谱 or 五线谱 (through the
+ * staff's own flags and the default profile), any other part by the chosen profile
+ * (drums / keys without tab fall back to 五线谱). Returns the stave profile to use.
+ */
+export function prepareNotation(
+  at: AlphaTab,
+  track: NotationTrack,
+  prefs: Pick<ScorePrefs, 'staff' | 'vocalStaff'>,
+): number {
+  if (isVocalTrack(track)) {
+    const numbered = prefs.vocalStaff === 'Numbered'
+    for (const st of track.staves) {
+      st.showNumbered = numbered
+      st.showStandardNotation = !numbered
+      st.showTablature = false
+      st.showSlash = false
+    }
+    return (at.StaveProfile as unknown as Record<string, number>).Default ?? 0
+  }
+  return staveProfileOf(at, staffFor(track, prefs.staff))
 }

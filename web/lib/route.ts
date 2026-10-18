@@ -13,6 +13,8 @@ export interface ViewerRoute {
   band: string
   /** Opened from the drum editor (试听): show the drum part right away. */
   drums: boolean
+  /** A 组合乐队谱 recipe id: the parts it lists are put onto this (base) file. */
+  combo: string
 }
 
 export type Route =
@@ -28,6 +30,7 @@ export type Route =
   | { kind: 'account' }
   | { kind: 'users' }
   | { kind: 'drums'; path: string; title: string; artist: string }
+  | { kind: 'combine'; path: string; id: string }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -64,6 +67,7 @@ export function parseHash(hash: string): Route {
   if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
   if (path === '/me') return { kind: 'account' }
   if (path === '/users') return { kind: 'users' }
+  if (path === '/combine') return { kind: 'combine', path: qs.get('p') ?? '', id: qs.get('id') ?? '' }
   if (path === '/d')
     return {
       kind: 'drums',
@@ -81,6 +85,7 @@ export function parseHash(hash: string): Route {
       artist: qs.get('artist') ?? '',
       band: qs.get('b') ?? '',
       drums: qs.get('drums') === '1',
+      combo: qs.get('combo') ?? '',
     }
   }
   return { kind: 'home' }

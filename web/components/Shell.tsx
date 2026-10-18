@@ -28,6 +28,7 @@ import { EnsemblesPage } from '../pages/EnsemblesPage'
 import { AccountPage } from '../pages/AccountPage'
 import { UsersPage } from '../pages/UsersPage'
 import { DrumEditorPage } from '../pages/DrumEditorPage'
+import { CombinePage } from '../pages/CombinePage'
 import { Viewer } from '../viewer/Viewer'
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
@@ -416,6 +417,8 @@ function renderRoute(route: Route, libraryHidden: boolean) {
       return <AccountPage />
     case 'users':
       return <UsersPage />
+    case 'combine':
+      return <CombinePage key={route.path + route.id} path={route.path} id={route.id} />
     case 'drums':
       return (
         <DrumEditorPage

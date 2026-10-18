@@ -85,6 +85,17 @@ import {
 } from './drums'
 import { drumify, drumifyAvailable } from './drumify'
 import { generateFromTemplates } from '../src/songs/drumGenerate'
+import { buildSongIndex, songInfo } from './songs'
+import { ComboError, ComboStore, canEditCombo, parseSaveCombo } from './combos'
+import {
+  MAX_SHEET_BYTES,
+  SheetError,
+  SheetStore,
+  canEditSheet,
+  parseUploadQuery,
+  readUploadBody,
+  sheetContentType,
+} from './sheets'
 import type { BandState } from '../src/songs/scoreServerTypes'
 import {
   loadFromFiles,
@@ -220,6 +231,8 @@ const practiceQueue = createSerialQueue()
 const live = new LiveHub()
 let ensembles: EnsembleIndex
 let drums: DrumStore
+let sheets: SheetStore
+let combos: ComboStore
 const drumLib = loadTemplates()
 const drumEngines: DrumEngines = {
   template: (song, o) =>
@@ -509,6 +522,7 @@ async function handleBand(
     await band.add(orBadRequest(parseAddSong(body, inRoot)), me.id, now).catch(asHttp)
   } else if (p === '/api/band/songs/update') {
     const u = orBadRequest(parseUpdateSong(body, (id) => users.get(id) !== undefined))
+    if (u.comboId && !combos.get(u.comboId)) throw new HttpError(400, '找不到这个组合乐队谱。')
     await band.update(u, now).catch(asHttp)
   } else if (p === '/api/band/songs/remove') {
     await band.remove(typeof body.id === 'string' ? body.id : '').catch(asHttp)
@@ -599,6 +613,156 @@ async function handleDrums(
   return sendJson(res, 404, { error: '找不到这个接口。' })
 }
 
+/** The song a score file belongs to (its key and versions); 404 when the library has no such file. */
+function songOfPath(rel: string) {
+  const info = songInfo(buildSongIndex(requireLibrary()), rel)
+  if (!info) throw new HttpError(404, '在谱库里找不到这首歌。')
+  return info
+}
+
+/** GET /api/song and 上传的简谱 (/api/sheets…). */
+async function handleSongs(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  const p = url.pathname
+  const allowed = (rel: string) => {
+    if (!canBrowse(me) && !band.hasPath(rel))
+      throw new HttpError(403, '你的账号只能处理乐队歌单里的谱子。')
+  }
+  try {
+    if (p === '/api/song' || p === '/api/sheets') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      const rel = url.searchParams.get('path') ?? ''
+      allowed(rel)
+      const info = songOfPath(rel)
+      return sendJson(res, 200, p === '/api/song' ? info : sheets.list(info.songKey))
+    }
+    if (p === '/api/sheets/file') {
+      if (req.method !== 'GET' && req.method !== 'HEAD')
+        return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      const item = sheets.get(url.searchParams.get('id') ?? '')
+      if (!item) return sendJson(res, 404, { error: '找不到这个文件。' })
+      const file = sheets.filePath(item)
+      const st = await fs.promises.stat(file)
+      const ext = path.extname(file).slice(1)
+      res.writeHead(200, {
+        'Content-Type': sheetContentType(item.kind, ext as never),
+        'Content-Length': st.size,
+        'Cache-Control': 'private, max-age=86400',
+        // Never run uploaded content as a page of this site.
+        'Content-Security-Policy': "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'",
+        'Content-Disposition': `inline; filename*=UTF-8''${encodeURIComponent(item.fileName)}`,
+      })
+      if (req.method === 'HEAD') return void res.end()
+      pipeline(fs.createReadStream(file), res, () => {})
+      return
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    if (p === '/api/sheets/upload') {
+      const q = orBadRequest(parseUploadQuery(url))
+      allowed(q.path)
+      const info = songOfPath(q.path)
+      const bytes = await readUploadBody(req, MAX_SHEET_BYTES)
+      await sheets.add(info.songKey, { label: q.label, fileName: q.name }, bytes, me.id, Date.now())
+      log(`上传简谱：${info.title}（${q.name || '未命名'}）`)
+      return sendJson(res, 200, sheets.list(info.songKey))
+    }
+    if (p === '/api/sheets/remove') {
+      const body = await readJsonBody(req)
+      const item = sheets.get(typeof body.id === 'string' ? body.id : '')
+      if (!item) return sendJson(res, 404, { error: '找不到这个文件。' })
+      if (!canEditSheet(item, me)) throw new HttpError(403, '只有上传的人或管理员可以删除。')
+      await sheets.remove(item.id)
+      return sendJson(res, 200, sheets.list(item.songKey))
+    }
+    if (p === '/api/sheets/reorder') {
+      const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+      const rel = typeof body.path === 'string' ? body.path : ''
+      allowed(rel)
+      const info = songOfPath(rel)
+      const ids = Array.isArray(body.ids) ? body.ids.filter((x): x is string => typeof x === 'string') : []
+      await sheets.reorder(info.songKey, ids)
+      return sendJson(res, 200, sheets.list(info.songKey))
+    }
+    return sendJson(res, 404, { error: '找不到这个接口。' })
+  } catch (err) {
+    if (err instanceof SheetError) throw new HttpError(err.status, err.message)
+    throw err
+  }
+}
+
+/** 组合乐队谱: recipes that put parts of several versions of a song onto one base version. */
+async function handleCombos(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  const p = url.pathname
+  const allowed = (rel: string) => {
+    if (!canBrowse(me) && !band.hasPath(rel))
+      throw new HttpError(403, '你的账号只能处理乐队歌单里的谱子。')
+  }
+  try {
+    if (p === '/api/combos') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      const rel = url.searchParams.get('path') ?? ''
+      allowed(rel)
+      return sendJson(res, 200, combos.list(songOfPath(rel).songKey))
+    }
+    if (p === '/api/combos/get') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      const item = combos.get(url.searchParams.get('id') ?? '')
+      if (!item) return sendJson(res, 404, { error: '找不到这个组合乐队谱。' })
+      // Members of the band may open a combo used by a setlist song.
+      if (!canBrowse(me) && !band.songs().some((x) => x.comboId === item.id)) allowed(item.base)
+      return sendJson(res, 200, item)
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    if (p === '/api/combos/save') {
+      requireBrowse(me)
+      const index = buildSongIndex(requireLibrary())
+      const recipe = orBadRequest(
+        parseSaveCombo(
+          await readJsonBody(req, MAX_FAVORITE_BODY),
+          inRoot,
+          (rel, key) => songInfo(index, rel)?.songKey === key,
+        ),
+      )
+      if (recipe.id) {
+        const old = combos.get(recipe.id)
+        if (old && !canEditCombo(old, me))
+          throw new HttpError(403, '只有创建的人或管理员可以修改这个组合。')
+      }
+      return sendJson(res, 200, await combos.save(recipe, me.id, Date.now()))
+    }
+    if (p === '/api/combos/remove') {
+      const body = await readJsonBody(req)
+      const item = combos.get(typeof body.id === 'string' ? body.id : '')
+      if (!item) return sendJson(res, 404, { error: '找不到这个组合乐队谱。' })
+      if (!canEditCombo(item, me)) throw new HttpError(403, '只有创建的人或管理员可以删除这个组合。')
+      await combos.remove(item.id)
+      return sendJson(res, 200, { ok: true })
+    }
+    return sendJson(res, 404, { error: '找不到这个接口。' })
+  } catch (err) {
+    if (err instanceof ComboError) throw new HttpError(err.status, err.message)
+    throw err
+  }
+}
+
+/** A file in the setlist: a song's own file, or a version used by a setlist song's 组合乐队谱. */
+function bandCanOpen(rel: string): boolean {
+  if (band.hasPath(rel)) return true
+  return band.songs().some((x) => {
+    const c = x.comboId ? combos.get(x.comboId) : undefined
+    return c !== undefined && (c.base === rel || c.parts.some((pt) => pt.path === rel))
+  })
+}
+
 /** Every score file of the library, for the background track reader (找乐队谱). */
 function startEnsembles(lib: LoadedLibrary): void {
   const files: Array<{ path: string; title: string; artist: string }> = []
@@ -675,6 +839,9 @@ async function handleApi(
   if (p === '/api/band' || p.startsWith('/api/band/')) return handleBand(req, res, p, me)
   if (p === '/api/live/events' || p === '/api/live/command') return handleLive(req, res, url, me)
   if (p === '/api/drums' || p.startsWith('/api/drums/')) return handleDrums(req, res, url, me)
+  if (p === '/api/song' || p === '/api/sheets' || p.startsWith('/api/sheets/'))
+    return handleSongs(req, res, url, me)
+  if (p === '/api/combos' || p.startsWith('/api/combos/')) return handleCombos(req, res, url, me)
 
   const routes: Record<
     string,
@@ -811,7 +978,7 @@ async function handleFile(
   const real = rel === null ? null : await resolveRealFile(cfg.root, realRoot, rel)
   if (!real || rel === null) return sendJson(res, 404, { error: '找不到文件。' })
   // Members without library access open only the band's setlist.
-  if (!canBrowse(me) && !band.hasPath(rel))
+  if (!canBrowse(me) && !bandCanOpen(rel))
     return sendJson(res, 403, { error: '你的账号只能查看乐队歌单里的谱子。' })
 
   const st = await fs.promises.stat(real)
@@ -966,6 +1133,8 @@ async function main(): Promise<void> {
   practice = await loadPracticeByUser(cfg.dataDir, inRoot, users.adminId())
   band = await BandStore.load(cfg.dataDir, inRoot)
   drums = await DrumStore.load(cfg.dataDir, inRoot)
+  sheets = await SheetStore.load(cfg.dataDir)
+  combos = await ComboStore.load(cfg.dataDir, inRoot)
   ensembles = new EnsembleIndex(cfg.root, cfg.dataDir)
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 
