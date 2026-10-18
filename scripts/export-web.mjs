@@ -21,6 +21,10 @@ mkdirSync(dest, { recursive: true })
 rmSync(path.join(dest, 'web'), { recursive: true, force: true })
 cpSync(path.join(root, 'server-dist', 'web'), path.join(dest, 'web'), { recursive: true })
 cpSync(path.join(root, 'server-dist', 'server.mjs'), path.join(dest, 'server.mjs'))
+// Drumify checkpoints (Magenta, Apache-2.0): optional; without them only the template engine is offered.
+const drumifySrc = path.join(root, 'server-assets', 'drumify')
+rmSync(path.join(dest, 'drumify'), { recursive: true, force: true })
+if (existsSync(drumifySrc)) cpSync(drumifySrc, path.join(dest, 'drumify'), { recursive: true })
 
 const lf = (s) => s.replace(/\r\n/g, '\n')
 const crlf = (s) => lf(s).replace(/\n/g, '\r\n')
@@ -129,6 +133,8 @@ const readme = `# 谱库网页版
 | \`data/\` | 运行后自动生成：账号、收藏、练习记录、乐队歌单、扫描缓存和登录密钥（**备份它**） |
 
 高品质音色（MuseScore General 38 MB、FluidR3 142 MB）已包含在 \`web/alphatab/soundfont/\` 里；不想占空间可以删掉这两个 \`.sf3\` / \`.sf2\` 文件，网页里就只显示标准音色。
+
+「自动生成鼓（AI）」使用 \`drumify/\` 里的 Magenta Drumify 模型（Apache-2.0）；不需要可以删掉整个 \`drumify/\` 文件夹以节省空间，删掉后只提供模板生成。
 
 ## 在这台 Windows 电脑上先试
 

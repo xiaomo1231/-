@@ -50,6 +50,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
           artist={artist}
           pages={pages}
           band={route.band}
+          showDrums={route.drums}
         />
       )
       break

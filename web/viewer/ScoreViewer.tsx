@@ -11,6 +11,14 @@ import { useMe } from '../lib/session'
 import { useLiveSync, type LivePlayer } from './liveSync'
 import { LiveBar } from './LiveBar'
 import { trackLabels } from './trackNames'
+import { buildDrumTrack, exportGp, findDrumTrack, partFromTrack } from '@/songs/drumScore'
+import { visiblePieces } from '@/songs/drumPart'
+import type { DrumPart } from '@/songs/drumTypes'
+import { api as server } from '../lib/api'
+import { hrefDrums } from '../lib/route'
+import { DrumGrid, DrumLegend } from './DrumGrid'
+import { DrumTab } from './DrumTab'
+import { cursorFor } from './drumView'
 import {
   alphaTabUrls,
   applyTranspose,
@@ -75,6 +83,8 @@ interface Props {
   pages: string[]
   /** Opened from the band's setlist: that band song's id ('' otherwise). */
   band: string
+  /** Opened from the drum editor's 试听: show the drum part first. */
+  showDrums: boolean
 }
 
 /** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
@@ -105,7 +115,7 @@ const sameBars = (a: [number, number] | null, b: [number, number] | null) =>
   a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1])
 
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
-export function ScoreViewer({ path, title, artist, pages, band }: Props) {
+export function ScoreViewer({ path, title, artist, pages, band, showDrums }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -139,6 +149,12 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
   const [collapsed, setCollapsed] = useState(false)
   const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
   const [restoreNote, setRestoreNote] = useState('')
+  /** The saved drum part (if any), the track built from it, and the file's own drum track. */
+  const [drums, setDrums] = useState<{
+    part: DrumPart | null
+    added: number | null
+    original: number | null
+  }>({ part: null, added: null, original: null })
   const me = useMe()
   const { state: bandState } = useBand()
   const bandSong = band ? bandState?.songs.find((x) => x.id === band) : undefined
@@ -190,6 +206,7 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
     score,
   }
   const selRef = useRef(false)
+  const showDrumsRef = useRef(showDrums)
   const bandSpeedRef = useRef<number | null>(bandSpeed)
   bandSpeedRef.current = bandSpeed
   const gapTimer = useRef<number | undefined>(undefined)
@@ -316,18 +333,40 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
     const run = async () => {
       try {
         const urls = alphaTabUrls()
-        const [bytes, at, fonts] = await Promise.all([
+        const [bytes, at, fonts, savedDrums] = await Promise.all([
           fetchBytes(fileUrl(path), ac.signal),
           loadAlphaTab(),
           availableSoundFonts(),
+          server.drums(path, ac.signal).catch(() => null),
         ])
         if (disposed || !host.current) return
         setSoundFonts(fonts)
         const cur = live.current
         const font: SoundFontId = fonts.has(cur.prefs.soundFont) ? cur.prefs.soundFont : 'basic'
+        // A saved drum part: the file plus a drum track built from it, written out as a GP
+        // file and loaded like any other (alphaTab lays the sheet out in a worker, which needs
+        // a score that went through its importer). The file in the library is never changed.
+        let fileBytes = bytes
+        let drumTrack: number | null = null
+        let fileDrums: number | null = null
+        if (savedDrums) {
+          try {
+            const settings = new at.Settings()
+            settings.importer.encoding = chooseEncoding(at, bytes)
+            const copy = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings)
+            if (savedDrums.bars.length === copy.masterBars.length) {
+              fileDrums = findDrumTrack(copy)
+              drumTrack = buildDrumTrack(at, copy, savedDrums, '鼓（鼓谱）').index
+              fileBytes = exportGp(at, copy)
+            }
+          } catch {
+            fileBytes = bytes
+            drumTrack = null
+          }
+        }
         const a = new at.AlphaTabApi(host.current, {
           core: { scriptFile: urls.script, fontDirectory: urls.fonts, useWorkers: true },
-          importer: { encoding: chooseEncoding(at, bytes) },
+          importer: { encoding: chooseEncoding(at, fileBytes) },
           display: {
             staveProfile: staveProfileOf(at, cur.prefs.staff),
             scale: effectiveScale(cur.prefs),
@@ -354,6 +393,11 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
         a.scoreLoaded.on((s) => {
           cleanHeader(s)
           tidyTempoMarks(s)
+          // A saved drum part plays instead of the file's own drums (that track is muted).
+          const added = drumTrack !== null && drumTrack < s.tracks.length ? drumTrack : null
+          const original = added !== null ? fileDrums : findDrumTrack(s)
+          setDrums({ part: added !== null ? savedDrums : null, added, original })
+          if (showDrumsRef.current && (added ?? original) !== null) setTrack((added ?? original)!)
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
           setVolumes((v) => (again && v.length === s.tracks.length ? v : s.tracks.map(() => 100)))
@@ -496,7 +540,7 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
             applying = false
           }
         })
-        if (!a.load(bytes, [0])) {
+        if (!a.load(fileBytes, [0])) {
           setMessage('这个文件没能显示出来。可以下载后用电脑上的 Guitar Pro 打开。')
           setPhase('error')
         }
@@ -608,9 +652,15 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
     const a = api.current
     if (!a || !score) return
     score.tracks.forEach((t, i) =>
-      a.changeTrackMute([t], metroOnly || mute.has(i) || (followAlong && i === track)),
+      a.changeTrackMute(
+        [t],
+        metroOnly ||
+          mute.has(i) ||
+          (followAlong && i === track) ||
+          (drums.added !== null && i === drums.original),
+      ),
     )
-  }, [mute, followAlong, metroOnly, track, score])
+  }, [mute, followAlong, metroOnly, track, score, drums])
 
   useEffect(() => {
     const a = api.current
@@ -773,7 +823,8 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
   useEffect(() => {
     if (!pop) return
     const onDown = (e: PointerEvent) => {
-      if (!(e.target as HTMLElement | null)?.closest('.gl-remote')) setPop(null)
+      const t = e.target
+      if (!(t instanceof Element && t.closest('.gl-remote'))) setPop(null)
     }
     document.addEventListener('pointerdown', onDown)
     return () => document.removeEventListener('pointerdown', onDown)
@@ -801,6 +852,31 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
     [score],
   )
   const shownTrack = tracks[track]
+  const isDrumTrack = Boolean(shownTrack?.isPercussion || shownTrack?.staves[0]?.isPercussion)
+  /** The drum part shown as a grid / text: the saved one, or the file's drum track converted. */
+  const viewPart = useMemo<DrumPart | null>(() => {
+    if (!score || !isDrumTrack || prefs.drumView === 'staff') return null
+    if (track === drums.added) return drums.part
+    try {
+      return partFromTrack(score, track, { path, title, artist, updatedBy: '' })
+    } catch {
+      return null
+    }
+  }, [score, isDrumTrack, prefs.drumView, track, drums, path, title, artist])
+  const drumSections = useMemo(
+    () => (score?.masterBars ?? []).map((m) => m.section?.text || null),
+    [score],
+  )
+  const drumPieces = useMemo(() => (viewPart ? visiblePieces(viewPart) : []), [viewPart])
+  const barStarts = useMemo(() => (score?.masterBars ?? []).map((m) => m.start), [score])
+  const drumCursor = viewPart ? cursorFor(viewPart, time.tick, barStarts) : null
+  const gridShown = viewPart !== null
+  // Back from the grid / text view: the sheet was laid out while hidden, draw it again.
+  const wasGrid = useRef(false)
+  useEffect(() => {
+    if (wasGrid.current && !gridShown) api.current?.render()
+    wasGrid.current = gridShown
+  }, [gridShown])
   const showFretboard = prefs.fretboard && shownTrack !== undefined && hasFretboard(shownTrack)
   const status =
     loop && loopState
@@ -880,7 +956,30 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
             正在排版…
           </p>
         )}
-        <div ref={host} className="at-surface w-full" />
+        {gridShown && viewPart && (
+          <div className="pb-4">
+            {prefs.drumView === 'grid' ? (
+              <>
+                <DrumGrid
+                  part={viewPart}
+                  cursor={drumCursor}
+                  pieces={drumPieces}
+                  sections={drumSections}
+                  onSeekBar={(b) => {
+                    const start = barStarts[b]
+                    if (api.current && start !== undefined) api.current.tickPosition = start
+                  }}
+                />
+                <div className="mt-3">
+                  <DrumLegend pieces={drumPieces} />
+                </div>
+              </>
+            ) : (
+              <DrumTab part={viewPart} pieces={drumPieces} />
+            )}
+          </div>
+        )}
+        <div ref={host} className={cx('at-surface w-full', gridShown && 'hidden')} />
       </div>
 
       {loaded && score && (
@@ -920,6 +1019,11 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
           onMute={toggleMute}
           transpose={transpose}
           onTranspose={shift}
+          isDrumTrack={isDrumTrack}
+          drumView={prefs.drumView}
+          onDrumView={(v) => setPrefs((p) => ({ ...p, drumView: v }))}
+          drumEditHref={hrefDrums({ path, title, artist })}
+          hasDrumPart={drums.part !== null}
           staff={prefs.staff}
           staffHint={
             shownTrack && staffFor(shownTrack, prefs.staff) !== prefs.staff

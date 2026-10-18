@@ -11,6 +11,8 @@ export interface ViewerRoute {
   artist: string
   /** Opened from the band's setlist: that band song's id (parts, rehearsal speed, 一起播放). */
   band: string
+  /** Opened from the drum editor (试听): show the drum part right away. */
+  drums: boolean
 }
 
 export type Route =
@@ -25,6 +27,7 @@ export type Route =
   | { kind: 'ensembles'; q: string; need: string }
   | { kind: 'account' }
   | { kind: 'users' }
+  | { kind: 'drums'; path: string; title: string; artist: string }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -61,6 +64,13 @@ export function parseHash(hash: string): Route {
   if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
   if (path === '/me') return { kind: 'account' }
   if (path === '/users') return { kind: 'users' }
+  if (path === '/d')
+    return {
+      kind: 'drums',
+      path: qs.get('p') ?? '',
+      title: qs.get('title') ?? '',
+      artist: qs.get('artist') ?? '',
+    }
   if (path === '/v') {
     return {
       kind: 'viewer',
@@ -70,6 +80,7 @@ export function parseHash(hash: string): Route {
       title: qs.get('title') ?? '',
       artist: qs.get('artist') ?? '',
       band: qs.get('b') ?? '',
+      drums: qs.get('drums') === '1',
     }
   }
   return { kind: 'home' }
@@ -152,4 +163,9 @@ export function useRoute(): Route {
     }
   }, [])
   return useMemo(() => parseHash(hash), [hash])
+}
+
+/** 编辑鼓谱 for a score file. */
+export function hrefDrums(v: { path: string; title: string; artist: string }): string {
+  return `#/d?p=${enc(v.path)}&title=${enc(v.title)}&artist=${enc(v.artist)}`
 }

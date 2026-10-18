@@ -36,3 +36,5 @@ build/
 server-dist/
 server-assets/soundfonts/
 server-assets/soundfonts-original/
+server-assets/drumify/
+server-assets/gmd/

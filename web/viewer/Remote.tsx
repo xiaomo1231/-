@@ -15,6 +15,8 @@ import {
   SPEED_PRESETS,
   STAFF_OPTIONS,
   ZOOM_OPTIONS,
+  DRUM_VIEW_OPTIONS,
+  type DrumView,
   type SheetMode,
   type StaffMode,
 } from './scorePrefs'
@@ -184,6 +186,14 @@ export interface RemoteProps {
   staff: StaffMode
   /** Shown under the notation choices when the shown track cannot follow them. */
   staffHint: string
+  /** The shown track is a drum track: offer 鼓谱网格 / 五线谱 / 文字鼓谱. */
+  isDrumTrack: boolean
+  drumView: DrumView
+  onDrumView: (v: DrumView) => void
+  /** 编辑 / 生成鼓谱 page for this score. */
+  drumEditHref: string
+  /** The score has a saved drum part (edited or generated). */
+  hasDrumPart: boolean
   onStaff: (s: StaffMode) => void
   scale: number
   onScale: (s: number) => void
@@ -777,6 +787,32 @@ function ViewPop({ p }: { p: RemoteProps }) {
         ))}
       </div>
       {p.staffHint && <p className="gl-hint">{p.staffHint}</p>}
+      <h4>鼓 谱</h4>
+      {p.isDrumTrack && (
+        <div className="gl-chips">
+          {DRUM_VIEW_OPTIONS.map((o) => (
+            <button
+              key={o.value}
+              type="button"
+              className="gl-pill"
+              aria-pressed={p.drumView === o.value}
+              onClick={() => p.onDrumView(o.value)}
+            >
+              {o.label}
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="gl-chips" style={{ marginTop: p.isDrumTrack ? 8 : 0 }}>
+        <a className="gl-pill" href={p.drumEditHref} style={{ textDecoration: 'none' }}>
+          {p.hasDrumPart ? '编辑鼓谱 →' : '生成 / 编辑鼓谱 →'}
+        </a>
+      </div>
+      <p className="gl-hint">
+        {p.hasDrumPart
+          ? '这首歌有保存的鼓谱，播放时用它代替谱子里原来的鼓。'
+          : '没有鼓的谱子可以自动生成鼓谱，生成后可以逐格修改。'}
+      </p>
       <h4>缩 放</h4>
       <div className="gl-chips">
         {ZOOM_OPTIONS.map((o) => (

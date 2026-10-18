@@ -27,6 +27,7 @@ import { BandSongPage } from '../pages/BandSongPage'
 import { EnsemblesPage } from '../pages/EnsemblesPage'
 import { AccountPage } from '../pages/AccountPage'
 import { UsersPage } from '../pages/UsersPage'
+import { DrumEditorPage } from '../pages/DrumEditorPage'
 import { Viewer } from '../viewer/Viewer'
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
@@ -415,6 +416,15 @@ function renderRoute(route: Route, libraryHidden: boolean) {
       return <AccountPage />
     case 'users':
       return <UsersPage />
+    case 'drums':
+      return (
+        <DrumEditorPage
+          key={route.path}
+          path={route.path}
+          title={route.title}
+          artist={route.artist}
+        />
+      )
     case 'viewer':
       // The viewer takes the whole route, including `band` (the setlist it was opened from).
       return <Viewer key={route.path} route={route} />

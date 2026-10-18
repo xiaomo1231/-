@@ -20,7 +20,16 @@ import type {
   UserInfo,
 } from '@/songs/scoreServerTypes'
 
+import type {
+  DrumPart,
+  DrumStyleInfo,
+  GenerateDrumsBody,
+  GenerateDrumsResult,
+  SaveDrumsBody,
+} from '@/songs/drumTypes'
+
 export type * from '@/songs/scoreServerTypes'
+export type * from '@/songs/drumTypes'
 
 /** A starred score (kept on the server, so every device sees the same list). */
 export interface FavoriteItem {
@@ -191,6 +200,15 @@ export const api = {
       `/api/ensembles?q=${enc(o.q ?? '')}&need=${enc(o.need ?? '')}&offset=${o.offset ?? 0}&limit=${o.limit ?? 50}`,
       { signal },
     ),
+  // 鼓谱
+  drums: (path: string, signal?: AbortSignal) =>
+    call<DrumPart | null>(`/api/drums?path=${enc(path)}`, { signal }),
+  drumStyles: (signal?: AbortSignal) => call<DrumStyleInfo[]>('/api/drums/styles', { signal }),
+  generateDrums: (b: GenerateDrumsBody) =>
+    call<GenerateDrumsResult>('/api/drums/generate', { body: b }),
+  saveDrums: (part: DrumPart) =>
+    call<DrumPart>('/api/drums/save', { body: { part } satisfies SaveDrumsBody }),
+  removeDrums: (path: string) => call<{ ok: boolean }>('/api/drums/remove', { body: { path } }),
   // 一起播放
   serverTime: () => call<{ now: number }>('/api/time'),
   liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),

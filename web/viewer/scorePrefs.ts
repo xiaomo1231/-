@@ -19,7 +19,17 @@ export interface ScorePrefs {
   soundFont: SoundFontId
   /** 渐进提速 and the other loop settings. */
   trainer: TrainerConfig
+  /** How a drum track is shown: 五线谱 (alphaTab), 鼓谱网格 or 文字鼓谱. */
+  drumView: DrumView
 }
+
+export type DrumView = 'staff' | 'grid' | 'tab'
+
+export const DRUM_VIEW_OPTIONS: ReadonlyArray<{ value: DrumView; label: string }> = [
+  { value: 'grid', label: '鼓谱网格' },
+  { value: 'staff', label: '五线谱' },
+  { value: 'tab', label: '文字鼓谱' },
+]
 
 export const STAFF_OPTIONS: ReadonlyArray<{ value: StaffMode; label: string }> = [
   { value: 'Tab', label: '六线谱' },
@@ -52,6 +62,7 @@ const DEFAULT: ScorePrefs = {
   fretboard: false,
   soundFont: 'basic',
   trainer: DEFAULT_TRAINER,
+  drumView: 'grid',
 }
 
 export function loadPrefs(): ScorePrefs {
@@ -69,6 +80,9 @@ export function loadPrefs(): ScorePrefs {
         ? (v.soundFont as SoundFontId)
         : DEFAULT.soundFont,
       trainer: normalizeTrainer(v.trainer),
+      drumView: DRUM_VIEW_OPTIONS.some((o) => o.value === v.drumView)
+        ? (v.drumView as DrumView)
+        : DEFAULT.drumView,
     }
   } catch {
     return DEFAULT

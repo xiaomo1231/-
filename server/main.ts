@@ -74,6 +74,17 @@ import {
 } from './band'
 import { LiveHub, parseLiveCommand } from './live'
 import { EnsembleIndex } from './ensembles'
+import {
+  DrumStore,
+  generateDrums,
+  loadTemplates,
+  parseGenerateBody,
+  parseSaveBody,
+  styleInfos,
+  type DrumEngines,
+} from './drums'
+import { drumify, drumifyAvailable } from './drumify'
+import { generateFromTemplates } from '../src/songs/drumGenerate'
 import type { BandState } from '../src/songs/scoreServerTypes'
 import {
   loadFromFiles,
@@ -208,6 +219,21 @@ let practice: PracticeByUser = new Map()
 const practiceQueue = createSerialQueue()
 const live = new LiveHub()
 let ensembles: EnsembleIndex
+let drums: DrumStore
+const drumLib = loadTemplates()
+const drumEngines: DrumEngines = {
+  template: (song, o) =>
+    generateFromTemplates(song, o.lib, {
+      style: o.style,
+      seed: o.seed,
+      ...(o.range ? { range: o.range } : {}),
+    }),
+  drumify: (song, o) => {
+    if (!drumifyAvailable())
+      throw new HttpError(503, '服务器上没有 AI 鼓模型（drumify 文件夹），请改用「模板」生成。')
+    return drumify(song, { ...o, seed: Date.now() >>> 0 })
+  },
+}
 /** The unfiltered "most versions" ranking, per library build (a new scan makes a new object). */
 const topCache = new WeakMap<LoadedLibrary, RankedSong[]>()
 
@@ -521,6 +547,58 @@ async function handleLive(
   return sendJson(res, 200, r.state)
 }
 
+/** 鼓谱: the editable drum part of a score file, its generators and the template styles. */
+async function handleDrums(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  const p = url.pathname
+  // Members who only see the band work on the setlist's songs.
+  const allowed = (rel: string) => {
+    if (!canBrowse(me) && !band.hasPath(rel))
+      throw new HttpError(403, '你的账号只能处理乐队歌单里的谱子。')
+  }
+  if (p === '/api/drums/styles') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    return sendJson(res, 200, styleInfos(drumLib))
+  }
+  if (p === '/api/drums') {
+    if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const rel = url.searchParams.get('path') ?? ''
+    allowed(rel)
+    return sendJson(res, 200, drums.get(rel) ?? null)
+  }
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  if (p === '/api/drums/generate') {
+    const body = orBadRequest(parseGenerateBody(await readJsonBody(req), inRoot))
+    allowed(body.path)
+    const real = await resolveRealFile(cfg.root, realRoot, body.path)
+    if (!real) return sendJson(res, 404, { error: '找不到文件。' })
+    try {
+      return sendJson(res, 200, await generateDrums(body, real, drumEngines, drumLib))
+    } catch (err) {
+      if (err instanceof HttpError) throw err
+      throw new HttpError(400, errorText(err))
+    }
+  }
+  if (p === '/api/drums/save') {
+    // A long song's part: 2000 bars × a few hits each.
+    const part = orBadRequest(parseSaveBody(await readJsonBody(req, 4 * 1024 * 1024), inRoot))
+    allowed(part.path)
+    return sendJson(res, 200, await drums.save(part, me.id, Date.now()))
+  }
+  if (p === '/api/drums/remove') {
+    const body = await readJsonBody(req)
+    const rel = typeof body.path === 'string' ? body.path : ''
+    allowed(rel)
+    await drums.remove(rel)
+    return sendJson(res, 200, { ok: true })
+  }
+  return sendJson(res, 404, { error: '找不到这个接口。' })
+}
+
 /** Every score file of the library, for the background track reader (找乐队谱). */
 function startEnsembles(lib: LoadedLibrary): void {
   const files: Array<{ path: string; title: string; artist: string }> = []
@@ -596,6 +674,7 @@ async function handleApi(
     return handleUsers(req, res, p, me)
   if (p === '/api/band' || p.startsWith('/api/band/')) return handleBand(req, res, p, me)
   if (p === '/api/live/events' || p === '/api/live/command') return handleLive(req, res, url, me)
+  if (p === '/api/drums' || p.startsWith('/api/drums/')) return handleDrums(req, res, url, me)
 
   const routes: Record<
     string,
@@ -886,6 +965,7 @@ async function main(): Promise<void> {
   }
   practice = await loadPracticeByUser(cfg.dataDir, inRoot, users.adminId())
   band = await BandStore.load(cfg.dataDir, inRoot)
+  drums = await DrumStore.load(cfg.dataDir, inRoot)
   ensembles = new EnsembleIndex(cfg.root, cfg.dataDir)
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 
