@@ -6,19 +6,14 @@ import { Button } from '@/shared/ui/Button'
 import type { StaffMode } from '@/widgets/sheets/AlphaTabView'
 import { buildPrintQuery, type PrintSource } from '@/widgets/sheets/printUrl'
 
-export const PRINT_STAFF_LABEL: Record<StaffMode, string> = {
-  ScoreTab: '五线谱 + 六线谱',
-  Tab: '只看六线谱',
-  Score: '只看五线谱',
-}
+/** PDFs are tablature only (六线谱), whatever the viewer shows. */
+const PRINT_STAFF: StaffMode = 'Tab'
 
 export interface ExportPdfButtonProps {
   source: PrintSource
   /** The track on screen (its index). */
   track: number
   trackCount: number
-  /** The notation the viewer shows. */
-  staff: StaffMode
   /** 变调 as shown. */
   transpose: number
   /** Suggested file name (without .pdf). */
@@ -34,12 +29,11 @@ function ipcMessage(e: unknown): string {
   )
 }
 
-/** Exports the score as shown to an A4 PDF (desktop app only; renders nothing in the browser). */
+/** Exports the score as tablature to an A4 PDF (desktop app only; renders nothing in the browser). */
 export function ExportPdfButton({
   source,
   track,
   trackCount,
-  staff,
   transpose,
   fileName,
 }: ExportPdfButtonProps) {
@@ -73,7 +67,7 @@ export function ExportPdfButton({
       const query = buildPrintQuery({
         source,
         track: scope === 'all' ? 'all' : track,
-        staff,
+        staff: PRINT_STAFF,
         transpose,
       })
       const r = await bridge.print.exportPdf({ query, fileName })
@@ -131,7 +125,7 @@ export function ExportPdfButton({
             </fieldset>
           )}
           <p className="text-xs text-muted-foreground">
-            谱面：{PRINT_STAFF_LABEL[staff]}
+            谱面：六线谱
             {shift}
           </p>
           <Button size="sm" className="w-full" onClick={() => void run()} disabled={busy}>

@@ -307,7 +307,6 @@ function WrittenSheet({ sheet, header }: { sheet: SongSheet; header: React.React
             source={{ kind: 'sheet', id: sheet.id }}
             track={track}
             trackCount={tracks.length}
-            staff={staff}
             transpose={transpose}
             fileName={[sheet.title, sheet.artist].filter(Boolean).join(' - ')}
           />

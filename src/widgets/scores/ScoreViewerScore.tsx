@@ -118,7 +118,6 @@ function ScoreTabs({
               source={{ kind: 'library', path }}
               track={current?.index ?? 0}
               trackCount={tracks.length}
-              staff={staff}
               transpose={transpose}
               fileName={score.title?.trim() || fileBaseName(path).replace(/\.[^.]+$/, '')}
             />
