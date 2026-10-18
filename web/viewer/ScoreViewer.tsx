@@ -6,7 +6,14 @@ import { clampTranspose } from '../lib/transpose'
 import { cx } from '../lib/classes'
 import { loadPracticeFor, practiceFor, savePractice, savePracticeOnExit } from '../lib/practice'
 import { Notice } from '../components/ui'
-import { alphaTabUrls, applyTranspose, chooseEncoding, cleanHeader, loadAlphaTab } from './alphaTab'
+import {
+  alphaTabUrls,
+  applyTranspose,
+  chooseEncoding,
+  cleanHeader,
+  loadAlphaTab,
+  tidyTempoMarks,
+} from './alphaTab'
 import {
   effectiveScale,
   isPhone,
@@ -163,7 +170,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   }
   const selRef = useRef(false)
   const gapTimer = useRef<number | undefined>(undefined)
-  const fontRef = useRef<SoundFontId>('basic')
+  const openedPath = useRef('')
   const playerReadyRef = useRef(false)
   /** Practice time not yet sent, and whether the saved state may be written. */
   const clock = useRef({ startedAt: 0, seconds: 0, maxSpeed: 0, restored: false })
@@ -224,15 +231,27 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     else void savePractice(u)
   }
 
-  // Create the viewer once per file.
+  // Create the viewer once per file, and again when the sound font changes (alphaTab cannot
+  // swap a sound font in place reliably: after a swap it stays silent). The student's speed,
+  // loop selection, mutes and volumes live in React state and carry over.
+  const soundFontChoice = prefs.soundFont
   useEffect(() => {
     const ac = new AbortController()
     let disposed = false
     let soundTimer: number | undefined
     let rendered = false
+    const again = openedPath.current === path
+    openedPath.current = path
     playerReadyRef.current = false
-    clock.current = { startedAt: 0, seconds: 0, maxSpeed: 0, restored: false }
-    pendingBars.current = null
+    setReady(false)
+    setSoundFailed(false)
+    setSoundPct(0)
+    if (again) {
+      pendingBars.current = live.current.selBars
+    } else {
+      clock.current = { startedAt: 0, seconds: 0, maxSpeed: 0, restored: false }
+      pendingBars.current = null
+    }
     const run = async () => {
       try {
         const urls = alphaTabUrls()
@@ -245,7 +264,6 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
         setSoundFonts(fonts)
         const cur = live.current
         const font: SoundFontId = fonts.has(cur.prefs.soundFont) ? cur.prefs.soundFont : 'basic'
-        fontRef.current = font
         const a = new at.AlphaTabApi(host.current, {
           core: { scriptFile: urls.script, fontDirectory: urls.fonts, useWorkers: true },
           importer: { encoding: chooseEncoding(at, bytes) },
@@ -274,15 +292,28 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
         a.playbackSpeed = cur.speedPct / 100
         a.scoreLoaded.on((s) => {
           cleanHeader(s)
+          tidyTempoMarks(s)
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
-          setVolumes(s.tracks.map(() => 100))
+          setVolumes((v) => (again && v.length === s.tracks.length ? v : s.tracks.map(() => 100)))
           setPhase('ready')
-          // No sound font after a while: keep the notation, hide the playback keys.
+          // No sound font after a while: keep the notation, hide the playback keys (a larger
+          // sound font that never arrives is given up for the basic one).
           window.clearTimeout(soundTimer)
-          soundTimer = window.setTimeout(() => {
-            if (!disposed && !playerReadyRef.current) setSoundFailed(true)
-          }, SOUND_WAIT_MS)
+          soundTimer = window.setTimeout(
+            () => {
+              if (disposed || playerReadyRef.current) return
+              if (font === 'basic') {
+                setSoundFailed(true)
+                return
+              }
+              setRestoreNote('高品质音色没能加载，已换回标准音色。')
+              window.setTimeout(() => setRestoreNote(''), 5000)
+              setPrefs((p) => ({ ...p, soundFont: 'basic' }))
+            },
+            font === 'basic' ? SOUND_WAIT_MS : BIG_SOUND_WAIT_MS,
+          )
+          if (again) return
           // Last time's speed, loop and muted tracks.
           void loadPracticeFor(path).then((r) => {
             if (disposed) return
@@ -420,7 +451,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
       api.current?.destroy()
       api.current = null
     }
-  }, [path])
+  }, [path, soundFontChoice])
 
   // Track shown on the sheet.
   useEffect(() => {
@@ -443,33 +474,6 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   }, [prefs.staff, prefs.zoom, prefs.sheet, score]) // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => savePrefs(prefs), [prefs])
-
-  // 音色: swaps the sound font in place (the score and the position stay).
-  useEffect(() => {
-    const a = api.current
-    const id = prefs.soundFont
-    if (!a || !score || fontRef.current === id || !soundFonts.has(id)) return
-    fontRef.current = id
-    cancelGap()
-    a.stop()
-    setReady(false)
-    setSoundPct(0)
-    a.resetSoundFonts()
-    a.loadSoundFont(soundFontUrl(id), false)
-    if (id === 'basic') return
-    const timer = window.setTimeout(() => {
-      if (fontRef.current !== id || !api.current) return
-      setRestoreNote('高品质音色没能加载，已换回标准音色。')
-      window.setTimeout(() => setRestoreNote(''), 5000)
-      setPrefs((p) => ({ ...p, soundFont: 'basic' }))
-    }, BIG_SOUND_WAIT_MS)
-    const off = () => window.clearTimeout(timer)
-    a.soundFontLoaded.on(off)
-    return () => {
-      off()
-      a.soundFontLoaded.off(off)
-    }
-  }, [prefs.soundFont, score, soundFonts])
 
   // 变调: applied to the staves and the playback; the file's own transposition is kept aside.
   useEffect(() => {
@@ -501,6 +505,12 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
       a.changeTrackMute([t], metroOnly || mute.has(i) || (followAlong && i === track)),
     )
   }, [mute, followAlong, metroOnly, track, score])
+
+  useEffect(() => {
+    const a = api.current
+    if (!a || !score) return
+    score.tracks.forEach((t, i) => a.changeTrackSolo([t], solo.has(i)))
+  }, [solo, score])
 
   useEffect(() => {
     const a = api.current
@@ -551,19 +561,13 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     }
   }, [playing])
 
-  const toggleSolo = (i: number) => {
-    const a = api.current
-    const t = score?.tracks[i]
-    if (!a || !t) return
-    const on = !solo.has(i)
-    a.changeTrackSolo([t], on)
+  const toggleSolo = (i: number) =>
     setSolo((prev) => {
       const next = new Set(prev)
-      if (on) next.add(i)
-      else next.delete(i)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
       return next
     })
-  }
   const toggleMute = (i: number) =>
     setMute((prev) => {
       const next = new Set(prev)

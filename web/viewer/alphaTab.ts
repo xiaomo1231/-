@@ -127,6 +127,25 @@ export function cleanHeader(score: Score): void {
   score.copyright = stripSiteAds(score.copyright ?? '')
 }
 
+/**
+ * Tempo marks that would print on top of each other (several changes inside half a bar,
+ * as tab sites often write a ritardando) keep only the last one of each cluster, and a
+ * mark that repeats the tempo already shown is hidden. Playback still follows every change.
+ */
+export function tidyTempoMarks(score: Score): void {
+  const marks = score.masterBars.flatMap((mb, i) =>
+    mb.tempoAutomations.map((a) => ({ a, at: i + (a.ratioPosition || 0) })),
+  )
+  let shown: number | null = null
+  marks.forEach(({ a, at }, k) => {
+    const next = marks[k + 1]
+    const crowded = next !== undefined && next.at - at < 0.5
+    const same = shown !== null && Math.abs(a.value - shown) < 0.5
+    a.isVisible = a.isVisible && !crowded && !same
+    if (a.isVisible) shown = a.value
+  })
+}
+
 /** A staff's own transposition from the file, remembered before 变调 changes it. */
 const fileTransposition = new WeakMap<object, number>()
 

@@ -31,9 +31,16 @@ export const SOUND_FONTS: ReadonlyArray<SoundFontOption> = [
   },
 ]
 
+/**
+ * Bumped whenever the files change: the server lets browsers cache them for a month.
+ * 2 = left/right samples re-marked mono by scripts/patch-soundfont.py (alphaTab skips stereo ones).
+ */
+const FILE_VERSION = 2
+
 export function soundFontUrl(id: SoundFontId): string {
   const f = SOUND_FONTS.find((o) => o.id === id) ?? SOUND_FONTS[0]!
-  return new URL(`/alphatab/soundfont/${f.file}`, window.location.href).href
+  const v = id === 'basic' ? '' : `?v=${FILE_VERSION}`
+  return new URL(`/alphatab/soundfont/${f.file}${v}`, window.location.href).href
 }
 
 let available: Promise<Set<SoundFontId>> | null = null
