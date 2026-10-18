@@ -21,6 +21,7 @@
     "build:web": "vite build --config vite.web.config.ts",
     "build:server": "npm run build:web && node scripts/build-server.mjs",
     "server": "node server-dist/server.mjs",
+    "export:web": "node scripts/export-web.mjs",
     "install:local": "node scripts/install-local.mjs"
   },
   "dependencies": {

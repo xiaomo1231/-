@@ -33,7 +33,7 @@ npm run dev
 
 ## 谱库网页版（Mac mini）
 
-在 Mac mini 上跑一个只读、带密码的小服务器，出门用手机也能搜谱、看谱（GP 谱直接显示六线谱并可播放、变调，图片谱 / PDF / 文本谱都能看，可下载原文件）。构建：`npm run build:server`；部署和外网访问（推荐 Tailscale，不要在路由器上开端口）见 [server/README.md](server/README.md)。
+在 Mac mini 上跑一个只读、带密码的小服务器，出门用手机也能搜谱、看谱（GP 谱直接显示六线谱并可播放、变调，图片谱 / PDF / 文本谱都能看，可下载原文件）。生成独立文件夹：`npm run export:web`（默认 `D:ibe coding\网页`，整个文件夹拷到 Mac 就能用，里面有启动脚本和说明；不会覆盖那里的 config.env）；部署和外网访问（推荐 Tailscale，不要在路由器上开端口）见 [server/README.md](server/README.md)。
 
 ## 当前版本 0.31.0
 
