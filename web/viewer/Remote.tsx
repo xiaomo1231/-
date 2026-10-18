@@ -182,6 +182,8 @@ export interface RemoteProps {
   transpose: number
   onTranspose: (delta: number) => void
   staff: StaffMode
+  /** Shown under the notation choices when the shown track cannot follow them. */
+  staffHint: string
   onStaff: (s: StaffMode) => void
   scale: number
   onScale: (s: number) => void
@@ -774,6 +776,7 @@ function ViewPop({ p }: { p: RemoteProps }) {
           </button>
         ))}
       </div>
+      {p.staffHint && <p className="gl-hint">{p.staffHint}</p>}
       <h4>缩 放</h4>
       <div className="gl-chips">
         {ZOOM_OPTIONS.map((o) => (

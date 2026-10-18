@@ -29,6 +29,7 @@ import {
   SPEED_MIN,
   sheetResources,
   staveProfileOf,
+  staffFor,
   type ScorePrefs,
   type StaffMode,
   type SheetMode,
@@ -407,6 +408,14 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
           }
         })
         a.soundFontLoad.on((e) => setSoundPct(Math.round((e.loaded / Math.max(1, e.total)) * 100)))
+        // A larger sound font that cannot be read (too big for this device's memory, a broken
+        // download…) falls back to the basic one instead of leaving the player silent.
+        a.error.on(() => {
+          if (disposed || playerReadyRef.current || font === 'basic') return
+          setRestoreNote('这个音色在这台设备上没能加载，已换回标准音色。')
+          window.setTimeout(() => setRestoreNote(''), 6000)
+          setPrefs((p) => ({ ...p, soundFont: 'basic' }))
+        })
         a.playerReady.on(() => {
           playerReadyRef.current = true
           setSoundFailed(false)
@@ -525,13 +534,26 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
       setFollowAlong(true)
     }
     if (bandSpeed !== null) setSpeedPct(bandSpeed)
-  }, [score, bandSong, myTrack, bandSpeed, path])
+    // Keyboard players and singers read notes: tab alone hides them (some files write the
+    // keyboard part as guitar tab), so show the standard staff above it.
+    if ((me?.instrument === 'keys' || me?.instrument === 'vocal') && live.current.prefs.staff === 'Tab')
+      setPrefs((p) => ({ ...p, staff: 'ScoreTab' }))
+  }, [score, bandSong, myTrack, bandSpeed, path, me?.instrument])
 
   // Track shown on the sheet.
   useEffect(() => {
     const a = api.current
     const t = score?.tracks[track]
-    if (a && t) a.renderTracks([t])
+    const at = window.alphaTab
+    if (a && t && at) {
+      // Drums, piano and other parts without tab are drawn in 五线谱 whatever 谱面 says.
+      const want = staveProfileOf(at, staffFor(t, live.current.prefs.staff))
+      if (a.settings.display.staveProfile !== want) {
+        a.settings.display.staveProfile = want as never
+        a.updateSettings()
+      }
+      a.renderTracks([t])
+    }
     setActiveNotes([])
   }, [track, score])
 
@@ -540,7 +562,10 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
     const a = api.current
     const at = window.alphaTab
     if (!a || !score || !at) return
-    a.settings.display.staveProfile = staveProfileOf(at, prefs.staff) as never
+    a.settings.display.staveProfile = staveProfileOf(
+      at,
+      staffFor(score.tracks[live.current.track], prefs.staff),
+    ) as never
     a.settings.display.scale = effectiveScale(prefs)
     a.settings.fillFromJson({ display: { resources: sheetResources(prefs.sheet) } } as never)
     a.updateSettings()
@@ -896,6 +921,11 @@ export function ScoreViewer({ path, title, artist, pages, band }: Props) {
           transpose={transpose}
           onTranspose={shift}
           staff={prefs.staff}
+          staffHint={
+            shownTrack && staffFor(shownTrack, prefs.staff) !== prefs.staff
+              ? '这一轨没有六线谱（鼓、键盘、人声等），自动用五线谱显示。'
+              : ''
+          }
           onStaff={(s: StaffMode) => setPrefs((p) => ({ ...p, staff: s }))}
           scale={effectiveScale(prefs)}
           onScale={(z: number) => setPrefs((p) => ({ ...p, zoom: z }))}

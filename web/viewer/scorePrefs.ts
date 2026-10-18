@@ -128,3 +128,18 @@ export function fmtClock(ms: number): string {
 export function isShortLandscape(): boolean {
   return window.matchMedia('(orientation: landscape) and (max-height: 500px)').matches
 }
+
+/** A track the student can read as tab: stringed, not percussion, with tab in the file. */
+export function hasTab(track: {
+  isPercussion?: boolean
+  staves: ReadonlyArray<{ isPercussion?: boolean; tuning: number[]; showTablature?: boolean }>
+}): boolean {
+  const st = track.staves[0]
+  if (!st || track.isPercussion || st.isPercussion) return false
+  return st.tuning.length > 0 && st.showTablature !== false
+}
+
+/** The notation for a track: the student's choice for guitar and bass; drums, piano, vocals and other non-tab parts always in 五线谱. */
+export function staffFor(track: Parameters<typeof hasTab>[0] | undefined, chosen: StaffMode): StaffMode {
+  return !track || hasTab(track) ? chosen : 'Score'
+}
