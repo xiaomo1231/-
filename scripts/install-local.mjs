@@ -7,7 +7,7 @@
  *   node scripts/install-local.mjs [目标文件夹]
  */
 import { execFileSync } from 'node:child_process'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { closeSync, existsSync, openSync, readdirSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -21,15 +21,18 @@ if (!existsSync(path.join(src, '律动工坊.exe'))) {
   process.exit(1)
 }
 
-// The running app locks its files: ask to close it rather than half-copying.
-try {
-  const running = execFileSync('tasklist', ['/FI', 'IMAGENAME eq 律动工坊.exe', '/NH'], { encoding: 'utf8' })
-  if (running.includes('律动工坊.exe')) {
-    console.error('律动工坊正在运行，请先关掉再同步。')
-    process.exit(1)
+// The running app locks its files: ask to close it rather than half-copying. (A running .exe
+// cannot be opened for writing; tasklist's output is in the system code page and garbles the name.)
+const installedExe = path.join(dest, '律动工坊.exe')
+if (existsSync(installedExe)) {
+  try {
+    closeSync(openSync(installedExe, 'r+'))
+  } catch (e) {
+    if (e?.code === 'EBUSY' || e?.code === 'EPERM' || e?.code === 'EACCES') {
+      console.error('律动工坊正在运行，请先关掉再同步。')
+      process.exit(1)
+    }
   }
-} catch {
-  // tasklist unavailable: robocopy reports locked files itself
 }
 
 // The student's own things at the top of the folder (not part of the app): left out of the mirror.
