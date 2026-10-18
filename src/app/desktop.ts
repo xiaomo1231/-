@@ -4,6 +4,8 @@
  * first and keeps its browser path.
  */
 
+import type { ScoreScan } from '@/songs/scoreLibraryTypes'
+
 export interface NativeMdxInfo {
   /** 'dml' = graphics card via DirectML, 'cpu' = processor (all cores). */
   provider: 'dml' | 'cpu'
@@ -53,7 +55,11 @@ export interface DesktopBridge {
     available(): Promise<{ rmvpe: boolean; swift: boolean }>
     rmvpe(mel: Float32Array, frames: number): Promise<Float32Array>
     /** SwiftF0 on 16 kHz audio → pitch (Hz) and confidence per 256-sample frame. */
-    swift(audio: Float32Array, fmin: number, fmax: number): Promise<{ pitch: Float32Array; conf: Float32Array }>
+    swift(
+      audio: Float32Array,
+      fmin: number,
+      fmax: number,
+    ): Promise<{ pitch: Float32Array; conf: Float32Array }>
   }
   monitor: {
     /** Sound card devices the driver sees (WASAPI and ASIO). */
@@ -67,6 +73,18 @@ export interface DesktopBridge {
     stop(): Promise<void>
     /** The microphone from the driver (when started with `feed`), mono chunks. Returns an unsubscribe. */
     onInput(cb: (data: Float32Array, rate: number) => void): () => void
+  }
+  /** 谱库 (0.29.0): the score folder the student chose, read only. Paths are relative to it, with '/'. */
+  scores: {
+    root(): Promise<string | null>
+    pickRoot(): Promise<string | null>
+    cached(): Promise<ScoreScan | null>
+    scan(): Promise<ScoreScan>
+    onProgress(cb: (files: number) => void): () => void
+    read(path: string): Promise<Uint8Array>
+    /** '' when it opened, else the system's error message. */
+    openExternal(path: string): Promise<string>
+    reveal(path: string): Promise<void>
   }
 }
 

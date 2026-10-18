@@ -33,4 +33,20 @@ contextBridge.exposeInMainWorld('groovelab', {
       }
     },
   },
+  scores: {
+    root: () => ipcRenderer.invoke('scores:root'),
+    pickRoot: () => ipcRenderer.invoke('scores:pickRoot'),
+    cached: () => ipcRenderer.invoke('scores:cached'),
+    scan: () => ipcRenderer.invoke('scores:scan'),
+    read: (rel: string) => ipcRenderer.invoke('scores:read', rel),
+    openExternal: (rel: string) => ipcRenderer.invoke('scores:openExternal', rel),
+    reveal: (rel: string) => ipcRenderer.invoke('scores:reveal', rel),
+    onProgress: (cb: (files: number) => void) => {
+      const h = (_e: unknown, files: number) => cb(files)
+      ipcRenderer.on('scores:progress', h)
+      return () => {
+        ipcRenderer.removeListener('scores:progress', h)
+      }
+    },
+  },
 })

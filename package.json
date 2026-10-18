@@ -1,7 +1,7 @@
 {
   "name": "groovelab",
   "private": true,
-  "version": "0.28.0",
+  "version": "0.29.0",
   "type": "module",
   "engines": {
     "node": ">=20"
@@ -40,6 +40,8 @@
     "lucide-react": "^0.460.0",
     "onnxruntime-node": "^1.30.0",
     "onnxruntime-web": "1.30.0",
+    "opencc-js": "1.4.2",
+    "pinyin-pro": "3.29.4",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
     "react-router-dom": "^6.28.0",

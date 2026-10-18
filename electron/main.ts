@@ -7,8 +7,20 @@
  * The page is served from app://groovelab/ (a fixed origin, so its stored
  * data never "disappears" the way a changed port would make it).
  */
-import { app, BrowserWindow, ipcMain, Menu, net, protocol, session, shell } from 'electron'
-import { existsSync, statSync } from 'node:fs'
+import {
+  app,
+  BrowserWindow,
+  dialog,
+  ipcMain,
+  Menu,
+  net,
+  protocol,
+  session,
+  shell,
+  type OpenDialogOptions,
+  type WebContents,
+} from 'electron'
+import { existsSync, promises as fsp, statSync } from 'node:fs'
 import { cpus } from 'node:os'
 import path from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -210,6 +222,154 @@ ipcMain.on('app:version', (e) => {
   e.returnValue = app.getVersion()
 })
 
+// ---- 谱库 (0.29.0): the student's score folder, read only ----------------------
+// Nothing is copied, moved or written into the folder. Every path the page sends
+// is checked to be inside the chosen folder.
+
+/** The scan the page gets (same shape as ScoreScan in src/songs/scoreLibraryTypes.ts). */
+interface ScoreScanData {
+  root: string
+  scannedAt: number
+  files: Array<[string, number]>
+}
+
+const scoreSettingsFile = () => path.join(app.getPath('userData'), 'scores.json')
+const scoreIndexFile = () => path.join(app.getPath('userData'), 'scores-index.json')
+const MAX_SCORE_BYTES = 200 * 1024 * 1024
+const SKIP_NAMES = new Set(['.ds_store', 'thumbs.db', 'desktop.ini'])
+
+async function readJsonFile<T>(file: string): Promise<T | null> {
+  try {
+    return JSON.parse(await fsp.readFile(file, 'utf8')) as T
+  } catch {
+    return null
+  }
+}
+
+async function writeJsonFile(file: string, data: unknown): Promise<void> {
+  await fsp.mkdir(path.dirname(file), { recursive: true })
+  await fsp.writeFile(file, JSON.stringify(data))
+}
+
+/** The chosen folder, or null when none is saved or it no longer exists. */
+async function scoreRoot(): Promise<string | null> {
+  const root = (await readJsonFile<{ root?: unknown }>(scoreSettingsFile()))?.root
+  if (typeof root !== 'string' || !root) return null
+  try {
+    return (await fsp.stat(root)).isDirectory() ? root : null
+  } catch {
+    return null
+  }
+}
+
+/** Absolute path of a file given relative to the root; refuses anything outside it. */
+async function libraryFile(rel: unknown): Promise<string> {
+  const root = await scoreRoot()
+  if (!root) throw new Error('还没有选择谱库文件夹。')
+  if (typeof rel !== 'string') throw new Error('这个文件不在谱库文件夹里。')
+  const full = path.resolve(root, rel)
+  const back = path.relative(root, full)
+  if (!back || back === '..' || back.startsWith(`..${path.sep}`) || path.isAbsolute(back))
+    throw new Error('这个文件不在谱库文件夹里。')
+  return full
+}
+
+let scanning: Promise<ScoreScanData> | null = null
+
+/** Walks the whole folder (explicit stack: the library can be 28 folders deep) and caches the result. */
+async function scanLibrary(sender: WebContents): Promise<ScoreScanData> {
+  const root = await scoreRoot()
+  if (!root) throw new Error('还没有选择谱库文件夹。')
+  const found: Array<{ full: string; rel: string }> = []
+  let lastSent = 0
+  const stack: Array<{ dir: string; rel: string }> = [{ dir: root, rel: '' }]
+  while (stack.length) {
+    const { dir, rel } = stack.pop()!
+    try {
+      for await (const entry of await fsp.opendir(dir)) {
+        const lower = entry.name.toLowerCase()
+        if (SKIP_NAMES.has(lower) || lower.startsWith('._')) continue
+        const full = path.join(dir, entry.name)
+        const childRel = rel ? `${rel}/${entry.name}` : entry.name
+        if (entry.isDirectory()) {
+          stack.push({ dir: full, rel: childRel })
+        } else if (entry.isFile()) {
+          found.push({ full, rel: childRel })
+          const now = Date.now()
+          if (now - lastSent >= 250) {
+            lastSent = now
+            if (!sender.isDestroyed()) sender.send('scores:progress', found.length)
+          }
+        }
+      }
+    } catch {
+      // A folder that cannot be opened is left out.
+    }
+  }
+  // Sizes: 32 at a time, so a hard disk is busy but the computer stays usable.
+  const sized: Array<[string, number] | null> = new Array(found.length).fill(null)
+  let next = 0
+  const worker = async () => {
+    while (next < found.length) {
+      const i = next++
+      try {
+        sized[i] = [found[i].rel, (await fsp.stat(found[i].full)).size]
+      } catch {
+        // Cannot be read: left out.
+      }
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(32, found.length) }, worker))
+  const files = sized.filter((f): f is [string, number] => f !== null)
+  files.sort((a, b) => (a[0] < b[0] ? -1 : a[0] > b[0] ? 1 : 0))
+  const scan: ScoreScanData = { root, scannedAt: Date.now(), files }
+  await writeJsonFile(scoreIndexFile(), scan)
+  return scan
+}
+
+ipcMain.handle('scores:root', () => scoreRoot())
+ipcMain.handle('scores:pickRoot', async (e) => {
+  const win = BrowserWindow.fromWebContents(e.sender)
+  const options: OpenDialogOptions = { properties: ['openDirectory'], title: '选择吉他谱库文件夹' }
+  const r = win ? await dialog.showOpenDialog(win, options) : await dialog.showOpenDialog(options)
+  if (r.canceled || r.filePaths.length === 0) return null
+  const root = r.filePaths[0]
+  await writeJsonFile(scoreSettingsFile(), { root })
+  return root
+})
+ipcMain.handle('scores:cached', async () => {
+  const root = await scoreRoot()
+  if (!root) return null
+  const cached = await readJsonFile<ScoreScanData>(scoreIndexFile())
+  return cached?.root === root ? cached : null
+})
+ipcMain.handle('scores:scan', (e) => {
+  // One scan at a time: a second call gets the same promise.
+  scanning ??= scanLibrary(e.sender).finally(() => {
+    scanning = null
+  })
+  return scanning
+})
+ipcMain.handle('scores:read', async (_e, rel: string) => {
+  const full = await libraryFile(rel)
+  const st = await fsp.stat(full)
+  if (!st.isFile()) throw new Error('找不到这个文件。')
+  if (st.size > MAX_SCORE_BYTES) throw new Error('文件太大（超过 200 MB）。')
+  const buf = await fsp.readFile(full)
+  return new Uint8Array(buf.buffer, buf.byteOffset, buf.byteLength)
+})
+/** What "用系统程序打开" may open: scores, pictures, documents and media — never a program or script in the folder. */
+const OPENABLE =
+  /\.(gp[345x]?|gp|gtp|ptb|tg|musicxml|xml|mxl|mid|midi|kar|pdf|txt|tab|doc|docx|jpe?g|png|gif|bmp|tiff?|webp|mp3|wav|wma|ogg|m4a|flac|aac|mp4|wmv|avi|mkv|flv|mov)$/i
+ipcMain.handle('scores:openExternal', async (_e, rel: string) => {
+  const full = await libraryFile(rel)
+  if (!OPENABLE.test(full)) return '这种文件不能从谱库里直接打开。'
+  return shell.openPath(full)
+})
+ipcMain.handle('scores:reveal', async (_e, rel: string) => {
+  shell.showItemInFolder(await libraryFile(rel))
+})
+
 // ---- Window -----------------------------------------------------------------
 
 function createWindow(): void {
@@ -227,6 +387,8 @@ function createWindow(): void {
       contextIsolation: true,
       sandbox: true,
       nodeIntegration: false,
+      // Chromium's built-in PDF viewer: PDF scores are shown inside the page.
+      plugins: true,
       // Pitch detection and recording keep full speed when the window is behind another one.
       backgroundThrottling: false,
     },

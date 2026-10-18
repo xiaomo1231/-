@@ -1,5 +1,11 @@
 import { useEffect } from 'react'
-import { createBrowserRouter, Navigate, Outlet, RouterProvider, useLocation } from 'react-router-dom'
+import {
+  createBrowserRouter,
+  Navigate,
+  Outlet,
+  RouterProvider,
+  useLocation,
+} from 'react-router-dom'
 import { TooltipProvider } from '@/shared/ui/Tooltip'
 import { Toaster } from '@/shared/ui/Toast'
 import { useProfileStore } from '@/features/profile/profileStore'
@@ -28,6 +34,8 @@ import { SongsPage } from '@/pages/SongsPage'
 import { SongDetailPage } from '@/pages/SongDetailPage'
 import { SheetsPage } from '@/pages/SheetsPage'
 import { SheetDetailPage } from '@/pages/SheetDetailPage'
+import { ScoreViewPage } from '@/pages/ScoreViewPage'
+import { ScoreLibraryPage } from '@/pages/ScoreLibraryPage'
 import { SingListPage } from '@/pages/SingListPage'
 import { SingPage } from '@/pages/SingPage'
 import { LibraryPage } from '@/pages/LibraryPage'
@@ -41,11 +49,16 @@ function Bootstrap() {
   const profile = useProfileStore((s) => s.profile)
   const load = useProfileStore((s) => s.load)
   useEffect(() => {
-    void load().then(() => RunService.cleanup()).catch(() => undefined)
+    void load()
+      .then(() => RunService.cleanup())
+      .catch(() => undefined)
   }, [load])
   if (!profile) {
     return (
-      <div className="flex h-full items-center justify-center text-sm text-muted-foreground" aria-busy="true">
+      <div
+        className="flex h-full items-center justify-center text-sm text-muted-foreground"
+        aria-busy="true"
+      >
         正在打开工作室…
       </div>
     )
@@ -57,7 +70,8 @@ function Bootstrap() {
 function RequireSetup() {
   const profile = useProfileStore((s) => s.profile)
   const location = useLocation()
-  if (profile && !profile.setupDone) return <Navigate to="/start" replace state={{ from: location.pathname }} />
+  if (profile && !profile.setupDone)
+    return <Navigate to="/start" replace state={{ from: location.pathname }} />
   return <Outlet />
 }
 
@@ -87,7 +101,9 @@ const router = createBrowserRouter([
               { path: '/songs', element: <SongsPage /> },
               { path: '/songs/:kind/:id', element: <SongDetailPage /> },
               { path: '/sheets', element: <SheetsPage /> },
+              { path: '/scores', element: <ScoreLibraryPage /> },
               { path: '/sheets/:id', element: <SheetDetailPage /> },
+              { path: '/scores/view', element: <ScoreViewPage /> },
               { path: '/library', element: <LibraryPage /> },
               { path: '/mixing', element: <MixingPage /> },
               { path: '/mixing/ear', element: <EarTrainingPage /> },
