@@ -4,8 +4,9 @@ import { useThemeStore } from '@/features/theme/themeStore'
 import { clampTranspose, transposedKey } from '@/songs/transpose'
 import { AlphaTabView, type StaffMode } from '@/widgets/sheets/AlphaTabView'
 import { TransposeControl } from '@/widgets/sheets/TransposeControl'
+import { ExportPdfButton } from '@/widgets/sheets/ExportPdfButton'
 import { ReadStatus, useLibraryBytes } from '@/widgets/scores/ScoreViewerFiles'
-import { cleanArtist, noteName } from '@/widgets/scores/ScoreViewerFormat'
+import { cleanArtist, fileBaseName, noteName } from '@/widgets/scores/ScoreViewerFormat'
 
 const STAFF_LABEL: Record<StaffMode, string> = {
   ScoreTab: '五线谱 + 六线谱',
@@ -20,10 +21,18 @@ const SLOW_MS = 20000
 export function ScoreViewerScore({ path, fallback }: { path: string; fallback: ReactNode }) {
   const state = useLibraryBytes([path])
   if (state.status !== 'ready') return <ReadStatus state={state} />
-  return <ScoreTabs bytes={state.bytes[0] ?? new Uint8Array()} fallback={fallback} />
+  return <ScoreTabs path={path} bytes={state.bytes[0] ?? new Uint8Array()} fallback={fallback} />
 }
 
-function ScoreTabs({ bytes, fallback }: { bytes: Uint8Array; fallback: ReactNode }) {
+function ScoreTabs({
+  path,
+  bytes,
+  fallback,
+}: {
+  path: string
+  bytes: Uint8Array
+  fallback: ReactNode
+}) {
   const theme = useThemeStore((s) => s.mode)
   const [score, setScore] = useState<model.Score | null>(null)
   const [slow, setSlow] = useState(false)
@@ -105,6 +114,14 @@ function ScoreTabs({ bytes, fallback }: { bytes: Uint8Array; fallback: ReactNode
                 ))}
               </select>
             </label>
+            <ExportPdfButton
+              source={{ kind: 'library', path }}
+              track={current?.index ?? 0}
+              trackCount={tracks.length}
+              staff={staff}
+              transpose={transpose}
+              fileName={score.title?.trim() || fileBaseName(path).replace(/\.[^.]+$/, '')}
+            />
           </div>
           <TransposeControl
             value={transpose}

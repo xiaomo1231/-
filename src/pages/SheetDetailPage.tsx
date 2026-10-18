@@ -11,6 +11,7 @@ import { useThemeStore } from '@/features/theme/themeStore'
 import { AlphaTabView, type StaffMode } from '@/widgets/sheets/AlphaTabView'
 import { GpPractice } from '@/widgets/sheets/GpPractice'
 import { TransposeControl } from '@/widgets/sheets/TransposeControl'
+import { ExportPdfButton } from '@/widgets/sheets/ExportPdfButton'
 import { clampTranspose, defaultWay, transposedKey, type GuitarWay } from '@/songs/transpose'
 import { BackingPanel } from '@/widgets/sheets/BackingPanel'
 import type { AlphaTabApi } from '@coderline/alphatab'
@@ -300,6 +301,16 @@ function WrittenSheet({ sheet, header }: { sheet: SongSheet; header: React.React
             </select>
             小节
           </label>
+        )}
+        {score && (
+          <ExportPdfButton
+            source={{ kind: 'sheet', id: sheet.id }}
+            track={track}
+            trackCount={tracks.length}
+            staff={staff}
+            transpose={transpose}
+            fileName={[sheet.title, sheet.artist].filter(Boolean).join(' - ')}
+          />
         )}
       </div>
 

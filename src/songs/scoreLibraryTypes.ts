@@ -66,6 +66,10 @@ export interface ScoreArtist {
   songs: number
   /** First letter for the A–Z jump: Latin initial, or the pinyin initial of a Chinese name; '#' otherwise. */
   initial: string
+  /** 谱库 (0.31.0): names of the other artist folders merged into this one (the student's choice, see applyMerges). */
+  aliases?: string[]
+  /** Ids of those merged folders, in the same order as `aliases` (used to split them again). */
+  aliasIds?: string[]
 }
 
 export interface ScoreGroup {

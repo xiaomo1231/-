@@ -52,6 +52,22 @@ function themeResources() {
   return { mainGlyphColor: fg, secondaryGlyphColor: muted, scoreInfoColor: fg, barNumberColor: muted, staffLineColor: line, barSeparatorColor: line }
 }
 
+/**
+ * 变调 for one loaded score: the staves get the offset (the file's own transposition is
+ * kept aside, so going back to 0 restores it). alphaTab reads settings.notation.transpositionPitches
+ * only when a score is loaded, so the staves are set directly as well.
+ */
+export function applyTranspose(a: AlphaTabApi, score: model.Score, transpose: number): void {
+  a.settings.notation.transpositionPitches = score.tracks.map((t) => {
+    const st = t.staves[0]
+    if (!st || st.isPercussion) return 0
+    if (!fileTransposition.has(st)) fileTransposition.set(st, st.transpositionPitch)
+    const own = fileTransposition.get(st)!
+    for (const x of t.staves) x.transpositionPitch = own - transpose
+    return transpose - own
+  })
+}
+
 const fmt = (ms: number) => {
   const s = Math.max(0, Math.round(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
@@ -78,7 +94,7 @@ type DiagramMode = 'inline' | 'top' | 'off'
 const DIAGRAM_STORE = 'groovelab:sheet-diagrams'
 const DIAGRAM_LABEL: Record<DiagramMode, string> = { inline: '跟着谱面（换和弦的地方）', top: '全部放在最上面', off: '不显示' }
 
-function loadDiagrams(): DiagramMode {
+export function loadDiagrams(): DiagramMode {
   try {
     const v = localStorage.getItem(DIAGRAM_STORE)
     return v === 'top' || v === 'off' ? v : 'inline'
@@ -88,7 +104,7 @@ function loadDiagrams(): DiagramMode {
 }
 
 /** Chord diagrams per the mode (the score's own stylesheet decides where alphaTab draws them). */
-function applyDiagrams(score: model.Score, mode: DiagramMode): void {
+export function applyDiagrams(score: model.Score, mode: DiagramMode): void {
   const st = score.stylesheet
   st.globalDisplayChordDiagramsOnTop = mode === 'top'
   st.perTrackChordDiagramsOnTop = null
@@ -96,7 +112,7 @@ function applyDiagrams(score: model.Score, mode: DiagramMode): void {
 }
 
 /** Tab sites put adverts into the header texts; the sheet shows what comes before them. */
-function cleanHeader(score: model.Score): void {
+export function cleanHeader(score: model.Score): void {
   score.title = stripSiteAds(score.title ?? '')
   score.subTitle = stripSiteAds(score.subTitle ?? '')
   score.artist = stripSiteAds(score.artist ?? '')
@@ -107,7 +123,7 @@ function cleanHeader(score: model.Score): void {
   score.copyright = stripSiteAds(score.copyright ?? '')
 }
 
-function loadDisplay(): Record<DisplayKey, boolean> {
+export function loadDisplay(): Record<DisplayKey, boolean> {
   const base = Object.fromEntries(DISPLAY_ITEMS.map((d) => [d.key, d.on])) as Record<DisplayKey, boolean>
   try {
     return { ...base, ...(JSON.parse(localStorage.getItem(DISPLAY_STORE) ?? '{}') as Partial<Record<DisplayKey, boolean>>) }
@@ -121,7 +137,7 @@ function loadDisplay(): Record<DisplayKey, boolean> {
  * (the form its settings JSON takes — numeric keys do not survive the trip to
  * the render worker).
  */
-function displayElements(display: Record<DisplayKey, boolean>): Map<string, boolean> {
+export function displayElements(display: Record<DisplayKey, boolean>): Map<string, boolean> {
   const m = new Map<string, boolean>()
   for (const d of DISPLAY_ITEMS) for (const el of d.elements) m.set(el, display[d.key])
   return m
@@ -259,14 +275,7 @@ export function AlphaTabView({ bytes, track, staff, range, onScore, onApi, exter
   useEffect(() => {
     const a = api.current
     if (!a || !score) return
-    a.settings.notation.transpositionPitches = score.tracks.map((t) => {
-      const st = t.staves[0]
-      if (!st || st.isPercussion) return 0
-      if (!fileTransposition.has(st)) fileTransposition.set(st, st.transpositionPitch)
-      const own = fileTransposition.get(st)!
-      for (const x of t.staves) x.transpositionPitch = own - transpose
-      return transpose - own
-    })
+    applyTranspose(a, score, transpose)
     a.updateSettings()
     a.render()
     a.loadMidiForScore()

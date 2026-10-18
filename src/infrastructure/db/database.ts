@@ -34,6 +34,9 @@ import type {
   SingTake,
   SingMeta,
   CoverWork,
+  ScoreFavoriteRow,
+  ScoreRecentRow,
+  ArtistMergeRow,
 } from '@/entities/types'
 
 export const DB_NAME = 'groovelab'
@@ -78,6 +81,9 @@ export class GrooveLabDB extends Dexie {
   mixProgress!: Table<MixLessonProgress, string>
   earStats!: Table<EarDrillStats, string>
   userMixPresets!: Table<UserMixPreset, string>
+  scoreFavorites!: Table<ScoreFavoriteRow, string>
+  scoreRecent!: Table<ScoreRecentRow, string>
+  artistMerges!: Table<ArtistMergeRow, string>
 
   constructor(name = DB_NAME) {
     super(name)
@@ -161,6 +167,12 @@ export class GrooveLabDB extends Dexie {
       earStats: 'kind',
       userMixPresets: 'id, createdAt',
     })
+    // v13: 谱库 — starred scores, recently opened scores, artist folders shown as one person (0.31.0).
+    this.version(13).stores({
+      scoreFavorites: 'path, addedAt',
+      scoreRecent: 'path, openedAt',
+      artistMerges: 'from',
+    })
   }
 }
 
@@ -215,6 +227,9 @@ export async function clearAllData(): Promise<void> {
       db.mixProgress,
       db.earStats,
       db.userMixPresets,
+      db.scoreFavorites,
+      db.scoreRecent,
+      db.artistMerges,
     ],
     async () => {
       await Promise.all([
@@ -251,6 +266,9 @@ export async function clearAllData(): Promise<void> {
         db.mixProgress.clear(),
         db.earStats.clear(),
         db.userMixPresets.clear(),
+        db.scoreFavorites.clear(),
+        db.scoreRecent.clear(),
+        db.artistMerges.clear(),
       ])
     },
   )

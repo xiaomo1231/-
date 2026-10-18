@@ -86,6 +86,12 @@ export interface DesktopBridge {
     openExternal(path: string): Promise<string>
     reveal(path: string): Promise<void>
   }
+  /** 谱子导出 PDF (0.30.0): printed from the bare page /print/score by Chromium. */
+  print: {
+    exportPdf(o: { query: string; fileName: string }): Promise<{ saved: string | null }>
+    /** Called by the print page: painted, or failed with a message. */
+    ready(error?: string): void
+  }
 }
 
 export function desktop(): DesktopBridge | null {

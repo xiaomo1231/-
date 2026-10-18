@@ -33,6 +33,11 @@ contextBridge.exposeInMainWorld('groovelab', {
       }
     },
   },
+  print: {
+    exportPdf: (o: { query: string; fileName: string }) => ipcRenderer.invoke('print:exportPdf', o),
+    /** The print page: alphaTab is painted (or failed with `error`). */
+    ready: (error?: string) => ipcRenderer.send('print:ready', error),
+  },
   scores: {
     root: () => ipcRenderer.invoke('scores:root'),
     pickRoot: () => ipcRenderer.invoke('scores:pickRoot'),

@@ -1,7 +1,8 @@
-import { useMemo, type ReactNode } from 'react'
+import { useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useLocation, useNavigate, useSearchParams } from 'react-router-dom'
-import { ArrowLeft, ExternalLink, FolderOpen } from 'lucide-react'
+import { ArrowLeft, ExternalLink, FolderOpen, Star } from 'lucide-react'
 import { ScoreLibrary } from '@/features/scores/scoreLibraryClient'
+import { useScorePrefsVersion } from '@/features/scores/scorePrefsHooks'
 import { toast } from '@/features/toast/toastStore'
 import { Button } from '@/shared/ui/Button'
 import { ScoreViewerScore } from '@/widgets/scores/ScoreViewerScore'
@@ -43,6 +44,43 @@ export function ScoreViewPage() {
   }
 
   const imagePaths = useMemo(() => (pages.length ? pages : [p]), [pages, p])
+
+  // Remembered as recently opened; the star shows and changes whether it is a favourite.
+  const shownTitle = title || fileBaseName(p)
+  const version = useScorePrefsVersion()
+  const [starred, setStarred] = useState(false)
+  useEffect(() => {
+    if (!p) return
+    const opened = parsePagesParam(pagesRaw)
+    ScoreLibrary.recordOpen({
+      path: p,
+      title: shownTitle,
+      artist,
+      ...(opened.length > 0 ? { pages: opened } : {}),
+    }).catch(() => undefined)
+  }, [p, shownTitle, artist, pagesRaw])
+  useEffect(() => {
+    if (!p) return
+    let alive = true
+    ScoreLibrary.isFavorite(p).then(
+      (on) => alive && setStarred(on),
+      () => alive && setStarred(false),
+    )
+    return () => {
+      alive = false
+    }
+  }, [p, version])
+  const toggleStar = () => {
+    ScoreLibrary.toggleFavorite({
+      path: p,
+      title: shownTitle,
+      artist,
+      ...(pages.length > 0 ? { pages } : {}),
+    })
+      .then(setStarred)
+      .catch(reportError)
+  }
+
   const openButton = (
     <Button variant="outline" onClick={openExternal}>
       <ExternalLink /> 用系统程序打开
@@ -90,7 +128,22 @@ export function ScoreViewPage() {
         <ArrowLeft className="h-4 w-4" /> 返回谱库
       </button>
       <header className="min-w-0">
-        <h1 className="truncate text-4xl font-semibold">{title || fileBaseName(p) || '谱子'}</h1>
+        <div className="flex min-w-0 items-center gap-3">
+          <h1 className="min-w-0 flex-1 truncate text-4xl font-semibold">{shownTitle || '谱子'}</h1>
+          {p && (
+            <Button
+              variant="outline"
+              size="sm"
+              aria-pressed={starred}
+              title={starred ? '取消收藏' : '收藏'}
+              onClick={toggleStar}
+              className="shrink-0"
+            >
+              <Star className={starred ? 'fill-current text-amber' : undefined} />
+              {starred ? '已收藏' : '收藏'}
+            </Button>
+          )}
+        </div>
         {artist && <p className="mt-1 text-sm text-muted-foreground">{artist}</p>}
       </header>
       {p && (

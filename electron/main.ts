@@ -370,6 +370,82 @@ ipcMain.handle('scores:reveal', async (_e, rel: string) => {
   shell.showItemInFolder(await libraryFile(rel))
 })
 
+// ---- 谱子导出 PDF (0.30.0): the score as laid out on the page, printed by Chromium ----
+
+/** Waiting for the print page of each hidden window (keyed by its webContents id). */
+const printWaiters = new Map<number, (error?: string) => void>()
+ipcMain.on('print:ready', (e, error?: unknown) => {
+  printWaiters.get(e.sender.id)?.(typeof error === 'string' ? error : undefined)
+})
+
+const PRINT_TIMEOUT_MS = 60000
+const safeFileName = (name: string) => name.replace(/[/\\:*?"<>|]/g, '').trim() || '谱子'
+
+ipcMain.handle(
+  'print:exportPdf',
+  async (e, o: { query: string; fileName: string }): Promise<{ saved: string | null }> => {
+    if (typeof o?.query !== 'string' || typeof o.fileName !== 'string')
+      throw new Error('导出参数不对。')
+    const parent = BrowserWindow.fromWebContents(e.sender)
+    const options = {
+      title: '导出 PDF',
+      defaultPath: path.join(app.getPath('documents'), `${safeFileName(o.fileName)}.pdf`),
+      filters: [{ name: 'PDF', extensions: ['pdf'] }],
+    }
+    // GROOVELAB_EXPORT_DIR (automated tests): save there without asking.
+    const autoDir = process.env.GROOVELAB_EXPORT_DIR
+    const r = autoDir
+      ? { canceled: false, filePath: path.join(autoDir, path.basename(options.defaultPath)) }
+      : parent
+        ? await dialog.showSaveDialog(parent, options)
+        : await dialog.showSaveDialog(options)
+    if (r.canceled || !r.filePath) return { saved: null }
+    const filePath = r.filePath.toLowerCase().endsWith('.pdf') ? r.filePath : `${r.filePath}.pdf`
+
+    const win = new BrowserWindow({
+      show: false,
+      width: 820,
+      height: 1160,
+      webPreferences: {
+        preload: path.join(here, 'preload.cjs'),
+        contextIsolation: true,
+        sandbox: true,
+        nodeIntegration: false,
+        backgroundThrottling: false,
+      },
+    })
+    win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+    try {
+      const ready = new Promise<void>((resolve, reject) => {
+        const timer = setTimeout(() => {
+          printWaiters.delete(win.webContents.id)
+          reject(new Error('谱子排版超时。'))
+        }, PRINT_TIMEOUT_MS)
+        printWaiters.set(win.webContents.id, (error) => {
+          clearTimeout(timer)
+          printWaiters.delete(win.webContents.id)
+          if (error) reject(new Error(error))
+          else resolve()
+        })
+      })
+      win.loadURL(`${process.env.GROOVELAB_DEV_URL ?? ORIGIN}/print/score?${o.query}`).catch(() => {
+        printWaiters.get(win.webContents.id)?.('谱子页面没能打开。')
+      })
+      await ready
+      const pdf = await win.webContents.printToPDF({
+        pageSize: 'A4',
+        printBackground: true,
+        margins: { top: 0.4, bottom: 0.4, left: 0.4, right: 0.4 },
+      })
+      await fsp.writeFile(filePath, pdf)
+      return { saved: filePath }
+    } finally {
+      printWaiters.delete(win.webContents.id)
+      if (!win.isDestroyed()) win.destroy()
+    }
+  },
+)
+
 // ---- Window -----------------------------------------------------------------
 
 function createWindow(): void {

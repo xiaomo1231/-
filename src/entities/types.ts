@@ -646,3 +646,28 @@ export interface CryptoKeyRow {
   key: CryptoKey
   createdAt: number
 }
+
+/** 谱库 (0.31.0, Dexie v13): a score the student starred. Id = the file's path in the library. */
+export interface ScoreFavoriteRow {
+  path: string
+  addedAt: number
+  title: string
+  artist: string
+  /** Image scores: every page's path, so the viewer opens all of them. */
+  pages?: string[]
+}
+
+/** 谱库 (0.31.0, Dexie v13): a score opened recently (one row per path). */
+export interface ScoreRecentRow {
+  path: string
+  openedAt: number
+  title: string
+  artist: string
+  pages?: string[]
+}
+
+/** 谱库 (0.31.0, Dexie v13): the artist folder `from` is shown as part of artist `to`. Id = from. */
+export interface ArtistMergeRow {
+  from: string
+  to: string
+}

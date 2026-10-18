@@ -1,7 +1,8 @@
 import { useNavigate } from 'react-router-dom'
-import { FolderOpen } from 'lucide-react'
+import { FolderOpen, Star } from 'lucide-react'
 import type { ScoreVersion } from '@/songs/scoreLibraryTypes'
 import { ScoreLibrary } from '@/features/scores/scoreLibraryClient'
+import { useFavorites } from '@/features/scores/scorePrefsHooks'
 import { toast } from '@/features/toast/toastStore'
 import { cn } from '@/shared/lib/utils'
 import { FORMAT_BADGE, formatSize } from './formatBadge'
@@ -17,7 +18,16 @@ interface Props {
 /** One way to play a song: opens the viewer; the side button shows the file in Explorer. */
 export function ScoreVersionRow({ version, title, artistName }: Props) {
   const navigate = useNavigate()
+  const { paths, toggle } = useFavorites()
+  const starred = paths.has(version.file.path)
   const badge = FORMAT_BADGE[version.file.format]
+  const star = () =>
+    toggle({
+      path: version.file.path,
+      title,
+      artist: artistName,
+      ...(version.pages ? { pages: version.pages.map((p) => p.path) } : {}),
+    })
   const reveal = () => {
     ScoreLibrary.reveal(version.file.path).catch((e: unknown) =>
       toast({
@@ -56,6 +66,19 @@ export function ScoreVersionRow({ version, title, artistName }: Props) {
         <span className="num w-16 shrink-0 text-right text-xs text-muted-foreground">
           {formatSize(version.size)}
         </span>
+      </button>
+      <button
+        type="button"
+        onClick={star}
+        aria-pressed={starred}
+        aria-label={starred ? '取消收藏' : '收藏'}
+        title={starred ? '取消收藏' : '收藏'}
+        className={cn(
+          'focus-ring shrink-0 rounded-lg p-2 hover:text-foreground',
+          starred ? 'text-amber' : 'text-muted-foreground',
+        )}
+      >
+        <Star className={cn('h-4 w-4', starred && 'fill-current')} aria-hidden />
       </button>
       <button
         type="button"

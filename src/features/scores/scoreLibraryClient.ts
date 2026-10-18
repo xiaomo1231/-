@@ -4,6 +4,7 @@
  * and searches it; files are read straight from the folder when opened.
  */
 import { desktop } from '@/app/desktop'
+import { ScorePrefs } from '@/services/scorePrefsService'
 import type {
   ScoreArtist,
   ScoreScan,
@@ -55,7 +56,7 @@ async function fromScan(scan: ScoreScan): Promise<LibraryState> {
   const r = await ask<{
     categories: (LibraryState & { kind: 'ready' })['categories']
     files: number
-  }>({ type: 'build', files: scan.files })
+  }>({ type: 'build', files: scan.files, merges: await ScorePrefs.merges() })
   const state = {
     kind: 'ready' as const,
     root: scan.root,
@@ -128,4 +129,24 @@ export const ScoreLibrary: ScoreLibraryApi = {
   reveal: (path) => bridge().reveal(path),
   fullPath: (path) =>
     rootPath ? `${rootPath.replace(/[\\/]+$/, '')}\\${path.replace(/\//g, '\\')}` : path,
+
+  async mergeArtist(from, to) {
+    await ScorePrefs.setMerge(from, to)
+    if (!built) return ScoreLibrary.state()
+    const r = await ask<{
+      categories: (LibraryState & { kind: 'ready' })['categories']
+      files: number
+    }>({ type: 'merges', merges: await ScorePrefs.merges() })
+    built = {
+      scan: built.scan,
+      state: { ...built.state, categories: r.categories, files: r.files },
+    }
+    return built.state
+  },
+  artistsLike: (artistId) => ask<ScoreArtist[]>({ type: 'artistsLike', artistId }),
+  favorites: () => ScorePrefs.favorites(),
+  toggleFavorite: (row) => ScorePrefs.toggleFavorite(row),
+  isFavorite: (path) => ScorePrefs.isFavorite(path),
+  recent: () => ScorePrefs.recent(),
+  recordOpen: (row) => ScorePrefs.recordOpen(row),
 }

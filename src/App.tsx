@@ -36,6 +36,7 @@ import { SheetsPage } from '@/pages/SheetsPage'
 import { SheetDetailPage } from '@/pages/SheetDetailPage'
 import { ScoreViewPage } from '@/pages/ScoreViewPage'
 import { ScoreLibraryPage } from '@/pages/ScoreLibraryPage'
+import { ScorePrintPage } from '@/pages/ScorePrintPage'
 import { SingListPage } from '@/pages/SingListPage'
 import { SingPage } from '@/pages/SingPage'
 import { LibraryPage } from '@/pages/LibraryPage'
@@ -76,6 +77,8 @@ function RequireSetup() {
 }
 
 const router = createBrowserRouter([
+  // Bare page for the PDF export (electron/main.ts): no shell, no setup check.
+  { path: '/print/score', element: <ScorePrintPage /> },
   {
     element: <Bootstrap />,
     children: [

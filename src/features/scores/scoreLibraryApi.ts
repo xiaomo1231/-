@@ -3,6 +3,8 @@
  * which builds the index in a worker from the app's folder scan). Only the
  * desktop app can read the folder; in the browser `state()` is 'no-app'.
  */
+import type { ScoreFavoriteRow, ScoreRecentRow } from '@/entities/types'
+import type { FavoriteInput, RecentInput } from '@/services/scorePrefsService'
 import type {
   ScoreArtist,
   ScoreCategory,
@@ -35,4 +37,17 @@ export interface ScoreLibraryApi {
   reveal(path: string): Promise<void>
   /** The absolute path, for display. */
   fullPath(path: string): string
+
+  /** Shows artist `from` as part of artist `to` (`null` separates it again); the library state after it. */
+  mergeArtist(from: string, to: string | null): Promise<LibraryState>
+  /** Artists that may be the same person as this one (merge suggestions), at most 10. */
+  artistsLike(artistId: string): Promise<ScoreArtist[]>
+  /** Starred scores, newest first. */
+  favorites(): Promise<ScoreFavoriteRow[]>
+  /** Stars or un-stars a score; resolves to whether it is starred now. */
+  toggleFavorite(row: FavoriteInput): Promise<boolean>
+  isFavorite(path: string): Promise<boolean>
+  /** Recently opened scores, newest first. */
+  recent(): Promise<ScoreRecentRow[]>
+  recordOpen(row: RecentInput): Promise<void>
 }

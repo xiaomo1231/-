@@ -1,5 +1,6 @@
 import type { ScoreArtist, ScoreSong } from '@/songs/scoreLibraryTypes'
 import { Button } from '@/shared/ui/Button'
+import { ScoreArtistMerge } from './ScoreArtistMerge'
 import { ScoreVersionRow } from './ScoreVersionRow'
 
 export const SONG_PAGE = 200
@@ -11,10 +12,11 @@ interface Props {
   /** How many songs are shown (the list is cut to keep big collections light). */
   limit: number
   onMore: () => void
+  onMerge: (from: string, to: string | null, select?: ScoreArtist) => void
 }
 
 /** Right column: the chosen artist's songs, each with its versions. */
-export function ScoreSongList({ artist, songs, limit, onMore }: Props) {
+export function ScoreSongList({ artist, songs, limit, onMore, onMerge }: Props) {
   if (!artist)
     return (
       <p className="px-5 py-8 text-sm text-muted-foreground">选一位歌手，这里会列出他的谱子。</p>
@@ -28,6 +30,7 @@ export function ScoreSongList({ artist, songs, limit, onMore }: Props) {
           {artist.files.toLocaleString()} 个文件 · {artist.songs.toLocaleString()} 首
         </p>
       </div>
+      <ScoreArtistMerge key={artist.id} artist={artist} onMerge={onMerge} />
 
       {songs === null && <p className="py-6 text-sm text-muted-foreground">正在读取…</p>}
       {songs !== null && songs.length === 0 && (

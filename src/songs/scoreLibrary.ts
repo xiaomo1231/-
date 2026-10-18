@@ -499,6 +499,102 @@ export function buildLibrary(files: Array<[string, number]>, tools: TextTools): 
   }
 }
 
+/**
+ * 谱库 (0.31.0): artist folders the student has merged (周杰伦 / Jay Chou).
+ * Returns a new library and leaves `lib` unchanged, so the same unmerged
+ * library can be merged again with other choices. The merged folder's songs
+ * join the target's: songs with the same title key (the id's suffix) become
+ * one song with all their versions. The merged folder leaves its group's
+ * list; the target gets `aliases` / `aliasIds`. Its files stay where they are
+ * on disk, so categories and file counts do not change. Merges that name an
+ * unknown artist, or that would make a cycle, are ignored.
+ */
+export function applyMerges(
+  lib: ScoreLibraryData,
+  merges: Array<[string, string]>,
+  _tools: TextTools,
+): ScoreLibraryData {
+  // Direct merges that name two existing artists.
+  const direct = new Map<string, string>()
+  for (const [from, to] of merges)
+    if (from !== to && lib.artistById.has(from) && lib.artistById.has(to)) direct.set(from, to)
+  // Each merged folder → the final artist its chain reaches (cycles are dropped).
+  const finalOf = new Map<string, string>()
+  for (const from of direct.keys()) {
+    const seen = new Set<string>([from])
+    let cur = direct.get(from)!
+    while (direct.has(cur) && !seen.has(cur)) {
+      seen.add(cur)
+      cur = direct.get(cur)!
+    }
+    if (!seen.has(cur)) finalOf.set(from, cur)
+  }
+  if (finalOf.size === 0) return lib
+
+  const removed = new Set(finalOf.keys())
+  const incoming = new Map<string, string[]>()
+  for (const [from, to] of finalOf) {
+    const list = incoming.get(to)
+    if (list) list.push(from)
+    else incoming.set(to, [from])
+  }
+
+  const artistById = new Map<string, ScoreArtist>()
+  for (const [id, a] of lib.artistById) if (!removed.has(id)) artistById.set(id, a)
+  const songs = new Map<string, ScoreSong[]>()
+  for (const [id, list] of lib.songs) if (!removed.has(id)) songs.set(id, list)
+
+  // The song key is the part of the song id after '#' (normalised title, or '__unknown__').
+  const keyOf = (s: ScoreSong) => s.id.slice(s.id.lastIndexOf('#') + 1)
+  for (const [to, froms] of incoming) {
+    const base = lib.artistById.get(to)!
+    const byKey = new Map<string, ScoreSong>()
+    const add = (s: ScoreSong) => {
+      const key = keyOf(s)
+      const cur = byKey.get(key)
+      if (cur) cur.versions = [...cur.versions, ...s.versions]
+      else byKey.set(key, { ...s, artistId: to, id: `${to}#${key}`, versions: [...s.versions] })
+    }
+    for (const s of lib.songs.get(to) ?? []) add(s)
+    for (const f of froms) for (const s of lib.songs.get(f) ?? []) add(s)
+    const list = [...byKey.values()]
+    for (const s of list)
+      s.versions.sort(
+        (a, b) => formatRank(a.file.format) - formatRank(b.file.format) || b.size - a.size,
+      )
+    list.sort(
+      (a, b) =>
+        Number(!!a.unknownTitle) - Number(!!b.unknownTitle) ||
+        a.title.localeCompare(b.title, 'zh-Hans-CN'),
+    )
+    songs.set(to, list)
+    artistById.set(to, {
+      ...base,
+      files: base.files + froms.reduce((n, f) => n + (lib.artistById.get(f)?.files ?? 0), 0),
+      songs: list.length,
+      aliases: froms.map((f) => lib.artistById.get(f)!.name),
+      aliasIds: [...froms],
+    })
+  }
+
+  const artists = new Map<string, ScoreArtist[]>()
+  for (const [groupId, list] of lib.artists) {
+    const next = list
+      .filter((a) => !removed.has(a.id))
+      .map((a) => artistById.get(a.id) ?? a)
+      .sort((a, b) => b.files - a.files || a.name.localeCompare(b.name, 'zh-Hans-CN'))
+    artists.set(groupId, next)
+  }
+  const categories = lib.categories.map((c) => ({
+    ...c,
+    groups: c.groups.map((g) => {
+      const n = artists.get(g.id)?.length ?? g.artists
+      return n === g.artists ? g : { ...g, artists: n }
+    }),
+  }))
+  return { categories, artists, artistById, songs, files: lib.files }
+}
+
 function initialOf(name: string, tools: TextTools): string {
   const ch = name
     .normalize('NFKC')
@@ -687,13 +783,18 @@ export function keysOf(text: string, tools: TextTools): Keys {
 }
 
 export interface SearchIndex {
-  artists: Array<{ artist: ScoreArtist; keys: Keys }>
+  /** An artist's keys: its name, then each merged folder's name (aliases). */
+  artists: Array<{ artist: ScoreArtist; keys: Keys[] }>
   songs: Array<{ song: ScoreSong; keys: Keys; artistName: string }>
 }
 
 export function buildSearchIndex(lib: ScoreLibraryData, tools: TextTools): SearchIndex {
   const artists: SearchIndex['artists'] = []
-  for (const a of lib.artistById.values()) artists.push({ artist: a, keys: keysOf(a.name, tools) })
+  for (const a of lib.artistById.values())
+    artists.push({
+      artist: a,
+      keys: [keysOf(a.name, tools), ...(a.aliases ?? []).map((n) => keysOf(n, tools))],
+    })
   const songs: SearchIndex['songs'] = []
   for (const [artistId, list] of lib.songs) {
     const artistName = lib.artistById.get(artistId)?.name ?? ''
@@ -757,6 +858,20 @@ function matchOf(
   return null
 }
 
+/** The best of several keys (an artist's name and its aliases). */
+function bestMatchOf(
+  keys: Keys[],
+  q: Keys,
+  qLetters: boolean,
+): { match: SearchMatch; rank: number } | null {
+  let best: { match: SearchMatch; rank: number } | null = null
+  for (const k of keys) {
+    const m = matchOf(k, q, qLetters)
+    if (m && (!best || m.rank < best.rank)) best = m
+  }
+  return best
+}
+
 export const SONG_LIMIT = 200
 const ARTIST_LIMIT = 50
 
@@ -772,7 +887,7 @@ export function search(
   for (const c of lib.categories)
     for (const g of c.groups) groupName.set(g.id, { category: c.name, group: g.name })
   const artists = index.artists
-    .map((a) => ({ a, m: matchOf(a.keys, q, qLetters) }))
+    .map((a) => ({ a, m: bestMatchOf(a.keys, q, qLetters) }))
     .filter((x) => x.m)
     .sort((x, y) => x.m!.rank - y.m!.rank || y.a.artist.files - x.a.artist.files)
     .slice(0, ARTIST_LIMIT)

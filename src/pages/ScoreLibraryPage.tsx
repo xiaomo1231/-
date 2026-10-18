@@ -1,5 +1,6 @@
-import { useEffect, useMemo, useState, type ReactNode } from 'react'
+import { useCallback, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { FolderOpen, FolderPlus, RefreshCw, Search } from 'lucide-react'
+import type { ScoreFavoriteRow, ScoreRecentRow } from '@/entities/types'
 import type {
   ScoreArtist,
   ScoreCategory,
@@ -9,6 +10,12 @@ import type {
 } from '@/songs/scoreLibraryTypes'
 import type { LibraryState } from '@/features/scores/scoreLibraryApi'
 import { ScoreLibrary } from '@/features/scores/scoreLibraryClient'
+import {
+  FavoritesContext,
+  useScorePrefsVersion,
+  type FavoritesValue,
+} from '@/features/scores/scorePrefsHooks'
+import type { FavoriteInput } from '@/services/scorePrefsService'
 import { toast } from '@/features/toast/toastStore'
 import { Button } from '@/shared/ui/Button'
 import { Input } from '@/shared/ui/Input'
@@ -16,6 +23,8 @@ import { ScoreCategoryList } from '@/widgets/scores/ScoreCategoryList'
 import { ScoreArtistList, type ArtistSort } from '@/widgets/scores/ScoreArtistList'
 import { SONG_PAGE, ScoreSongList } from '@/widgets/scores/ScoreSongList'
 import { ScoreSearchResults } from '@/widgets/scores/ScoreSearchResults'
+import { ScorePrefList, type PrefRow } from '@/widgets/scores/ScorePrefList'
+import { ScorePrefsEntries, type LibraryView } from '@/widgets/scores/ScorePrefsEntries'
 
 const LAST_KEY = 'groovelab:scores:last'
 
@@ -176,7 +185,9 @@ export function ScoreLibraryPage() {
         </Card>
       )}
 
-      {state?.kind === 'ready' && <LibraryBrowser categories={state.categories} />}
+      {state?.kind === 'ready' && (
+        <LibraryBrowser categories={state.categories} onState={setState} />
+      )}
     </div>
   )
 }
@@ -193,9 +204,21 @@ function Card({ title, children }: { title: string; children: ReactNode }) {
 }
 
 /** The browser proper: categories | artists | songs, with search replacing the last two. */
-function LibraryBrowser({ categories }: { categories: ScoreCategory[] }) {
+function LibraryBrowser({
+  categories,
+  onState,
+}: {
+  categories: ScoreCategory[]
+  onState: (s: LibraryState) => void
+}) {
   const allGroups = useMemo(() => categories.flatMap((c) => c.groups), [categories])
   const [sel, setSel] = useState<LastPick>(readLast)
+  const [view, setView] = useState<LibraryView>('library')
+  // Bumped after a merge: the artists and songs are read again.
+  const [dataVersion, setDataVersion] = useState(0)
+  const prefsVersion = useScorePrefsVersion()
+  const [favRows, setFavRows] = useState<ScoreFavoriteRow[] | null>(null)
+  const [recentRows, setRecentRows] = useState<ScoreRecentRow[] | null>(null)
   const [collapsed, setCollapsed] = useState<ReadonlySet<string>>(() => new Set())
   const [sort, setSort] = useState<ArtistSort>('count')
   const [query, setQuery] = useState('')
@@ -229,7 +252,7 @@ function LibraryBrowser({ categories }: { categories: ScoreCategory[] }) {
     return () => {
       alive = false
     }
-  }, [groupId])
+  }, [groupId, dataVersion])
 
   const artists = useMemo(() => {
     if (artistData?.groupId !== groupId) return null
@@ -257,7 +280,7 @@ function LibraryBrowser({ categories }: { categories: ScoreCategory[] }) {
     return () => {
       alive = false
     }
-  }, [artistId])
+  }, [artistId, dataVersion])
 
   const songs = songData?.artistId === artistId ? songData.list : null
   const limit = more.artistId === artistId ? more.limit : SONG_PAGE
@@ -281,13 +304,67 @@ function LibraryBrowser({ categories }: { categories: ScoreCategory[] }) {
     }
   }, [debounced])
 
+  // The starred scores (also the favourites count and the stars on the rows).
+  useEffect(() => {
+    let alive = true
+    ScoreLibrary.favorites().then(
+      (rows) => alive && setFavRows(rows),
+      (e: unknown) =>
+        alive && toast({ title: '读取收藏失败', description: errText(e), variant: 'error' }),
+    )
+    return () => {
+      alive = false
+    }
+  }, [prefsVersion])
+
+  useEffect(() => {
+    if (view !== 'recent') return
+    let alive = true
+    ScoreLibrary.recent().then(
+      (rows) => alive && setRecentRows(rows),
+      (e: unknown) =>
+        alive && toast({ title: '读取最近打开失败', description: errText(e), variant: 'error' }),
+    )
+    return () => {
+      alive = false
+    }
+  }, [view, prefsVersion])
+
+  const favoritePaths = useMemo(() => new Set((favRows ?? []).map((r) => r.path)), [favRows])
+  const toggleFavorite = useCallback((row: FavoriteInput) => {
+    ScoreLibrary.toggleFavorite(row).catch((e: unknown) =>
+      toast({ title: '没能收藏', description: errText(e), variant: 'error' }),
+    )
+  }, [])
+  const favoritesValue = useMemo<FavoritesValue>(
+    () => ({ paths: favoritePaths, toggle: toggleFavorite }),
+    [favoritePaths, toggleFavorite],
+  )
+
   const searching = debounced !== ''
   const searchResult = searching && found?.q === debounced ? found.result : null
 
   const pick = (nextGroupId: string, nextArtistId?: string) => {
     const next = { groupId: nextGroupId, artistId: nextArtistId }
+    setView('library')
     setSel(next)
     writeLast(next)
+  }
+
+  /** Merges (or separates) artists; the library state comes back from the worker. */
+  const merge = async (from: string, to: string | null, select?: ScoreArtist) => {
+    try {
+      onState(await ScoreLibrary.mergeArtist(from, to))
+      setDataVersion((v) => v + 1)
+      if (select) pick(select.groupId, select.id)
+    } catch (e) {
+      toast({ title: '没能合并', description: errText(e), variant: 'error' })
+    }
+  }
+
+  const prefRows = (kind: 'favorites' | 'recent'): PrefRow[] | null => {
+    if (kind === 'favorites') return favRows?.map((r) => ({ ...r, date: r.addedAt })) ?? null
+    return recentRows?.map((r) => ({ ...r, date: r.openedAt })) ?? null
   }
 
   const toggleCategory = (cat: ScoreCategory) => {
@@ -306,66 +383,96 @@ function LibraryBrowser({ categories }: { categories: ScoreCategory[] }) {
   }
 
   return (
-    <div className="space-y-4">
-      <div className="relative">
-        <Search
-          className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
-          aria-hidden
-        />
-        <Input
-          type="search"
-          aria-label="搜索谱库"
-          placeholder="搜歌名、歌手，支持拼音、首字母、繁体和相近的写法"
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          className="h-11 rounded-2xl pl-9 text-base"
-          autoComplete="off"
-        />
-      </div>
-
-      <div className="overflow-hidden rounded-3xl border border-border/80 bg-card">
-        {searching ? (
-          <ScoreSearchResults
-            query={debounced}
-            result={searchResult}
-            onPickArtist={pickFromSearch}
+    <FavoritesContext.Provider value={favoritesValue}>
+      <div className="space-y-4">
+        <div className="relative">
+          <Search
+            className="pointer-events-none absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground"
+            aria-hidden
           />
-        ) : (
-          <div className="lg:grid lg:grid-cols-[210px_280px_minmax(0,1fr)]">
-            <div className="border-b border-border/80 lg:border-b-0 lg:border-r">
-              <ScoreCategoryList
-                categories={categories}
-                activeGroupId={groupId}
-                collapsed={collapsed}
-                onPickGroup={(g) => pick(g.id)}
-                onToggle={toggleCategory}
-              />
-            </div>
-            <div className="min-w-0 border-b border-border/80 lg:border-b-0 lg:border-r">
-              {activeGroup && (
-                <ScoreArtistList
-                  key={activeGroup.id}
-                  group={activeGroup}
-                  artists={artists}
-                  sort={sort}
-                  onSort={setSort}
-                  activeArtistId={artistId || undefined}
-                  onPick={(a) => pick(groupId, a.id)}
+          <Input
+            type="search"
+            aria-label="搜索谱库"
+            placeholder="搜歌名、歌手，支持拼音、首字母、繁体和相近的写法"
+            value={query}
+            onChange={(e) => setQuery(e.target.value)}
+            className="h-11 rounded-2xl pl-9 text-base"
+            autoComplete="off"
+          />
+        </div>
+
+        <div className="overflow-hidden rounded-3xl border border-border/80 bg-card">
+          {searching ? (
+            <ScoreSearchResults
+              query={debounced}
+              result={searchResult}
+              onPickArtist={pickFromSearch}
+            />
+          ) : (
+            <div className="lg:grid lg:grid-cols-[210px_280px_minmax(0,1fr)]">
+              <div className="border-b border-border/80 lg:border-b-0 lg:border-r">
+                <ScorePrefsEntries
+                  view={view}
+                  favoriteCount={favRows?.length ?? 0}
+                  onPick={setView}
                 />
+                <ScoreCategoryList
+                  categories={categories}
+                  activeGroupId={view === 'library' ? groupId : ''}
+                  collapsed={collapsed}
+                  onPickGroup={(g) => pick(g.id)}
+                  onToggle={toggleCategory}
+                />
+              </div>
+              {view === 'library' ? (
+                <>
+                  <div className="min-w-0 border-b border-border/80 lg:border-b-0 lg:border-r">
+                    {activeGroup && (
+                      <ScoreArtistList
+                        key={activeGroup.id}
+                        group={activeGroup}
+                        artists={artists}
+                        sort={sort}
+                        onSort={setSort}
+                        activeArtistId={artistId || undefined}
+                        onPick={(a) => pick(groupId, a.id)}
+                      />
+                    )}
+                  </div>
+                  <div className="min-w-0">
+                    <ScoreSongList
+                      artist={activeArtist}
+                      songs={songs}
+                      limit={limit}
+                      onMore={() => setMore({ artistId, limit: limit + SONG_PAGE })}
+                      onMerge={merge}
+                    />
+                  </div>
+                </>
+              ) : (
+                <div className="min-w-0 lg:col-span-2">
+                  <ScorePrefList
+                    kind={view}
+                    rows={prefRows(view)}
+                    onUnstar={
+                      view === 'favorites'
+                        ? (row) =>
+                            toggleFavorite({
+                              path: row.path,
+                              title: row.title,
+                              artist: row.artist,
+                              pages: row.pages,
+                            })
+                        : undefined
+                    }
+                  />
+                </div>
               )}
             </div>
-            <div className="min-w-0">
-              <ScoreSongList
-                artist={activeArtist}
-                songs={songs}
-                limit={limit}
-                onMore={() => setMore({ artistId, limit: limit + SONG_PAGE })}
-              />
-            </div>
-          </div>
-        )}
+          )}
+        </div>
       </div>
-    </div>
+    </FavoritesContext.Provider>
   )
 }
 
