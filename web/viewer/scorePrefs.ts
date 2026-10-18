@@ -3,6 +3,8 @@
  * Playback and track state are not kept: they start fresh for every opened score.
  */
 import type { AlphaTab } from './alphaTab'
+import { DEFAULT_TRAINER, normalizeTrainer, type TrainerConfig } from './practiceEngine'
+import { SOUND_FONTS, type SoundFontId } from './soundFonts'
 
 export type StaffMode = 'ScoreTab' | 'Tab' | 'Score'
 export type SheetMode = 'night' | 'paper'
@@ -12,6 +14,11 @@ export interface ScorePrefs {
   sheet: SheetMode
   /** null = the default for this screen (1.0, or 0.85 on phones). */
   zoom: number | null
+  /** 指板 strip under the header. */
+  fretboard: boolean
+  soundFont: SoundFontId
+  /** 渐进提速 and the other loop settings. */
+  trainer: TrainerConfig
 }
 
 export const STAFF_OPTIONS: ReadonlyArray<{ value: StaffMode; label: string }> = [
@@ -38,7 +45,14 @@ export const SPEED_MAX = 175
 export const SPEED_PRESETS = [50, 75, 100, 125] as const
 
 const KEY = 'groovelab:scores:viewer'
-const DEFAULT: ScorePrefs = { staff: 'Tab', sheet: 'night', zoom: null }
+const DEFAULT: ScorePrefs = {
+  staff: 'Tab',
+  sheet: 'night',
+  zoom: null,
+  fretboard: false,
+  soundFont: 'basic',
+  trainer: DEFAULT_TRAINER,
+}
 
 export function loadPrefs(): ScorePrefs {
   try {
@@ -50,6 +64,11 @@ export function loadPrefs(): ScorePrefs {
       sheet: v.sheet === 'paper' ? 'paper' : 'night',
       zoom:
         typeof v.zoom === 'number' && ZOOM_OPTIONS.some((o) => o.value === v.zoom) ? v.zoom : null,
+      fretboard: v.fretboard === true,
+      soundFont: SOUND_FONTS.some((o) => o.id === v.soundFont)
+        ? (v.soundFont as SoundFontId)
+        : DEFAULT.soundFont,
+      trainer: normalizeTrainer(v.trainer),
     }
   } catch {
     return DEFAULT
@@ -71,7 +90,7 @@ export function isPhone(): boolean {
 
 /** The alphaTab display scale in effect for these choices. */
 export function effectiveScale(p: ScorePrefs): number {
-  return p.zoom ?? (isPhone() ? PHONE_SCALE : 1)
+  return p.zoom ?? (isPhone() && !isShortLandscape() ? PHONE_SCALE : 1)
 }
 
 export function staveProfileOf(at: AlphaTab, staff: StaffMode): number {
@@ -103,4 +122,9 @@ export function sheetResources(sheet: SheetMode) {
 export function fmtClock(ms: number): string {
   const s = Math.max(0, Math.round(ms / 1000))
   return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, '0')}`
+}
+
+/** A phone turned sideways: the sheet gets the full scale and the remote folds away while playing. */
+export function isShortLandscape(): boolean {
+  return window.matchMedia('(orientation: landscape) and (max-height: 500px)').matches
 }

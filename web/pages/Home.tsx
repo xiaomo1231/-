@@ -1,6 +1,8 @@
 import { useState } from 'react'
 import type { ScoreCategory } from '@/songs/scoreLibraryTypes'
 import { useFavorites } from '../lib/favorites'
+import { practiceLine, usePractice } from '../lib/practice'
+import type { PracticeRecord } from '../lib/api'
 import { isScoreFormat, libraryName } from '../lib/format'
 import { hrefCategory, hrefGroup, hrefViewer, HREF_FAVORITES } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
@@ -24,6 +26,7 @@ function contentsNumber(id: string, index: number): string {
 export function Home() {
   const { info, scanning } = useLibrary()
   const categories = info?.categories ?? []
+  const practice = usePractice()
 
   return (
     <>
@@ -87,7 +90,8 @@ export function Home() {
 
         <aside className="min-w-0">
           <Favorites />
-          <Recent />
+          <Practiced items={practice.items} />
+          <Recent practice={practice.items} />
         </aside>
       </div>
     </>
@@ -138,8 +142,41 @@ function Favorites() {
   )
 }
 
+/** The viewer link for a practice record (always a score; its pages are not kept). */
+function practiceHref(r: PracticeRecord): string {
+  return hrefViewer({ path: r.path, format: 'score', pages: [], title: r.title, artist: r.artist })
+}
+
+/** The practice line under a score row, muted and mono; nothing when there is no record. */
+function PracticeNote({ record }: { record: PracticeRecord | undefined }) {
+  if (!record) return null
+  return (
+    <p className="mono -mt-1 truncate pb-1.5 text-[11px] text-muted-foreground">
+      {practiceLine(record)}
+    </p>
+  )
+}
+
+/** ★ 最近练过 (score-practice records, most recent first): the five latest, linked to the viewer. */
+function Practiced({ items }: { items: PracticeRecord[] }) {
+  if (items.length === 0) return null
+  return (
+    <section className="mt-10 scroll-mt-16">
+      <p className="label mb-2.5">最 近 练 过</p>
+      <ul className="m-0 list-none p-0">
+        {items.slice(0, 5).map((r) => (
+          <li key={r.path}>
+            <ScoreLine title={r.title} artist={r.artist} format="score" href={practiceHref(r)} />
+            <PracticeNote record={r} />
+          </li>
+        ))}
+      </ul>
+    </section>
+  )
+}
+
 /** 最 近 看 过: the scores opened on this device. */
-function Recent() {
+function Recent({ practice }: { practice: PracticeRecord[] }) {
   const [items] = useState<RecentItem[]>(() => readRecent())
   return (
     <section id="recent" className="mt-10 scroll-mt-16">
@@ -164,6 +201,7 @@ function Recent() {
                     artist: r.artist,
                   })}
                 />
+                <PracticeNote record={practice.find((p) => p.path === r.path)} />
               </li>
             )
           })}

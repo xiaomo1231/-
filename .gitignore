@@ -34,3 +34,4 @@ build/
 
 # read-only score server bundle (npm run build:server)
 server-dist/
+server-assets/soundfonts/

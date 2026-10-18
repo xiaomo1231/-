@@ -137,6 +137,8 @@ const MIME: Record<string, string> = {
   mp3: 'audio/mpeg',
   ogg: 'audio/ogg',
   wav: 'audio/wav',
+  sf2: 'application/octet-stream',
+  sf3: 'application/octet-stream',
 }
 
 /** Content-Type by file name; Guitar Pro, MIDI and anything unknown are opaque bytes. */
@@ -144,6 +146,13 @@ export function mimeFor(name: string): string {
   const i = name.lastIndexOf('.')
   const ext = i >= 0 ? name.slice(i + 1).toLowerCase() : ''
   return MIME[ext] ?? 'application/octet-stream'
+}
+
+/** Writes a file atomically (temp file, then rename), readable by the owner only. */
+export async function writeFileAtomic(target: string, text: string): Promise<void> {
+  const tmp = `${target}.tmp`
+  await fs.promises.writeFile(tmp, text, { mode: 0o600 })
+  await fs.promises.rename(tmp, target)
 }
 
 /** Content-Disposition for a download, with an ASCII fallback name. */

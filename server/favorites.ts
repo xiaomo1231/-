@@ -5,12 +5,12 @@
  */
 import fs from 'node:fs'
 import path from 'node:path'
-import { resolveInside } from './util'
+import { resolveInside, writeFileAtomic } from './util'
 
 export const FAVORITE_FILE = 'favorites.json'
 export const MAX_FAVORITES = 2000
 export const MAX_FAVORITE_PAGES = 200
-const MAX_TEXT_CHARS = 300
+export const MAX_TEXT_CHARS = 300
 
 export const FAVORITE_FORMATS = [
   'score',
@@ -49,7 +49,7 @@ export const inRootOf =
 const isFormat = (v: unknown): v is FavoriteFormat =>
   typeof v === 'string' && (FAVORITE_FORMATS as readonly string[]).includes(v)
 
-const textOk = (v: unknown): v is string => typeof v === 'string' && [...v].length <= MAX_TEXT_CHARS
+export const textOk = (v: unknown): v is string => typeof v === 'string' && [...v].length <= MAX_TEXT_CHARS
 
 /** Validates the body of POST /api/favorites. */
 export function parseFavoriteInput(
@@ -140,10 +140,7 @@ export async function loadFavorites(dataDir: string, inRoot: InRoot): Promise<Fa
 
 /** Writes the list atomically (temp file, then rename), readable by the owner only. */
 export async function saveFavorites(dataDir: string, list: FavoriteItem[]): Promise<void> {
-  const target = path.join(dataDir, FAVORITE_FILE)
-  const tmp = `${target}.tmp`
-  await fs.promises.writeFile(tmp, JSON.stringify(list), { mode: 0o600 })
-  await fs.promises.rename(tmp, target)
+  await writeFileAtomic(path.join(dataDir, FAVORITE_FILE), JSON.stringify(list))
 }
 
 /**

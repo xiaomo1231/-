@@ -40,6 +40,15 @@ import {
   type InRoot,
 } from './favorites'
 import {
+  applyPracticeUpdate,
+  loadPractice,
+  parsePracticePath,
+  parsePracticeUpdate,
+  removePractice,
+  savePractice,
+  type PracticeRecord,
+} from './practice'
+import {
   loadFromFiles,
   readCache,
   scanFolder,
@@ -169,6 +178,8 @@ const limiter = createRateLimiter(LOGIN_MAX_FAILURES, LOGIN_WINDOW_MS)
 let inRoot: InRoot
 let favorites: FavoriteItem[] = []
 const favoriteQueue = createSerialQueue()
+let practice: PracticeRecord[] = []
+const practiceQueue = createSerialQueue()
 /** The unfiltered "most versions" ranking, per library build (a new scan makes a new object). */
 const topCache = new WeakMap<LoadedLibrary, RankedSong[]>()
 
@@ -288,6 +299,44 @@ async function persistFavorites(
   return next
 }
 
+async function handlePractice(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  p: string,
+): Promise<void> {
+  if (p === '/api/practice' && req.method === 'GET') return sendJson(res, 200, practice)
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+  if (p === '/api/practice') {
+    const update = orBadRequest(parsePracticeUpdate(body, inRoot))
+    const record = await practiceQueue(async () => {
+      const r = applyPracticeUpdate(practice, update, Date.now())
+      await persistPractice(r.list)
+      return r.record
+    })
+    return sendJson(res, 200, record)
+  }
+  // POST /api/practice/remove
+  const rel = orBadRequest(parsePracticePath(body, inRoot))
+  const next = await practiceQueue(async () => {
+    const list = removePractice(practice, rel)
+    await persistPractice(list)
+    return list
+  })
+  return sendJson(res, 200, next)
+}
+
+/** Writes the practice records, then keeps them in memory. */
+async function persistPractice(next: PracticeRecord[]): Promise<void> {
+  try {
+    await savePractice(cfg.dataDir, next)
+  } catch (err) {
+    log(`练习记录保存失败：${errorText(err)}`)
+    throw new HttpError(500, '练习记录保存失败，请检查 SCORES_DATA 文件夹是否可写。')
+  }
+  practice = next
+}
+
 function libraryInfo(): unknown {
   const root = path.basename(cfg.root) || 'root'
   if (!loaded) return { root, scannedAt: 0, files: 0, scanning: true, categories: [] }
@@ -320,6 +369,7 @@ async function handleApi(
   if (!isLoggedIn(req)) return sendJson(res, 401, { error: '请先登录。' })
 
   if (p === '/api/favorites' || p === '/api/favorites/remove') return handleFavorites(req, res, p)
+  if (p === '/api/practice' || p === '/api/practice/remove') return handlePractice(req, res, p)
 
   const routes: Record<string, { method: string; run: () => Promise<unknown> | unknown }> = {
     '/api/me': { method: 'GET', run: () => ({ ok: true }) },
@@ -516,7 +566,12 @@ async function handleStatic(
   res.writeHead(200, {
     'Content-Type': mimeFor(file),
     'Content-Length': st.size,
-    'Cache-Control': isIndex ? 'no-cache' : 'public, max-age=3600',
+    // Sound fonts are large and never change.
+    'Cache-Control': isIndex
+      ? 'no-cache'
+      : p.startsWith('/alphatab/soundfont/')
+        ? 'public, max-age=2592000, immutable'
+        : 'public, max-age=3600',
   })
   if (req.method === 'HEAD') {
     res.end()
@@ -583,6 +638,7 @@ async function main(): Promise<void> {
     console.error(`收藏文件读取失败：${errorText(err)}`)
     process.exit(1)
   }
+  practice = await loadPractice(cfg.dataDir, inRoot)
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 
   const server = http.createServer(onRequest)

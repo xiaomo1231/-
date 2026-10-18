@@ -18,8 +18,16 @@ import {
   type SheetMode,
   type StaffMode,
 } from './scorePrefs'
+import {
+  GAP_OPTIONS,
+  LOOP_COUNT_OPTIONS,
+  STEP_OPTIONS,
+  trainerSummary,
+  type TrainerConfig,
+} from './practiceEngine'
+import { SOUND_FONTS, type SoundFontId } from './soundFonts'
 
-export type PopKind = 'speed' | 'tracks' | 'key' | 'view'
+export type PopKind = 'speed' | 'tracks' | 'key' | 'view' | 'practice'
 
 /** Star state and the toggle for one file; `note` is a short result line. */
 export function useStar(item: Omit<FavoriteItem, 'addedAt'>) {
@@ -43,13 +51,13 @@ const REMOTE_CSS = `
 .gl-remote {
   right: max(16px, env(safe-area-inset-right, 0px));
   bottom: max(16px, env(safe-area-inset-bottom, 0px));
-  width: 336px; padding: 12px;
+  width: 372px; padding: 12px;
   background: hsl(var(--background) / 0.94); backdrop-filter: blur(14px);
   border: 1px solid hsl(var(--border)); border-radius: 16px;
   box-shadow: 0 18px 50px -20px rgba(0, 0, 0, 0.55);
 }
 .gl-r-row { display: flex; align-items: center; gap: 8px; }
-.gl-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 6px; }
+.gl-grid { margin-top: 10px; display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 6px; }
 .gl-grid + .gl-grid { margin-top: 8px; }
 .gl-key {
   min-height: 44px; min-width: 0; border: 1px solid hsl(var(--border)); border-radius: 10px;
@@ -89,7 +97,18 @@ const REMOTE_CSS = `
 .gl-pop h4 { margin: 0 0 10px; font-size: 13px; letter-spacing: 0.12em; color: hsl(var(--muted-foreground)); font-weight: 600; }
 .gl-pop h4:not(:first-child) { margin-top: 14px; }
 .gl-pop .gl-hint { margin-top: 12px; }
+.gl-pop .gl-tip { margin-top: 6px; }
 .gl-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.gl-stack { display: grid; gap: 6px; }
+.gl-sub { font-size: 12px; color: hsl(var(--muted-foreground)); margin: 10px 2px 0; }
+.gl-step { display: flex; align-items: center; gap: 8px; margin-top: 8px; }
+.gl-step-label { flex: 1; min-width: 0; font-size: 13px; }
+.gl-step .gl-val { min-width: 56px; text-align: center; font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
+.gl-status {
+  margin: 12px 0 0; padding: 8px 10px; border-radius: 9px; font-family: var(--font-mono);
+  font-size: 13px; font-variant-numeric: tabular-nums; background: hsl(var(--primary) / 0.12);
+  border: 1px solid hsl(var(--primary) / 0.35);
+}
 .gl-pill {
   min-height: 40px; min-width: 40px; border: 1px solid hsl(var(--border)); background: none; color: inherit;
   border-radius: 9px; padding: 6px 10px; font-size: 13px;
@@ -101,7 +120,9 @@ const REMOTE_CSS = `
 .gl-dial input[type="range"] { flex: 1; accent-color: hsl(var(--primary)); min-height: 40px; }
 .gl-dial .gl-val { min-width: 84px; text-align: right; font-family: var(--font-mono); font-size: 13px; font-variant-numeric: tabular-nums; }
 .gl-tracks { list-style: none; margin: 0; padding: 0; display: grid; gap: 6px; }
-.gl-tracks li { display: flex; gap: 6px; align-items: center; }
+.gl-tracks li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+.gl-tracks .gl-trk-vol { grid-column: 1 / -1; }
+.gl-tracks .gl-trk-vol .gl-val { min-width: 48px; }
 .gl-ms {
   min-width: 40px; min-height: 40px; border: 1px solid hsl(var(--border)); background: none; color: inherit;
   border-radius: 9px; font-family: var(--font-mono); font-size: 13px;
@@ -170,6 +191,30 @@ export interface RemoteProps {
   onStar: () => void
   downloadHref: string
   note: string
+  /** A practice run is on: the speed trainer, or follow-along / metronome-only mode. Lights the 练习 key. */
+  practiceActive: boolean
+  /** 跟着练: mute the track being shown so the student plays it; the other tracks keep going. */
+  followAlong: boolean
+  onFollowAlong: () => void
+  /** 只放节拍器: the score is silent, only the metronome and the cursor run. */
+  metroOnly: boolean
+  onMetroOnly: () => void
+  /** 渐进提速 and the between-pass settings (gap, count-in per pass, pass count). */
+  trainer: TrainerConfig
+  onTrainer: (t: TrainerConfig) => void
+  /** Status of a running practice loop, e.g. "第 3 遍 · 70% → 100%"; null when no run is going. */
+  loopStatus: string | null
+  /** Per-track volume in percent (0–150), index-aligned with `tracks`; missing entries count as 100. */
+  volumes: number[]
+  onVolume: (i: number, pct: number) => void
+  /** 指板 (fretboard) view is on. */
+  fretboard: boolean
+  onFretboard: () => void
+  /** Sound fonts this server actually has; options not in the set are not offered. */
+  soundFonts: ReadonlySet<SoundFontId>
+  /** The sound font in use. */
+  soundFont: SoundFontId
+  onSoundFont: (id: SoundFontId) => void
 }
 
 /** The score remote: playback keys (when the sound is there), view keys, and the popovers above it. */
@@ -297,6 +342,17 @@ export function Remote(p: RemoteProps) {
             <span aria-hidden>♩</span>
             <small>节拍器</small>
           </button>
+          <button
+            type="button"
+            className="gl-key"
+            onClick={() => togglePop('practice')}
+            aria-pressed={p.pop === 'practice' || p.practiceActive}
+            aria-label="练习"
+            disabled={!playable}
+          >
+            <span aria-hidden>◎</span>
+            <small>练习</small>
+          </button>
         </div>
       )}
       {!min && keysOn && p.loop && !p.hasSelection && (
@@ -338,6 +394,16 @@ export function Remote(p: RemoteProps) {
           <button
             type="button"
             className="gl-key"
+            onClick={p.onFretboard}
+            aria-pressed={p.fretboard}
+            aria-label="指板（B）"
+          >
+            <span aria-hidden>▦</span>
+            <small>指板</small>
+          </button>
+          <button
+            type="button"
+            className="gl-key"
             onClick={p.onStar}
             aria-pressed={p.starred}
             aria-label={p.starred ? '取消收藏（F）' : '收藏（F）'}
@@ -364,6 +430,7 @@ function Popover({ kind, p }: { kind: PopKind; p: RemoteProps }) {
   if (kind === 'speed') return <SpeedPop p={p} />
   if (kind === 'tracks') return <TracksPop p={p} />
   if (kind === 'key') return <KeyPop p={p} />
+  if (kind === 'practice') return <PracticePop p={p} />
   return <ViewPop p={p} />
 }
 
@@ -428,38 +495,54 @@ function TracksPop({ p }: { p: RemoteProps }) {
     <div className="gl-pop" role="dialog" aria-label="音轨">
       <h4>音 轨</h4>
       <ul className="gl-tracks">
-        {p.tracks.map((name, i) => (
-          <li key={i}>
-            <button
-              type="button"
-              className="gl-pill grow"
-              aria-pressed={p.track === i}
-              onClick={() => p.onShowTrack(i)}
-            >
-              {name}
-            </button>
-            <button
-              type="button"
-              className="gl-ms"
-              aria-pressed={p.solo.has(i)}
-              aria-label={`独奏 ${name}`}
-              title="独奏"
-              onClick={() => p.onSolo(i)}
-            >
-              S
-            </button>
-            <button
-              type="button"
-              className="gl-ms"
-              aria-pressed={p.mute.has(i)}
-              aria-label={`静音 ${name}`}
-              title="静音"
-              onClick={() => p.onMute(i)}
-            >
-              M
-            </button>
-          </li>
-        ))}
+        {p.tracks.map((name, i) => {
+          const vol = p.volumes[i] ?? 100
+          return (
+            <li key={i}>
+              <button
+                type="button"
+                className="gl-pill grow"
+                aria-pressed={p.track === i}
+                onClick={() => p.onShowTrack(i)}
+              >
+                {name}
+              </button>
+              <button
+                type="button"
+                className="gl-ms"
+                aria-pressed={p.solo.has(i)}
+                aria-label={`独奏 ${name}`}
+                title="独奏"
+                onClick={() => p.onSolo(i)}
+              >
+                S
+              </button>
+              <button
+                type="button"
+                className="gl-ms"
+                aria-pressed={p.mute.has(i)}
+                aria-label={`静音 ${name}`}
+                title="静音"
+                onClick={() => p.onMute(i)}
+              >
+                M
+              </button>
+              <div className="gl-dial gl-trk-vol">
+                <input
+                  type="range"
+                  min={0}
+                  max={150}
+                  step={5}
+                  value={vol}
+                  aria-label={`${name} 音量`}
+                  aria-valuetext={`${vol}%`}
+                  onChange={(e) => p.onVolume(i, Number(e.target.value))}
+                />
+                <span className="gl-val num">{vol}%</span>
+              </div>
+            </li>
+          )
+        })}
       </ul>
       <p className="gl-hint">点音轨名显示这一轨；S 独奏，M 静音（M 键静音当前音轨）。</p>
     </div>
@@ -506,7 +589,175 @@ function KeyPop({ p }: { p: RemoteProps }) {
   )
 }
 
+const PCT_MIN = 15
+const PCT_MAX = 175
+const clampPct = (v: number) => Math.min(PCT_MAX, Math.max(PCT_MIN, v))
+
+/** A −/+ stepper for a percentage. */
+function PctStepper({
+  label,
+  value,
+  step,
+  onChange,
+}: {
+  label: string
+  value: number
+  step: number
+  onChange: (v: number) => void
+}) {
+  return (
+    <div className="gl-step" role="group" aria-label={label}>
+      <span className="gl-step-label">{label}</span>
+      <button
+        type="button"
+        className="gl-pill"
+        aria-label={`${label} 减 ${step}%`}
+        onClick={() => onChange(value - step)}
+        disabled={value <= PCT_MIN}
+      >
+        −
+      </button>
+      <span className="gl-val" aria-live="polite">
+        {value}%
+      </span>
+      <button
+        type="button"
+        className="gl-pill"
+        aria-label={`${label} 加 ${step}%`}
+        onClick={() => onChange(value + step)}
+        disabled={value >= PCT_MAX}
+      >
+        +
+      </button>
+    </div>
+  )
+}
+
+function PracticePop({ p }: { p: RemoteProps }) {
+  const t = p.trainer
+  const setT = (patch: Partial<TrainerConfig>) => p.onTrainer({ ...t, ...patch })
+  // Keep target >= start: raising the start drags the target up with it.
+  const setStart = (v: number) => {
+    const s = clampPct(v)
+    setT({ startPct: s, targetPct: Math.max(t.targetPct, s) })
+  }
+  const setTarget = (v: number) => setT({ targetPct: Math.max(clampPct(v), t.startPct) })
+
+  return (
+    <div className="gl-pop" role="dialog" aria-label="练习">
+      <h4>跟 着 练</h4>
+      <div className="gl-stack">
+        <button
+          type="button"
+          className="gl-pill grow"
+          aria-pressed={p.followAlong}
+          onClick={p.onFollowAlong}
+        >
+          跟着练：静音当前轨
+        </button>
+        <p className="gl-hint gl-tip">你弹正在看的这一轨，其余音轨照常伴奏。</p>
+        <button
+          type="button"
+          className="gl-pill grow"
+          aria-pressed={p.metroOnly}
+          onClick={p.onMetroOnly}
+        >
+          只放节拍器
+        </button>
+        <p className="gl-hint gl-tip">谱子静音，只留节拍器和光标，检验自己能不能不靠示范弹下来。</p>
+      </div>
+
+      <h4>渐 进 提 速</h4>
+      <div className="gl-step">
+        <span className="gl-step-label">渐进提速</span>
+        <button
+          type="button"
+          className="gl-pill"
+          aria-pressed={t.enabled}
+          aria-label="渐进提速"
+          onClick={() => setT({ enabled: !t.enabled })}
+        >
+          {t.enabled ? '开' : '关'}
+        </button>
+      </div>
+      {t.enabled && (
+        <>
+          <PctStepper label="起始速度" value={t.startPct} step={5} onChange={setStart} />
+          <PctStepper label="目标速度" value={t.targetPct} step={5} onChange={setTarget} />
+          <p className="gl-sub">每遍增加</p>
+          <div className="gl-chips">
+            {STEP_OPTIONS.map((v) => (
+              <button
+                key={v}
+                type="button"
+                className="gl-pill"
+                aria-pressed={t.stepPct === v}
+                onClick={() => setT({ stepPct: v })}
+              >
+                +{v}%
+              </button>
+            ))}
+          </div>
+          <p className="gl-hint">{trainerSummary(t)}</p>
+        </>
+      )}
+
+      <h4>每 遍 之 间</h4>
+      <div className="gl-chips">
+        {GAP_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className="gl-pill"
+            aria-pressed={t.gapBeats === o.value}
+            onClick={() => setT({ gapBeats: o.value })}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+      <div className="gl-chips" style={{ marginTop: 6 }}>
+        <button
+          type="button"
+          className="gl-pill"
+          aria-pressed={t.countInEachLoop}
+          onClick={() => setT({ countInEachLoop: !t.countInEachLoop })}
+        >
+          每遍预备拍
+        </button>
+      </div>
+
+      <h4>循 环 次 数</h4>
+      <div className="gl-chips">
+        {LOOP_COUNT_OPTIONS.map((o) => (
+          <button
+            key={o.value}
+            type="button"
+            className="gl-pill"
+            aria-pressed={t.maxLoops === o.value}
+            onClick={() => setT({ maxLoops: o.value })}
+          >
+            {o.label}
+          </button>
+        ))}
+      </div>
+
+      {p.loopStatus ? (
+        <p className="gl-status" role="status">
+          {p.loopStatus}
+        </p>
+      ) : (
+        <p className="gl-hint">在谱面上拖选要练的小节，再按「循环」开始；没有选择时练整首。</p>
+      )}
+    </div>
+  )
+}
+
 function ViewPop({ p }: { p: RemoteProps }) {
+  const fonts = SOUND_FONTS.filter((o) => p.soundFonts.has(o.id))
+  const selected = SOUND_FONTS.find((o) => o.id === p.soundFont)
+  const loadingTail =
+    p.sound === 'loading' && p.soundPct > 0 ? ` 正在加载 ${p.soundPct}%` : ''
   return (
     <div className="gl-pop" role="dialog" aria-label="谱面">
       <h4>谱 面</h4>
@@ -551,6 +802,30 @@ function ViewPop({ p }: { p: RemoteProps }) {
           </button>
         ))}
       </div>
+      {fonts.some((o) => o.id !== 'basic') && (
+        <>
+          <h4>音 色</h4>
+          <div className="gl-chips">
+            {fonts.map((o) => (
+              <button
+                key={o.id}
+                type="button"
+                className="gl-pill"
+                aria-pressed={p.soundFont === o.id}
+                onClick={() => p.onSoundFont(o.id)}
+              >
+                {`${o.label} · ${o.sizeLabel}`}
+              </button>
+            ))}
+          </div>
+          {selected && (
+            <p className="gl-hint">
+              {selected.note}
+              {loadingTail}
+            </p>
+          )}
+        </>
+      )}
       <p className="gl-hint">设置保存在这台设备上。</p>
     </div>
   )

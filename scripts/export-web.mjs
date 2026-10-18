@@ -128,6 +128,8 @@ const readme = `# 谱库网页版
 | \`com.groovelab.scores.plist\` | Mac 开机自动运行的配置 |
 | \`data/\` | 运行后自动生成：扫描缓存和登录密钥 |
 
+高品质音色（MuseScore General 38 MB、FluidR3 142 MB）已包含在 \`web/alphatab/soundfont/\` 里；不想占空间可以删掉这两个 \`.sf3\` / \`.sf2\` 文件，网页里就只显示标准音色。
+
 ## 在这台 Windows 电脑上先试
 
 1. 把 \`config.example.env\` 复制一份，改名为 \`config.env\`，填好：

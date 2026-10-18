@@ -27,6 +27,16 @@ import {
   topSongs,
 } from '../server/catalog'
 import {
+  applyPracticeUpdate,
+  MAX_ADD_SECONDS,
+  MAX_PRACTICE,
+  parsePracticePath,
+  parsePracticeUpdate,
+  removePractice,
+  sanitizePractice,
+  type PracticeRecord,
+} from '../server/practice'
+import {
   createSerialQueue,
   inRootOf,
   MAX_FAVORITES,
@@ -450,5 +460,260 @@ describe('catalog filters (server/catalog.ts)', () => {
     expect(img.songs.every((s) => s.song.versions.every((v) => v.file.format === 'image'))).toBe(
       true,
     )
+  })
+})
+
+describe('practice records (server/practice.ts)', () => {
+  const root = path.resolve(os.tmpdir(), 'gl-root')
+  const inRoot = inRootOf(root)
+  const P = '1-华语/男歌手/周杰伦/七里香.gp5'
+  const body = (over: Record<string, unknown> = {}) => ({
+    path: P,
+    title: '七里香',
+    artist: '周杰伦',
+    ...over,
+  })
+  const rec = (over: Partial<PracticeRecord> = {}): PracticeRecord => ({
+    path: P,
+    title: '七里香',
+    artist: '周杰伦',
+    speedPct: 100,
+    loopBars: null,
+    muted: [],
+    totalSeconds: 0,
+    maxSpeedPct: 0,
+    firstAt: 0,
+    lastAt: 0,
+    ...over,
+  })
+
+  describe('parsePracticeUpdate', () => {
+    it('accepts a valid full body', () => {
+      const r = parsePracticeUpdate(
+        body({
+          speedPct: 80,
+          loopBars: [2, 4],
+          muted: [3, 1],
+          addSeconds: 12.5,
+          playedSpeedPct: 90,
+        }),
+        inRoot,
+      )
+      expect(r).toEqual({
+        ok: true,
+        value: {
+          path: P,
+          title: '七里香',
+          artist: '周杰伦',
+          speedPct: 80,
+          loopBars: [2, 4],
+          muted: [1, 3],
+          addSeconds: 12.5,
+          playedSpeedPct: 90,
+        },
+      })
+    })
+
+    it('accepts a body with only the required fields', () => {
+      expect(parsePracticeUpdate(body(), inRoot)).toEqual({
+        ok: true,
+        value: { path: P, title: '七里香', artist: '周杰伦' },
+      })
+    })
+
+    it('rejects a path outside the root, empty, or not a string', () => {
+      expect(parsePracticeUpdate(body({ path: '../x.gp5' }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ path: '/etc/passwd' }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ path: '' }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ path: 5 }), inRoot).ok).toBe(false)
+    })
+
+    it('rejects over-long titles and artists', () => {
+      expect(parsePracticeUpdate(body({ title: 'a'.repeat(301) }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ artist: 'a'.repeat(301) }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ title: '七'.repeat(300) }), inRoot).ok).toBe(true)
+    })
+
+    it('rejects speeds outside 15–175 or not integers', () => {
+      for (const speedPct of [14, 176, 1.5])
+        expect(parsePracticeUpdate(body({ speedPct }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ speedPct: 15 }), inRoot).ok).toBe(true)
+      expect(parsePracticeUpdate(body({ speedPct: 175 }), inRoot).ok).toBe(true)
+    })
+
+    it('rejects bad loop bars', () => {
+      for (const loopBars of [[3, 2], [0, 1], [1], 'x'])
+        expect(parsePracticeUpdate(body({ loopBars }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ loopBars: null }), inRoot)).toEqual({
+        ok: true,
+        value: { path: P, title: '七里香', artist: '周杰伦', loopBars: null },
+      })
+    })
+
+    it('rejects bad muted tracks', () => {
+      expect(parsePracticeUpdate(body({ muted: [-1] }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ muted: [64] }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ muted: 'x' }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ muted: 3 }), inRoot).ok).toBe(false)
+    })
+
+    it('dedupes and sorts muted tracks', () => {
+      const r = parsePracticeUpdate(body({ muted: [5, 1, 5, 0] }), inRoot)
+      expect(r.ok && r.value.muted).toEqual([0, 1, 5])
+    })
+
+    it('rejects a negative or non-finite addSeconds and clamps large ones', () => {
+      expect(parsePracticeUpdate(body({ addSeconds: -1 }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ addSeconds: NaN }), inRoot).ok).toBe(false)
+      const r = parsePracticeUpdate(body({ addSeconds: 9999 }), inRoot)
+      expect(r.ok && r.value.addSeconds).toBe(MAX_ADD_SECONDS)
+    })
+
+    it('rejects a bad playedSpeedPct', () => {
+      expect(parsePracticeUpdate(body({ playedSpeedPct: 14 }), inRoot).ok).toBe(false)
+      expect(parsePracticeUpdate(body({ playedSpeedPct: 200 }), inRoot).ok).toBe(false)
+    })
+  })
+
+  it('validates the remove body', () => {
+    expect(parsePracticePath({ path: P }, inRoot)).toEqual({ ok: true, value: P })
+    expect(parsePracticePath({ path: '../a.gp5' }, inRoot).ok).toBe(false)
+    expect(parsePracticePath({}, inRoot).ok).toBe(false)
+  })
+
+  describe('applyPracticeUpdate', () => {
+    it('creates a new record with defaults', () => {
+      const { list, record } = applyPracticeUpdate([], { path: P, title: 't', artist: 'a' }, 100)
+      expect(record).toEqual({
+        path: P,
+        title: 't',
+        artist: 'a',
+        speedPct: 100,
+        loopBars: null,
+        muted: [],
+        totalSeconds: 0,
+        maxSpeedPct: 0,
+        firstAt: 100,
+        lastAt: 100,
+      })
+      expect(list).toEqual([record])
+    })
+
+    it('keeps fields the update does not give', () => {
+      const old = rec({ speedPct: 80, loopBars: [1, 2], muted: [3] })
+      const { record } = applyPracticeUpdate([old], { ...body(), addSeconds: 5 }, 50)
+      expect(record.speedPct).toBe(80)
+      expect(record.loopBars).toEqual([1, 2])
+      expect(record.muted).toEqual([3])
+    })
+
+    it('clears the loop when loopBars is null', () => {
+      const old = rec({ loopBars: [1, 2] })
+      const { record } = applyPracticeUpdate([old], { ...body(), loopBars: null }, 50)
+      expect(record.loopBars).toBeNull()
+    })
+
+    it('overwrites title and artist, keeps firstAt, sets lastAt', () => {
+      const old = rec({ title: 'old', artist: 'old', firstAt: 10, lastAt: 20 })
+      const { record } = applyPracticeUpdate([old], { path: P, title: 'new', artist: 'new' }, 500)
+      expect(record.title).toBe('new')
+      expect(record.artist).toBe('new')
+      expect(record.firstAt).toBe(10)
+      expect(record.lastAt).toBe(500)
+    })
+
+    it('accumulates totalSeconds', () => {
+      const first = applyPracticeUpdate([], { ...body(), addSeconds: 10 }, 1)
+      const { record } = applyPracticeUpdate(first.list, { ...body(), addSeconds: 20 }, 2)
+      expect(record.totalSeconds).toBe(30)
+    })
+
+    it('updates maxSpeedPct only when time was added', () => {
+      const idle = applyPracticeUpdate([], { ...body(), playedSpeedPct: 150 }, 1)
+      expect(idle.record.maxSpeedPct).toBe(0)
+      const played = applyPracticeUpdate(
+        idle.list,
+        { ...body(), addSeconds: 10, playedSpeedPct: 150 },
+        2,
+      )
+      expect(played.record.maxSpeedPct).toBe(150)
+      const slower = applyPracticeUpdate(
+        played.list,
+        { ...body(), addSeconds: 10, playedSpeedPct: 120 },
+        3,
+      )
+      expect(slower.record.maxSpeedPct).toBe(150)
+    })
+
+    it('sorts the list by lastAt, newest first', () => {
+      const list = [rec({ path: 'a', lastAt: 5 }), rec({ path: 'b', lastAt: 9 })]
+      const { list: next } = applyPracticeUpdate(list, { path: 'c', title: '', artist: '' }, 7)
+      expect(next.map((r) => r.path)).toEqual(['b', 'c', 'a'])
+    })
+
+    it('caps the list at MAX_PRACTICE, dropping the oldest', () => {
+      const list: PracticeRecord[] = []
+      for (let i = 0; i < MAX_PRACTICE; i++) list.push(rec({ path: `p${i}`, lastAt: i + 1 }))
+      const { list: next } = applyPracticeUpdate(list, { path: 'new', title: '', artist: '' }, 1e9)
+      expect(next).toHaveLength(MAX_PRACTICE)
+      expect(next[0]!.path).toBe('new')
+      expect(next.some((r) => r.path === 'p0')).toBe(false)
+    })
+  })
+
+  it('removes a record by path', () => {
+    const list = [rec({ path: 'a' }), rec({ path: 'b' })]
+    expect(removePractice(list, 'a').map((r) => r.path)).toEqual(['b'])
+    expect(removePractice(list, 'zz')).toHaveLength(2)
+  })
+
+  describe('sanitizePractice', () => {
+    it('returns an empty list for a non-array', () => {
+      expect(sanitizePractice({ not: 'array' }, inRoot)).toEqual([])
+    })
+
+    it('drops invalid entries and fills defaults for missing fields', () => {
+      const out = sanitizePractice(
+        [
+          { ...body(), path: 'a.gp5', lastAt: 5, totalSeconds: 7, speedPct: 90, muted: [2, 0] },
+          { ...body(), path: '../x.gp5', lastAt: 6 },
+          { ...body(), path: 'b.gp5', speedPct: 14 },
+          { ...body(), path: 'c.gp5', lastAt: 9 },
+          'junk',
+          null,
+        ],
+        inRoot,
+      )
+      expect(out.map((r) => r.path)).toEqual(['c.gp5', 'a.gp5'])
+      expect(out[0]).toEqual({
+        path: 'c.gp5',
+        title: '七里香',
+        artist: '周杰伦',
+        speedPct: 100,
+        loopBars: null,
+        muted: [],
+        totalSeconds: 0,
+        maxSpeedPct: 0,
+        firstAt: 0,
+        lastAt: 9,
+      })
+      expect(out[1]).toMatchObject({ path: 'a.gp5', totalSeconds: 7, speedPct: 90, muted: [0, 2] })
+    })
+
+    it('clamps negative totals and resets an invalid maxSpeedPct', () => {
+      const out = sanitizePractice(
+        [
+          { ...body(), path: 'a.gp5', totalSeconds: -4, maxSpeedPct: 300 },
+          { ...body(), path: 'b.gp5', totalSeconds: 3, maxSpeedPct: 150 },
+        ],
+        inRoot,
+      )
+      const a = out.find((r) => r.path === 'a.gp5')!
+      const b = out.find((r) => r.path === 'b.gp5')!
+      expect(a.totalSeconds).toBe(0)
+      expect(a.maxSpeedPct).toBe(0)
+      expect(b.totalSeconds).toBe(3)
+      expect(b.maxSpeedPct).toBe(150)
+    })
   })
 })

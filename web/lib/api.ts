@@ -17,6 +17,39 @@ export interface FavoriteItem {
 }
 
 /** 搜索谱 filters: a format, a category id ("1-华语"), and the order. */
+/** 练习记录: one score's practice state and totals, kept on the server. */
+export interface PracticeRecord {
+  path: string
+  title: string
+  artist: string
+  /** Last playback speed, percent (15–175). */
+  speedPct: number
+  /** Last loop range as 1-based bar numbers [first, last], or null for none. */
+  loopBars: [number, number] | null
+  /** Indexes of the muted tracks. */
+  muted: number[]
+  /** Seconds of actual playback, all sessions. */
+  totalSeconds: number
+  /** Highest speed actually played, percent (0 when never played). */
+  maxSpeedPct: number
+  firstAt: number
+  lastAt: number
+}
+
+/** What the viewer sends: state to remember and, optionally, the playback since the last save. */
+export interface PracticeUpdate {
+  path: string
+  title: string
+  artist: string
+  speedPct?: number
+  loopBars?: [number, number] | null
+  muted?: number[]
+  /** Seconds played since the last save (the server adds them, at most 600 per call). */
+  addSeconds?: number
+  /** Highest speed during those seconds. */
+  playedSpeedPct?: number
+}
+
 export interface SearchOptions {
   fmt?: ScoreFormat | ''
   cat?: string
@@ -133,6 +166,11 @@ export const api = {
     call<FavoriteItem[]>('/api/favorites', { body: item }),
   removeFavorite: (path: string) =>
     call<FavoriteItem[]>('/api/favorites/remove', { body: { path } }),
+  /** All practice records, most recently practised first. */
+  practice: (signal?: AbortSignal) => call<PracticeRecord[]>('/api/practice', { signal }),
+  savePractice: (u: PracticeUpdate) => call<PracticeRecord>('/api/practice', { body: u }),
+  removePractice: (path: string) =>
+    call<PracticeRecord[]>('/api/practice/remove', { body: { path } }),
   text: (path: string, signal?: AbortSignal) =>
     call<{ text: string }>(`/api/text?p=${enc(path)}`, { signal }),
 }

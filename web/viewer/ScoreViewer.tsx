@@ -1,14 +1,16 @@
 import { useEffect, useRef, useState } from 'react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
-import { errorText, fetchBytes, fileUrl } from '../lib/api'
+import { errorText, fetchBytes, fileUrl, type PracticeUpdate } from '../lib/api'
 import { clampTranspose } from '../lib/transpose'
 import { cx } from '../lib/classes'
+import { loadPracticeFor, practiceFor, savePractice, savePracticeOnExit } from '../lib/practice'
 import { Notice } from '../components/ui'
 import { alphaTabUrls, applyTranspose, chooseEncoding, cleanHeader, loadAlphaTab } from './alphaTab'
 import {
   effectiveScale,
   isPhone,
+  isShortLandscape,
   loadPrefs,
   savePrefs,
   SPEED_MAX,
@@ -19,12 +21,27 @@ import {
   type StaffMode,
   type SheetMode,
 } from './scorePrefs'
+import {
+  gapMs,
+  loopStatus,
+  nextPass,
+  startLoop,
+  type LoopState,
+  type TrainerConfig,
+} from './practiceEngine'
+import { availableSoundFonts, soundFontUrl, type SoundFontId } from './soundFonts'
+import { hasFretboard, notesFromBeats, tuningLabels, type FretNote } from './fretboardNotes'
+import { Fretboard } from './Fretboard'
 import { Remote, useStar, type PopKind } from './Remote'
 
 /** After this long without a score, say the file is slow to read. */
 const SLOW_MS = 20000
 /** Playback needs the sound font; after this long without it, the playback keys are hidden. */
 const SOUND_WAIT_MS = 60000
+/** A larger sound font that has not loaded after this long is given up for the basic one. */
+const BIG_SOUND_WAIT_MS = 240000
+/** While playing, the practice time is saved this often. */
+const SAVE_EVERY_MS = 30000
 
 /** The sheet's own colours: the cursor, the selection and the highlight follow the pen blue. */
 const SHEET_CSS = `
@@ -32,7 +49,8 @@ const SHEET_CSS = `
 .score-sheet .at-surface .at-cursor-bar { background: color-mix(in srgb, var(--sheet-pen) 12%, transparent); }
 .score-sheet .at-surface .at-selection div { background: color-mix(in srgb, var(--sheet-pen) 22%, transparent); }
 .score-sheet .at-surface .at-highlight * { fill: var(--sheet-pen); stroke: var(--sheet-pen); }
-.score-sheet .at-surface { min-height: 12rem; }
+.score-sheet .at-surface { min-height: 12rem; position: relative; z-index: 0; isolation: isolate; }
+/* alphaTab's cursor layer (z-index 1000) stays inside the sheet, under the header, fretboard and remote. */
 `
 
 type Phase = 'loading' | 'ready' | 'error'
@@ -44,8 +62,11 @@ interface Props {
   pages: string[]
 }
 
+/** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
+const isManualLoop = (t: TrainerConfig) => t.gapBeats > 0 || t.countInEachLoop
+
 /** Loop range for the current choices: the user's selection, or the whole piece when none. */
-function syncLoop(a: AlphaTabApi, loop: boolean, hasSelection: boolean): void {
+function syncLoop(a: AlphaTabApi, loop: boolean, hasSelection: boolean, manual: boolean): void {
   if (!loop) {
     a.playbackRange = null
     a.isLooping = false
@@ -53,8 +74,20 @@ function syncLoop(a: AlphaTabApi, loop: boolean, hasSelection: boolean): void {
   }
   if (hasSelection) a.applyPlaybackRangeFromHighlight()
   else a.playbackRange = null
-  a.isLooping = true
+  a.isLooping = !manual
 }
+
+/** Highlights bars [first, last] (1-based) of the shown track, as if the student had dragged them. */
+function highlightBars(a: AlphaTabApi, s: model.Score, track: number, bars: [number, number]): void {
+  const staff = s.tracks[track]?.staves[0]
+  const first = staff?.bars[bars[0] - 1]?.voices[0]?.beats[0]
+  const lastVoice = staff?.bars[bars[1] - 1]?.voices[0]
+  const last = lastVoice?.beats[lastVoice.beats.length - 1]
+  if (first && last) a.highlightPlaybackRange(first, last)
+}
+
+const sameBars = (a: [number, number] | null, b: [number, number] | null) =>
+  a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1])
 
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
 export function ScoreViewer({ path, title, artist, pages }: Props) {
@@ -75,13 +108,22 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   const [speedPct, setSpeedPct] = useState(100)
   const [loop, setLoop] = useState(false)
   const [hasSelection, setHasSelection] = useState(false)
+  const [selBars, setSelBars] = useState<[number, number] | null>(null)
   const [countIn, setCountIn] = useState(true)
   const [metro, setMetro] = useState(false)
   const [solo, setSolo] = useState<Set<number>>(new Set())
   const [mute, setMute] = useState<Set<number>>(new Set())
+  const [volumes, setVolumes] = useState<number[]>([])
+  const [followAlong, setFollowAlong] = useState(false)
+  const [metroOnly, setMetroOnly] = useState(false)
+  const [loopState, setLoopState] = useState<LoopState | null>(null)
+  const [soundFonts, setSoundFonts] = useState<ReadonlySet<SoundFontId>>(() => new Set(['basic']))
+  const [activeNotes, setActiveNotes] = useState<FretNote[]>([])
+  const [headerH, setHeaderH] = useState(0)
   const [pop, setPop] = useState<PopKind | null>(null)
   const [collapsed, setCollapsed] = useState(false)
   const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
+  const [restoreNote, setRestoreNote] = useState('')
   const star = useStar({
     path,
     format: 'score' as ScoreFormat,
@@ -90,10 +132,47 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     artist,
   })
 
-  // alphaTab callbacks and key handling read the latest values from here.
-  const live = useRef({ prefs, transpose, loop, hasSelection, countIn, metro, speedPct })
-  live.current = { prefs, transpose, loop, hasSelection, countIn, metro, speedPct }
+  // alphaTab callbacks, timers and key handling read the latest values from here.
+  const live = useRef({
+    prefs,
+    transpose,
+    loop,
+    hasSelection,
+    countIn,
+    metro,
+    speedPct,
+    track,
+    loopState,
+    selBars,
+    mute,
+    score,
+  })
+  live.current = {
+    prefs,
+    transpose,
+    loop,
+    hasSelection,
+    countIn,
+    metro,
+    speedPct,
+    track,
+    loopState,
+    selBars,
+    mute,
+    score,
+  }
   const selRef = useRef(false)
+  const gapTimer = useRef<number | undefined>(undefined)
+  const fontRef = useRef<SoundFontId>('basic')
+  const playerReadyRef = useRef(false)
+  /** Practice time not yet sent, and whether the saved state may be written. */
+  const clock = useRef({ startedAt: 0, seconds: 0, maxSpeed: 0, restored: false })
+  const pendingBars = useRef<[number, number] | null>(null)
+
+  const cancelGap = () => {
+    window.clearTimeout(gapTimer.current)
+    gapTimer.current = undefined
+  }
 
   useEffect(() => {
     if (phase !== 'loading') return
@@ -101,21 +180,72 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     return () => window.clearTimeout(timer)
   }, [phase])
 
+  // The sticky fretboard sits under the site header.
+  useEffect(() => {
+    const header = document.querySelector('header')
+    if (!header) return
+    const measure = () => setHeaderH(header.getBoundingClientRect().height)
+    measure()
+    const ro = new ResizeObserver(measure)
+    ro.observe(header)
+    return () => ro.disconnect()
+  }, [])
+
+  // Practice records: sends the time played since the last save plus the state to keep.
+  const flushRef = useRef<(exit: boolean) => void>(() => {})
+  flushRef.current = (exit: boolean) => {
+    const c = clock.current
+    if (!c.restored) return
+    const now = Date.now()
+    const L = live.current
+    let secs = c.seconds
+    if (c.startedAt) {
+      secs += (now - c.startedAt) / 1000
+      c.startedAt = now
+    }
+    c.seconds = 0
+    const played = secs >= 1
+    // Only scores actually practised get a record; afterwards their state is kept too.
+    if (!played && !practiceFor(path)) return
+    const u: PracticeUpdate = {
+      path,
+      title,
+      artist,
+      speedPct: L.speedPct,
+      loopBars: L.selBars,
+      muted: [...L.mute].sort((a, b) => a - b),
+    }
+    if (played) {
+      u.addSeconds = Math.round(secs * 10) / 10
+      u.playedSpeedPct = Math.max(SPEED_MIN, Math.min(SPEED_MAX, c.maxSpeed || L.speedPct))
+    }
+    c.maxSpeed = c.startedAt ? L.speedPct : 0
+    if (exit) savePracticeOnExit(u)
+    else void savePractice(u)
+  }
+
   // Create the viewer once per file.
   useEffect(() => {
     const ac = new AbortController()
     let disposed = false
     let soundTimer: number | undefined
-    const playerReadyRef = { current: false }
+    let rendered = false
+    playerReadyRef.current = false
+    clock.current = { startedAt: 0, seconds: 0, maxSpeed: 0, restored: false }
+    pendingBars.current = null
     const run = async () => {
       try {
         const urls = alphaTabUrls()
-        const [bytes, at] = await Promise.all([
+        const [bytes, at, fonts] = await Promise.all([
           fetchBytes(fileUrl(path), ac.signal),
           loadAlphaTab(),
+          availableSoundFonts(),
         ])
         if (disposed || !host.current) return
+        setSoundFonts(fonts)
         const cur = live.current
+        const font: SoundFontId = fonts.has(cur.prefs.soundFont) ? cur.prefs.soundFont : 'basic'
+        fontRef.current = font
         const a = new at.AlphaTabApi(host.current, {
           core: { scriptFile: urls.script, fontDirectory: urls.fonts, useWorkers: true },
           importer: { encoding: chooseEncoding(at, bytes) },
@@ -129,7 +259,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           ...(isPhone() ? { notation: { elements: { scoreWordsAndMusic: false } } } : {}),
           player: {
             playerMode: at.PlayerMode.EnabledSynthesizer,
-            soundFont: urls.soundFont,
+            soundFont: soundFontUrl(font),
             scrollElement: (document.scrollingElement ?? document.documentElement) as HTMLElement,
             scrollMode: at.ScrollMode.Continuous,
             enableCursor: true,
@@ -146,25 +276,106 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           cleanHeader(s)
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
+          setVolumes(s.tracks.map(() => 100))
           setPhase('ready')
           // No sound font after a while: keep the notation, hide the playback keys.
           window.clearTimeout(soundTimer)
           soundTimer = window.setTimeout(() => {
             if (!disposed && !playerReadyRef.current) setSoundFailed(true)
           }, SOUND_WAIT_MS)
+          // Last time's speed, loop and muted tracks.
+          void loadPracticeFor(path).then((r) => {
+            if (disposed) return
+            if (r) {
+              setSpeedPct(r.speedPct)
+              setMute(new Set(r.muted.filter((i) => i < s.tracks.length)))
+              const bars =
+                r.loopBars && r.loopBars[1] <= s.masterBars.length ? r.loopBars : null
+              if (bars && rendered) highlightBars(a, s, live.current.track, bars)
+              else pendingBars.current = bars
+              const parts = [`${r.speedPct}%`]
+              if (bars) parts.push(bars[0] === bars[1] ? `第 ${bars[0]} 小节` : `第 ${bars[0]}–${bars[1]} 小节`)
+              if (r.speedPct !== 100 || bars || r.muted.length) {
+                setRestoreNote(`已恢复上次的练习：${parts.join(' · ')}`)
+                window.setTimeout(() => setRestoreNote(''), 4000)
+              }
+            }
+            clock.current.restored = true
+          })
         })
         a.renderStarted.on(() => setRendering(true))
-        a.renderFinished.on(() => setRendering(false))
+        a.renderFinished.on(() => {
+          setRendering(false)
+          // The loop range can be drawn only once the bars are laid out.
+          rendered = true
+          const bars = pendingBars.current
+          const s = live.current.score
+          if (bars && s) {
+            pendingBars.current = null
+            highlightBars(a, s, live.current.track, bars)
+          }
+        })
         a.soundFontLoad.on((e) => setSoundPct(Math.round((e.loaded / Math.max(1, e.total)) * 100)))
         a.playerReady.on(() => {
           playerReadyRef.current = true
           setSoundFailed(false)
           setReady(true)
         })
-        a.playerStateChanged.on((e) => setPlaying(e.state === 1))
+        // A sound font chosen later: playback is back as soon as it is in.
+        a.soundFontLoaded.on(() => {
+          if (playerReadyRef.current) setReady(true)
+        })
+        a.playerStateChanged.on((e) => {
+          const on = e.state === 1
+          setPlaying(on)
+          const c = clock.current
+          if (on && !c.startedAt) {
+            c.startedAt = Date.now()
+            c.maxSpeed = Math.max(c.maxSpeed, live.current.speedPct)
+          } else if (!on && c.startedAt) {
+            c.seconds += (Date.now() - c.startedAt) / 1000
+            c.startedAt = 0
+            flushRef.current(false)
+          }
+        })
         a.playerPositionChanged.on((e) =>
           setTime({ now: e.currentTime, end: e.endTime, tick: e.currentTick }),
         )
+        a.activeBeatsChanged.on((e) => {
+          if (live.current.prefs.fretboard)
+            setActiveNotes(notesFromBeats(e.activeBeats, live.current.track))
+        })
+        // One pass of the loop is over: count it, speed up, and (with a pause or a count-in)
+        // start the next one by hand.
+        a.playerFinished.on(() => {
+          const L = live.current
+          if (!L.loop || !L.loopState || L.loopState.done) return
+          const t = L.prefs.trainer
+          const next = nextPass(t, L.loopState)
+          setLoopState(next)
+          const manual = isManualLoop(t)
+          if (next.done) {
+            if (!manual) a.stop()
+            return
+          }
+          if (t.enabled) {
+            a.playbackSpeed = next.speedPct / 100
+            setSpeedPct(next.speedPct)
+          }
+          if (!manual) return
+          cancelGap()
+          const wait = gapMs(t.gapBeats, L.score?.tempo ?? 0, next.speedPct)
+          gapTimer.current = window.setTimeout(
+            () => {
+              gapTimer.current = undefined
+              if (!live.current.loop || !api.current) return
+              a.countInVolume = t.countInEachLoop ? 1 : 0
+              a.play()
+              a.countInVolume = live.current.countIn ? 1 : 0
+            },
+            Math.max(80, wait),
+          )
+        })
         // Setting the playback range fires this event again: apply it once, and only while
         // looping (otherwise just remember the selection, so dragging never clears itself).
         let applying = false
@@ -172,10 +383,15 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           const sel = Boolean(e.startBeat && e.endBeat)
           selRef.current = sel
           setHasSelection(sel)
+          const bars: [number, number] | null =
+            e.startBeat && e.endBeat
+              ? [e.startBeat.voice.bar.index + 1, e.endBeat.voice.bar.index + 1]
+              : null
+          setSelBars((old) => (sameBars(old, bars) ? old : bars))
           if (applying || !live.current.loop) return
           applying = true
           try {
-            syncLoop(a, true, sel)
+            syncLoop(a, true, sel, isManualLoop(live.current.prefs.trainer))
           } finally {
             applying = false
           }
@@ -192,10 +408,15 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
       }
     }
     void run()
+    const onHide = () => flushRef.current(true)
+    window.addEventListener('pagehide', onHide)
     return () => {
       disposed = true
       ac.abort()
+      window.removeEventListener('pagehide', onHide)
+      flushRef.current(true)
       window.clearTimeout(soundTimer)
+      cancelGap()
       api.current?.destroy()
       api.current = null
     }
@@ -206,6 +427,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     const a = api.current
     const t = score?.tracks[track]
     if (a && t) a.renderTracks([t])
+    setActiveNotes([])
   }, [track, score])
 
   // Notation and sheet: staff profile, zoom and colours (one re-render for all three).
@@ -218,8 +440,36 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     a.settings.fillFromJson({ display: { resources: sheetResources(prefs.sheet) } } as never)
     a.updateSettings()
     a.render()
-    savePrefs(prefs)
-  }, [prefs, score])
+  }, [prefs.staff, prefs.zoom, prefs.sheet, score]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => savePrefs(prefs), [prefs])
+
+  // 音色: swaps the sound font in place (the score and the position stay).
+  useEffect(() => {
+    const a = api.current
+    const id = prefs.soundFont
+    if (!a || !score || fontRef.current === id || !soundFonts.has(id)) return
+    fontRef.current = id
+    cancelGap()
+    a.stop()
+    setReady(false)
+    setSoundPct(0)
+    a.resetSoundFonts()
+    a.loadSoundFont(soundFontUrl(id), false)
+    if (id === 'basic') return
+    const timer = window.setTimeout(() => {
+      if (fontRef.current !== id || !api.current) return
+      setRestoreNote('高品质音色没能加载，已换回标准音色。')
+      window.setTimeout(() => setRestoreNote(''), 5000)
+      setPrefs((p) => ({ ...p, soundFont: 'basic' }))
+    }, BIG_SOUND_WAIT_MS)
+    const off = () => window.clearTimeout(timer)
+    a.soundFontLoaded.on(off)
+    return () => {
+      off()
+      a.soundFontLoaded.off(off)
+    }
+  }, [prefs.soundFont, score, soundFonts])
 
   // 变调: applied to the staves and the playback; the file's own transposition is kept aside.
   useEffect(() => {
@@ -233,18 +483,74 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
 
   useEffect(() => {
     if (api.current) api.current.playbackSpeed = speedPct / 100
+    const c = clock.current
+    if (c.startedAt) c.maxSpeed = Math.max(c.maxSpeed, speedPct)
   }, [speedPct])
   useEffect(() => {
     if (api.current) api.current.countInVolume = countIn ? 1 : 0
   }, [countIn])
   useEffect(() => {
-    if (api.current) api.current.metronomeVolume = metro ? 1 : 0
-  }, [metro])
-  useEffect(() => {
-    if (api.current && score) syncLoop(api.current, loop, selRef.current)
-  }, [loop, score])
+    if (api.current) api.current.metronomeVolume = metro || metroOnly ? 1 : 0
+  }, [metro, metroOnly])
 
-  // Solo / mute for the tracks: alphaTab keeps these per track.
+  // Muting: the student's M keys, plus 跟着练 (the shown track) and 只放节拍器 (everything).
+  useEffect(() => {
+    const a = api.current
+    if (!a || !score) return
+    score.tracks.forEach((t, i) =>
+      a.changeTrackMute([t], metroOnly || mute.has(i) || (followAlong && i === track)),
+    )
+  }, [mute, followAlong, metroOnly, track, score])
+
+  useEffect(() => {
+    const a = api.current
+    if (!a || !score) return
+    score.tracks.forEach((t, i) => a.changeTrackVolume([t], (volumes[i] ?? 100) / 100))
+  }, [volumes, score])
+
+  // Loop: the range, and how passes follow each other.
+  const manual = isManualLoop(prefs.trainer)
+  useEffect(() => {
+    if (api.current && score) syncLoop(api.current, loop, selRef.current, manual)
+    if (!loop) cancelGap()
+  }, [loop, score, manual])
+
+  // A new loop run (loop switched on, trainer switched, or another selection) starts at pass 1.
+  const trainerOn = prefs.trainer.enabled
+  const barsKey = selBars ? selBars.join('-') : ''
+  useEffect(() => {
+    if (!loop) {
+      setLoopState(null)
+      return
+    }
+    const s = startLoop(live.current.prefs.trainer, live.current.speedPct)
+    setLoopState(s)
+    if (live.current.prefs.trainer.enabled) setSpeedPct(s.speedPct)
+  }, [loop, trainerOn, barsKey])
+
+  // State to remember (speed, loop range, muted tracks), saved shortly after it settles.
+  const mutedKey = [...mute].sort((a, b) => a - b).join(',')
+  useEffect(() => {
+    if (!clock.current.restored) return
+    const timer = window.setTimeout(() => flushRef.current(false), 2000)
+    return () => window.clearTimeout(timer)
+  }, [speedPct, barsKey, mutedKey])
+
+  // While playing, the time is saved every half minute.
+  useEffect(() => {
+    if (!playing) return
+    const timer = window.setInterval(() => flushRef.current(false), SAVE_EVERY_MS)
+    return () => window.clearInterval(timer)
+  }, [playing])
+
+  // A phone turned sideways: the remote folds away while playing, to leave the sheet free.
+  useEffect(() => {
+    if (playing && isShortLandscape()) {
+      setPop(null)
+      setCollapsed(true)
+    }
+  }, [playing])
+
   const toggleSolo = (i: number) => {
     const a = api.current
     const t = score?.tracks[i]
@@ -258,31 +564,46 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
       return next
     })
   }
-  const toggleMute = (i: number) => {
-    const a = api.current
-    const t = score?.tracks[i]
-    if (!a || !t) return
-    const on = !mute.has(i)
-    a.changeTrackMute([t], on)
+  const toggleMute = (i: number) =>
     setMute((prev) => {
       const next = new Set(prev)
-      if (on) next.add(i)
-      else next.delete(i)
+      if (next.has(i)) next.delete(i)
+      else next.add(i)
       return next
     })
-  }
 
   // Playback keys.
   const playable = ready && !soundFailed
   const togglePlay = () => {
-    if (playable) api.current?.playPause()
+    if (!playable) return
+    if (gapTimer.current !== undefined) {
+      // Paused between two passes: stay stopped.
+      cancelGap()
+      return
+    }
+    // After the last pass, play starts a new run from pass 1.
+    if (live.current.loop && live.current.loopState?.done) {
+      const s = startLoop(live.current.prefs.trainer, live.current.speedPct)
+      setLoopState(s)
+      if (live.current.prefs.trainer.enabled) {
+        setSpeedPct(s.speedPct)
+        if (api.current) api.current.playbackSpeed = s.speedPct / 100
+      }
+    }
+    api.current?.playPause()
   }
   const backToStart = () => {
     const a = api.current
     if (!a || !playable) return
+    cancelGap()
     const start = a.playbackRange?.startTick ?? 0
     a.stop()
     a.tickPosition = start
+    if (live.current.loop) {
+      const s = startLoop(live.current.prefs.trainer, live.current.speedPct)
+      setLoopState(s)
+      if (live.current.prefs.trainer.enabled) setSpeedPct(s.speedPct)
+    }
   }
   const setSpeed = (pct: number) =>
     setSpeedPct(Math.max(SPEED_MIN, Math.min(SPEED_MAX, Math.round(pct))))
@@ -291,6 +612,7 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     setCollapsed(false)
     setPop((cur) => (cur === k ? null : k))
   }
+  const toggleFretboard = () => setPrefs((p) => ({ ...p, fretboard: !p.fretboard }))
 
   // Keyboard: on the viewer only, never while typing.
   const keyRef = useRef<(e: KeyboardEvent) => void>(() => {})
@@ -314,6 +636,8 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
     else if (k === 's') openPop('speed')
     else if (k === 't') openPop('tracks')
     else if (k === 'k') openPop('key')
+    else if (k === 'p') openPop('practice')
+    else if (k === 'b') toggleFretboard()
     else if (k === 'c') setCountIn((v) => !v)
     else if (k === 'm') toggleMute(track)
     else if (k === 'f') void star.toggle()
@@ -344,6 +668,14 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
   }
   const loaded = phase === 'ready'
   const sound: 'loading' | 'ready' | 'off' = soundFailed ? 'off' : ready ? 'ready' : 'loading'
+  const shownTrack = tracks[track]
+  const showFretboard = prefs.fretboard && shownTrack !== undefined && hasFretboard(shownTrack)
+  const status =
+    loop && loopState
+      ? loopState.done
+        ? `已练完 ${loopState.pass} 遍`
+        : loopStatus(prefs.trainer, loopState)
+      : null
 
   return (
     <div className="score-bleed">
@@ -367,6 +699,19 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           paddingBottom: loaded ? 'calc(230px + env(safe-area-inset-bottom, 0px))' : 16,
         }}
       >
+        {showFretboard && (
+          <div
+            className="sticky z-20 -mx-3 mb-2 border-b border-[color:var(--sheet-line)] px-3 py-1"
+            style={{ top: headerH, background: 'var(--sheet-bg)' }}
+          >
+            <Fretboard labels={tuningLabels(shownTrack)} notes={activeNotes} />
+          </div>
+        )}
+        {prefs.fretboard && shownTrack && !showFretboard && loaded && (
+          <p className="mb-2 text-xs text-[color:var(--sheet-dim)]">
+            这一轨不是弦乐器的六线谱，没有指板可显示。
+          </p>
+        )}
         {phase === 'loading' && (
           <div
             role="status"
@@ -438,7 +783,24 @@ export function ScoreViewer({ path, title, artist, pages }: Props) {
           starred={star.starred}
           onStar={() => void star.toggle()}
           downloadHref={fileUrl(path, true)}
-          note={star.note}
+          note={star.note || restoreNote}
+          practiceActive={(loop && trainerOn) || followAlong || metroOnly}
+          followAlong={followAlong}
+          onFollowAlong={() => setFollowAlong((v) => !v)}
+          metroOnly={metroOnly}
+          onMetroOnly={() => setMetroOnly((v) => !v)}
+          trainer={prefs.trainer}
+          onTrainer={(t: TrainerConfig) => setPrefs((p) => ({ ...p, trainer: t }))}
+          loopStatus={status}
+          volumes={volumes}
+          onVolume={(i: number, pct: number) =>
+            setVolumes((v) => v.map((x, j) => (j === i ? pct : x)))
+          }
+          fretboard={prefs.fretboard}
+          onFretboard={toggleFretboard}
+          soundFonts={soundFonts}
+          soundFont={prefs.soundFont}
+          onSoundFont={(id: SoundFontId) => setPrefs((p) => ({ ...p, soundFont: id }))}
         />
       )}
     </div>
