@@ -9,7 +9,7 @@ export interface ViewerRoute {
   pages: string[]
   title: string
   artist: string
-  /** Opened from the band's setlist: that band song's id (parts, rehearsal speed, 一起播放). */
+  /** Opened from the band's setlist: that band song's id (parts, rehearsal speed, 排练). */
   band: string
   /** Opened from the drum editor (试听): show the drum part right away. */
   drums: boolean

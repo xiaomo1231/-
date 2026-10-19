@@ -1,6 +1,6 @@
 /**
  * Shapes shared by the score server (server/) and its web page (web/): accounts,
- * the band (乐队), the ensemble index (找乐队谱) and live rehearsal (一起播放).
+ * the band (乐队), the ensemble index (找乐队谱) and the rehearsal (排练).
  * Types only — no code, so both sides can import it.
  */
 
@@ -184,7 +184,7 @@ export interface BarComment {
 
 /** A device connected to the rehearsal (one browser tab). */
 export interface RehearsalDevice {
-  /** Random id kept by the browser (localStorage). */
+  /** Random id kept by the browser tab (sessionStorage). */
   deviceId: string
   userId: string
   /** e.g. "iPad", "电脑", "手机". */
@@ -413,36 +413,6 @@ export interface EnsembleResult {
   toIndex: number
   indexing: boolean
 }
-
-// ---------------------------------------------------------------------------
-// live rehearsal (一起播放)
-// ---------------------------------------------------------------------------
-
-/**
- * The shared transport of one band song. Times are server epoch ms: a follower
- * starts playing tick `tick` at `startAt` (its own clock corrected by the measured offset).
- */
-export interface LiveState {
-  songId: string
-  leaderId: string | null
-  playing: boolean
-  tick: number
-  speedPct: number
-  /** When `playing`: server time at which `tick` sounds (after the shared count-in). */
-  startAt: number
-  /** Bumped on every change, so a client ignores stale events. */
-  seq: number
-  /** Members connected to this song right now. */
-  present: string[]
-}
-
-/** POST /api/live/command (leader only, except 'lead' which claims or releases the lead). */
-export type LiveCommand =
-  | { songId: string; type: 'lead'; take: boolean }
-  | { songId: string; type: 'play'; tick: number; speedPct: number }
-  | { songId: string; type: 'pause'; tick: number }
-  | { songId: string; type: 'seek'; tick: number }
-  | { songId: string; type: 'speed'; speedPct: number }
 
 // ---------------------------------------------------------------------------
 // songs: the versions of one song, and the song's key (歌曲标识)

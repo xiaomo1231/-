@@ -18,8 +18,6 @@ import type {
   RehearsalCommandBody,
   RehearsalState,
   AddBandSongBody,
-  LiveCommand,
-  LiveState,
   BandState,
   ComboRecipe,
   ConversionRecord,
@@ -289,8 +287,6 @@ export const api = {
     call<LibraryJianpu[]>(`/api/jianpu?path=${enc(path)}`, { signal }),
   // 排练
   serverTime: () => call<{ now: number }>('/api/time'),
-  /** Old per-song 一起播放 (replaced by the rehearsal; kept until its files are removed). */
-  liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),
   rehearsal: (signal?: AbortSignal) => call<RehearsalState>('/api/rehearsal', { signal }),
   rehearsalCommand: (b: RehearsalCommandBody) =>
     call<RehearsalState>('/api/rehearsal/command', { body: b }),
