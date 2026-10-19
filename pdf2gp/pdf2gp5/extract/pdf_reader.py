@@ -1,0 +1,198 @@
+"""Low-level PDF access: positioned characters and line segments per page."""
+
+from __future__ import annotations
+
+import io
+import re
+from dataclasses import dataclass, field
+
+import pdfplumber
+
+from ..i18n import tr
+
+# Typographic dashes some PDF generators substitute for ASCII hyphens.
+_DASHES = {"‐", "‑", "‒", "–", "—", "―", "−", "─"}
+
+
+@dataclass(frozen=True)
+class Char:
+    text: str
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+    font: str = ""  # font name without the subset prefix, e.g. "Edwin-Bold"
+
+    @property
+    def bold(self) -> bool:
+        return "bold" in self.font.lower()
+
+    @property
+    def italic(self) -> bool:
+        name = self.font.lower()
+        return "italic" in name or "oblique" in name
+
+    @property
+    def xc(self) -> float:
+        return (self.x0 + self.x1) / 2
+
+    @property
+    def yc(self) -> float:
+        return (self.top + self.bottom) / 2
+
+
+@dataclass(frozen=True)
+class Segment:
+    x0: float
+    x1: float
+    top: float
+    bottom: float
+    rising: bool | None = None  # straight oblique stroke: True when it goes up left to right
+
+    @property
+    def is_horizontal(self) -> bool:
+        return (self.bottom - self.top) <= 1.5 and (self.x1 - self.x0) > 3 * (self.bottom - self.top + 0.1)
+
+    @property
+    def is_vertical(self) -> bool:
+        return (self.x1 - self.x0) <= 1.5 and (self.bottom - self.top) > 3 * (self.x1 - self.x0 + 0.1)
+
+
+@dataclass
+class TextLine:
+    chars: list[Char]
+
+    @property
+    def text(self) -> str:
+        return "".join(c.text for c in self.chars)
+
+    @property
+    def top(self) -> float:
+        return min(c.top for c in self.chars)
+
+    @property
+    def bottom(self) -> float:
+        return max(c.bottom for c in self.chars)
+
+    @property
+    def yc(self) -> float:
+        return (self.top + self.bottom) / 2
+
+
+@dataclass
+class Page:
+    number: int
+    width: float
+    height: float
+    chars: list[Char]
+    segments: list[Segment]
+    curves: list[Segment] = field(default_factory=list)  # bounding boxes of curved paths
+    images: int = 0  # pictures drawn on the page (a print saved as PDF is one picture per page)
+
+
+class PdfReadError(Exception):
+    """Raised when the PDF cannot be opened or exceeds processing limits."""
+
+
+class PdfTooLongError(PdfReadError):
+    """The PDF has more pages than the converter reads."""
+
+
+def _normalize(text: str) -> str:
+    return "-" if text in _DASHES else text
+
+
+# Values PDF producers write when the author left the field empty.
+_PLACEHOLDERS = {"untitled", "anonymous", "unknown", "author", "title", "user", "admin", "none"}
+_GENERATOR_PREFIX = re.compile(r"^\s*microsoft\s+(?:word|excel|powerpoint)\s*-\s*", re.IGNORECASE)
+
+
+def _document_info(metadata: dict) -> dict[str, str]:
+    """Keep only short plain-text Title/Author entries from the PDF info dictionary."""
+    info: dict[str, str] = {}
+    for key in ("Title", "Author"):
+        value = metadata.get(key)
+        if isinstance(value, bytes):
+            value = value.decode("utf-8", errors="ignore")
+        if not isinstance(value, str):
+            continue
+        value = _GENERATOR_PREFIX.sub("", value).strip()
+        if value and value.lower() not in _PLACEHOLDERS:
+            info[key] = value[:200]
+    return info
+
+
+def _x_span(char: dict) -> tuple[float, float]:
+    """Horizontal extent of a character. A music-font glyph turned on its side (a wavy arpeggio
+    line) is reported with the box of the upright glyph, beside where it is drawn: centre it on
+    its origin instead."""
+    matrix = char.get("matrix")
+    if not char.get("upright", True) and matrix and "\ue000" <= char["text"][:1] <= "\uf8ff":
+        half = float(char.get("size", 0.0)) / 2
+        return float(matrix[4]) - half, float(matrix[4]) + half
+    return float(char["x0"]), float(char["x1"])
+
+
+def _rising(line: dict) -> bool | None:
+    """Direction of a straight oblique line (points are (x, top)); None if axis-aligned."""
+    points = line.get("pts") or []
+    if len(points) != 2:
+        return None
+    (xa, ya), (xb, yb) = sorted((float(x), float(y)) for x, y in points)
+    if abs(xb - xa) < 0.5 or abs(yb - ya) < 0.5:
+        return None
+    return yb < ya
+
+
+def read_document(data: bytes, max_pages: int) -> tuple[list[Page], dict[str, str]]:
+    """Pages plus the document's Title/Author metadata (if any)."""
+    try:
+        pdf = pdfplumber.open(io.BytesIO(data))
+    except Exception as exc:  # pdfminer raises many unrelated exception types
+        raise PdfReadError(
+            tr("O ficheiro não é um PDF válido ou está corrompido.", "The file is not a valid PDF or is corrupted.")
+        ) from exc
+    pages: list[Page] = []
+    with pdf:
+        info = _document_info(pdf.metadata or {})
+        if len(pdf.pages) > max_pages:
+            raise PdfTooLongError(
+                tr(
+                    f"O PDF tem {len(pdf.pages)} páginas; o máximo é {max_pages}.",
+                    f"The PDF has {len(pdf.pages)} pages; the maximum is {max_pages}.",
+                )
+            )
+        for index, page in enumerate(pdf.pages, start=1):
+            chars = [
+                Char(
+                    _normalize(c["text"]),
+                    *_x_span(c),
+                    float(c["top"]),
+                    float(c["bottom"]),
+                    str(c.get("fontname", "")).split("+")[-1],
+                )
+                for c in page.chars
+                if c.get("text") and not c["text"].isspace()
+            ]
+            segments = [
+                Segment(float(o["x0"]), float(o["x1"]), float(o["top"]), float(o["bottom"]), _rising(o))
+                for o in page.lines
+            ] + [Segment(float(o["x0"]), float(o["x1"]), float(o["top"]), float(o["bottom"])) for o in page.rects]
+            curves = [Segment(float(o["x0"]), float(o["x1"]), float(o["top"]), float(o["bottom"])) for o in page.curves]
+            pages.append(Page(index, float(page.width), float(page.height), chars, segments, curves, len(page.images)))
+    return pages, info
+
+
+def group_lines(chars: list[Char]) -> list[TextLine]:
+    """Group characters into text lines by vertical overlap, ordered top to bottom."""
+    lines: list[list[Char]] = []
+    for char in sorted(chars, key=lambda c: (c.yc, c.x0)):
+        if lines:
+            last = lines[-1]
+            ref = last[0]
+            tolerance = max(0.35 * (ref.bottom - ref.top), 1.0)
+            if abs(char.yc - ref.yc) <= tolerance:
+                last.append(char)
+                continue
+        lines.append([char])
+    return [TextLine(sorted(line, key=lambda c: c.x0)) for line in lines]

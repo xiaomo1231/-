@@ -15,6 +15,8 @@ export interface ViewerRoute {
   drums: boolean
   /** A 组合乐队谱 recipe id: the parts it lists are put onto this (base) file. */
   combo: string
+  /** A PDF 转换版 id: the converted GP5 is shown instead of the PDF at `path`. */
+  conv: string
 }
 
 export type Route =
@@ -86,6 +88,7 @@ export function parseHash(hash: string): Route {
       band: qs.get('b') ?? '',
       drums: qs.get('drums') === '1',
       combo: qs.get('combo') ?? '',
+      conv: qs.get('conv') ?? '',
     }
   }
   return { kind: 'home' }

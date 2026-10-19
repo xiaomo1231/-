@@ -38,3 +38,7 @@ server-assets/soundfonts/
 server-assets/soundfonts-original/
 server-assets/drumify/
 server-assets/gmd/
+
+# PDF 转谱（pdf2gp/）的本地 Python 环境
+pdf2gp/.venv/
+pdf2gp/**/__pycache__/

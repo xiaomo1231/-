@@ -25,6 +25,11 @@ cpSync(path.join(root, 'server-dist', 'server.mjs'), path.join(dest, 'server.mjs
 const drumifySrc = path.join(root, 'server-assets', 'drumify')
 rmSync(path.join(dest, 'drumify'), { recursive: true, force: true })
 if (existsSync(drumifySrc)) cpSync(drumifySrc, path.join(dest, 'drumify'), { recursive: true })
+// PDF-to-GP5 helper (experimental, Python): its sources are replaced; the student's own pdf2gp/.venv is left alone.
+cpSync(path.join(root, 'pdf2gp'), path.join(dest, 'pdf2gp'), {
+  recursive: true,
+  filter: (src) => !/[\\/](\.venv|__pycache__)([\\/]|$)/.test(src),
+})
 
 const lf = (s) => s.replace(/\r\n/g, '\n')
 const crlf = (s) => lf(s).replace(/\n/g, '\r\n')
@@ -189,6 +194,10 @@ Tailscale 只在你自己的设备之间建立加密通道。**不要在路由�
 ## 更新网页版
 
 在律动工坊项目里运行 \`npm run export:web\`，会重新生成并覆盖这里的 \`server.mjs\` 和 \`web/\`，你的 \`config.env\` 和 \`data/\` 不会被动。然后把新的文件拷到 Mac 上，重启一次。
+
+## PDF 转谱（实验）
+
+PDF 转可播放谱（实验）需要在这台电脑上装 Python 3.11 以上，然后运行一次 \`pdf2gp/setup.sh\`（Mac）或 \`pdf2gp\\setup.bat\`（Windows）。不装也不影响其他功能。只有用户在网页上点了「转换」才会转换那一个文件。
 
 ## 安全
 

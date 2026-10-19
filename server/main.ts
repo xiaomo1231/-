@@ -88,6 +88,14 @@ import { generateFromTemplates } from '../src/songs/drumGenerate'
 import { buildSongIndex, songInfo } from './songs'
 import { ComboError, ComboStore, canEditCombo, parseSaveCombo } from './combos'
 import {
+  ConversionError,
+  ConversionQueue,
+  ConversionStore,
+  conversionStatus,
+  convertPdf,
+  resolvePdf2gp,
+} from './conversions'
+import {
   MAX_SHEET_BYTES,
   SheetError,
   SheetStore,
@@ -233,6 +241,8 @@ let ensembles: EnsembleIndex
 let drums: DrumStore
 let sheets: SheetStore
 let combos: ComboStore
+let conversions: ConversionStore
+const conversionQueue = new ConversionQueue()
 const drumLib = loadTemplates()
 const drumEngines: DrumEngines = {
   template: (song, o) =>
@@ -763,6 +773,96 @@ function bandCanOpen(rel: string): boolean {
   })
 }
 
+/** The Python PDF → GP5 helper: next to server.mjs in the export, or in the project in development. */
+function pdf2gpTool() {
+  return resolvePdf2gp([path.dirname(fileURLToPath(import.meta.url)), process.cwd()])
+}
+
+/** PDF 转换版: a PDF converted only when a user asks for it, kept in SCORES_DATA/conversions/. */
+async function handleConversions(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  const p = url.pathname
+  const allowed = (rel: string) => {
+    if (!canBrowse(me) && !bandCanOpen(rel))
+      throw new HttpError(403, '你的账号只能处理乐队歌单里的谱子。')
+  }
+  try {
+    if (p === '/api/conversions/status') return sendJson(res, 200, conversionStatus(pdf2gpTool()))
+    if (p === '/api/conversions') {
+      const rel = url.searchParams.get('path') ?? ''
+      allowed(rel)
+      const key = songOfPath(rel).songKey
+      return sendJson(res, 200, conversions.list(key).map((c) => conversions.toRecord(c, me.id)))
+    }
+    if (p === '/api/conversions/get' || p === '/api/conversions/file') {
+      const item = conversions.get(url.searchParams.get('id') ?? '')
+      if (!item) return sendJson(res, 404, { error: '找不到这个转换版。' })
+      allowed(item.sourcePath)
+      if (p === '/api/conversions/get') return sendJson(res, 200, conversions.toRecord(item, me.id))
+      const file = conversions.filePath(item.id)
+      const st = await fs.promises.stat(file)
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream',
+        'Content-Length': st.size,
+        'Cache-Control': 'private, max-age=3600',
+        'Content-Disposition': attachmentDisposition(`${item.title || '转换'}（PDF 转换）.gp5`),
+      })
+      pipeline(fs.createReadStream(file), res, () => {})
+      return
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const body = await readJsonBody(req)
+    if (p === '/api/conversions/start') {
+      const rel = typeof body.path === 'string' ? body.path : ''
+      allowed(rel)
+      if (!rel.toLowerCase().endsWith('.pdf')) throw new HttpError(400, '只能转换 PDF 文件。')
+      const tool = pdf2gpTool()
+      if (!tool) throw new HttpError(503, conversionStatus(null).reason ?? '服务器还没装 PDF 转换组件。')
+      const real = await resolveRealFile(cfg.root, realRoot, rel)
+      if (!real) return sendJson(res, 404, { error: '找不到文件。' })
+      const info = songOfPath(rel)
+      log(`转换 PDF：${rel}`)
+      const record = await convertPdf({
+        tool,
+        queue: conversionQueue,
+        store: conversions,
+        absPdf: real,
+        sourcePath: rel,
+        songKey: info.songKey,
+        title: info.title,
+        artist: info.artist,
+        userId: me.id,
+        tmpDir: path.join(cfg.dataDir, 'tmp'),
+        now: Date.now(),
+      })
+      return sendJson(res, 200, record)
+    }
+    const item = conversions.get(typeof body.id === 'string' ? body.id : '')
+    if (!item) return sendJson(res, 404, { error: '找不到这个转换版。' })
+    allowed(item.sourcePath)
+    if (p === '/api/conversions/rate') {
+      const stars = typeof body.stars === 'number' ? body.stars : -1
+      await conversions.rate(item.id, me.id, stars)
+      const fresh = conversions.get(item.id)
+      return sendJson(res, 200, fresh ? conversions.toRecord(fresh, me.id) : null)
+    }
+    if (p === '/api/conversions/remove') {
+      if (item.createdBy !== me.id && me.role !== 'admin')
+        throw new HttpError(403, '只有转换的人或管理员可以删除。')
+      await conversions.remove(item.id)
+      return sendJson(res, 200, { ok: true })
+    }
+    return sendJson(res, 404, { error: '找不到这个接口。' })
+  } catch (err) {
+    if (err instanceof ConversionError) throw new HttpError(err.status, err.message)
+    throw err
+  }
+}
+
 /** Every score file of the library, for the background track reader (找乐队谱). */
 function startEnsembles(lib: LoadedLibrary): void {
   const files: Array<{ path: string; title: string; artist: string }> = []
@@ -842,6 +942,8 @@ async function handleApi(
   if (p === '/api/song' || p === '/api/sheets' || p.startsWith('/api/sheets/'))
     return handleSongs(req, res, url, me)
   if (p === '/api/combos' || p.startsWith('/api/combos/')) return handleCombos(req, res, url, me)
+  if (p === '/api/conversions' || p.startsWith('/api/conversions/'))
+    return handleConversions(req, res, url, me)
 
   const routes: Record<
     string,
@@ -1135,6 +1237,7 @@ async function main(): Promise<void> {
   drums = await DrumStore.load(cfg.dataDir, inRoot)
   sheets = await SheetStore.load(cfg.dataDir)
   combos = await ComboStore.load(cfg.dataDir, inRoot)
+  conversions = await ConversionStore.load(cfg.dataDir)
   ensembles = new EnsembleIndex(cfg.root, cfg.dataDir)
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 

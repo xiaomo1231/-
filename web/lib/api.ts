@@ -10,6 +10,8 @@ import type {
   AddBandSongBody,
   BandState,
   ComboRecipe,
+  ConversionRecord,
+  ConversionStatus,
   EnsembleResult,
   SaveComboBody,
   SheetUpload,
@@ -243,6 +245,19 @@ export const api = {
     call<ComboRecipe>(`/api/combos/get?id=${enc(id)}`, { signal }),
   saveCombo: (b: SaveComboBody) => call<ComboRecipe>('/api/combos/save', { body: b }),
   removeCombo: (id: string) => call<{ ok: boolean }>('/api/combos/remove', { body: { id } }),
+  // PDF 转换版
+  conversionStatus: () => call<ConversionStatus>('/api/conversions/status'),
+  conversions: (path: string, signal?: AbortSignal) =>
+    call<ConversionRecord[]>(`/api/conversions?path=${enc(path)}`, { signal }),
+  conversion: (id: string, signal?: AbortSignal) =>
+    call<ConversionRecord>(`/api/conversions/get?id=${enc(id)}`, { signal }),
+  /** Converts one PDF (only when the user asks); can take up to a minute. */
+  startConversion: (path: string) =>
+    call<ConversionRecord>('/api/conversions/start', { body: { path } }),
+  rateConversion: (id: string, stars: number) =>
+    call<ConversionRecord>('/api/conversions/rate', { body: { id, stars } }),
+  removeConversion: (id: string) =>
+    call<{ ok: boolean }>('/api/conversions/remove', { body: { id } }),
   // 一起播放
   serverTime: () => call<{ now: number }>('/api/time'),
   liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),
@@ -289,4 +304,9 @@ export async function fetchBytes(url: string, signal?: AbortSignal): Promise<Uin
 /** An uploaded sheet's file (image or PDF), served with the session cookie. */
 export function sheetFileUrl(id: string): string {
   return `/api/sheets/file?id=${encodeURIComponent(id)}`
+}
+
+/** A converted GP5 file (PDF 转换版). */
+export function conversionFileUrl(id: string): string {
+  return `/api/conversions/file?id=${encodeURIComponent(id)}`
 }

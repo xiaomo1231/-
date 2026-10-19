@@ -1,0 +1,12 @@
+# PDF 文字六线谱 -> GP5 转换（pdf2gp/convert_cli.py）所需的包；版本已固定。
+pdfplumber==0.11.10
+pdfminer.six==20260107
+PyGuitarPro==0.9.3
+# 以下为上面三个包自己需要的依赖（pip 解析得到的版本）
+attrs==26.1.0
+pillow==12.3.0
+pypdfium2==5.14.0
+charset-normalizer==3.5.2
+cryptography==50.0.2
+cffi==2.1.1
+pycparser==3.11

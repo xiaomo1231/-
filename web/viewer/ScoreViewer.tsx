@@ -9,6 +9,9 @@ import { Notice } from '../components/ui'
 import { useBand } from '../lib/band'
 import { canBrowseLibrary, useMe } from '../lib/session'
 import { hrefCombine } from '../lib/combos'
+import { hrefViewer } from '../lib/route'
+import { StarRating } from '../components/StarRating'
+import type { ConversionRecord } from '../lib/api'
 import { useLiveSync, type LivePlayer } from './liveSync'
 import { LiveBar } from './LiveBar'
 import { trackLabels } from './trackNames'
@@ -22,7 +25,7 @@ import {
 import { combine, exportCombined, unrollRepeats } from '@/songs/combineScores'
 import { usedPieces, visiblePieces } from '@/songs/drumPart'
 import type { DrumPart } from '@/songs/drumTypes'
-import { api as server } from '../lib/api'
+import { api as server, conversionFileUrl } from '../lib/api'
 import { hrefDrums } from '../lib/route'
 import { DrumKey } from './DrumKey'
 import { SheetsPanel } from './SheetsPanel'
@@ -97,6 +100,8 @@ interface Props {
   showDrums: boolean
   /** 组合乐队谱 recipe id ('' = the file as it is). */
   combo: string
+  /** PDF 转换版 id: play the converted GP5 of the PDF at `path` ('' = none). */
+  conv: string
 }
 
 /** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
@@ -127,7 +132,7 @@ const sameBars = (a: [number, number] | null, b: [number, number] | null) =>
   a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1])
 
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
-export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo }: Props) {
+export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo, conv }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -162,6 +167,21 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
   const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
   const [restoreNote, setRestoreNote] = useState('')
   const [sheetsOpen, setSheetsOpen] = useState(false)
+  /** PDF 转换版: its record (for 用户品鉴). */
+  const [convRec, setConvRec] = useState<ConversionRecord | null>(null)
+  useEffect(() => {
+    if (!conv) return
+    let cancelled = false
+    server
+      .conversion(conv)
+      .then((r) => {
+        if (!cancelled) setConvRec(r)
+      })
+      .catch(() => undefined)
+    return () => {
+      cancelled = true
+    }
+  }, [conv])
   /** The saved drum part (if any), the track built from it, and the file's own drum track. */
   const [drums, setDrums] = useState<{
     part: DrumPart | null
@@ -349,7 +369,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
       try {
         const urls = alphaTabUrls()
         const [bytes, at, fonts, savedDrums] = await Promise.all([
-          fetchBytes(fileUrl(path), ac.signal),
+          fetchBytes(conv ? conversionFileUrl(conv) : fileUrl(path), ac.signal),
           loadAlphaTab(),
           availableSoundFonts(),
           server.drums(path, ac.signal).catch(() => null),
@@ -619,7 +639,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
       api.current?.destroy()
       api.current = null
     }
-  }, [path, soundFontChoice, combo])
+  }, [path, soundFontChoice, combo, conv])
 
   // Band song: show this member's own part, play along with the others, at the band's speed.
   const bandApplied = useRef('')
@@ -959,6 +979,39 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           )}
         </div>
       )}
+      {convRec && (
+        <div className="gutter mx-auto mb-3 w-full max-w-[1180px] rounded-lg border border-border px-3 py-2">
+          <p className="m-0 text-sm">
+            <span className="font-bold">PDF 转换版（实验）</span>
+            <span className="text-muted-foreground">
+              {' '}
+              · {convRec.bars} 小节 · 请对照
+              <a
+                className="mx-1 underline-offset-4 hover:underline"
+                href={hrefViewer({ path, format: 'pdf', title, artist })}
+              >
+                原 PDF
+              </a>
+              检查，尤其是节奏。
+            </span>
+          </p>
+          <div className="mt-1 flex flex-wrap items-center gap-x-3">
+            <span className="text-xs text-muted-foreground">好不好用？给它打分：</span>
+            <StarRating
+              size="sm"
+              value={convRec.rating.average}
+              count={convRec.rating.count}
+              mine={convRec.myRating}
+              onRate={(stars) => {
+                void server
+                  .rateConversion(convRec.id, stars)
+                  .then(setConvRec)
+                  .catch(() => undefined)
+              }}
+            />
+          </div>
+        </div>
+      )}
       {/* 上传的简谱: many band scores have no singer's part; members upload one here. */}
       <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
         {me && canBrowseLibrary(me) && (
@@ -1111,7 +1164,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           onSheet={(s: SheetMode) => setPrefs((p) => ({ ...p, sheet: s }))}
           starred={star.starred}
           onStar={() => void star.toggle()}
-          downloadHref={fileUrl(path, true)}
+          downloadHref={conv ? conversionFileUrl(conv) : fileUrl(path, true)}
           note={star.note || restoreNote}
           practiceActive={(loop && trainerOn) || followAlong || metroOnly}
           followAlong={followAlong}

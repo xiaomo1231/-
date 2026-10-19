@@ -265,3 +265,35 @@ export interface ComboRecipe {
 export interface SaveComboBody {
   recipe: Omit<ComboRecipe, 'createdBy' | 'updatedAt' | 'id'> & { id: string | null }
 }
+
+// ---------------------------------------------------------------------------
+// PDF → GP conversions (PDF 转换版), made only when a user asks for one
+// ---------------------------------------------------------------------------
+
+/** A PDF tab converted into a playable GP5 (kept in SCORES_DATA/conversions/, never in the library). */
+export interface ConversionRecord {
+  id: string
+  songKey: string
+  /** The PDF it came from (library path). */
+  sourcePath: string
+  title: string
+  artist: string
+  createdBy: string
+  createdAt: number
+  bars: number
+  /** Track names found (one per tab part). */
+  tracks: string[]
+  /** What the converter could not read well (Chinese). */
+  warnings: string[]
+  /** 用户品鉴: 1–5 stars from the members. */
+  rating: { average: number; count: number }
+  /** The signed-in user's own stars, or null. */
+  myRating: number | null
+}
+
+/** GET /api/conversions/status: whether the server has the converter installed. */
+export interface ConversionStatus {
+  available: boolean
+  /** Why not (Chinese), when unavailable. */
+  reason: string | null
+}

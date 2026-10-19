@@ -44,7 +44,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
     case 'score':
       body = (
         <ScoreViewer
-          key={path + route.combo}
+          key={path + route.combo + route.conv}
           path={path}
           title={title}
           artist={artist}
@@ -52,6 +52,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
           band={route.band}
           showDrums={route.drums}
           combo={route.combo}
+          conv={route.conv}
         />
       )
       break
@@ -60,7 +61,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
       bar = <FileBar item={item} downloadHref={fileUrl(path, true)} />
       break
     case 'pdf':
-      body = <PdfViewer path={path} />
+      body = <PdfViewer path={path} title={title} artist={artist} />
       bar = <FileBar item={item} downloadHref={fileUrl(path, true)} />
       break
     case 'text':
