@@ -137,6 +137,9 @@ function barTicks(a: AlphaTabApi | null, s: model.Score | null, bar: number): [n
   return [start, next ? next.start : start + (mb ? mb.calculateDuration() : 3840)]
 }
 
+/** Shortest gap between two re-renders for the playing position (ms). */
+const TIME_PAINT_MS = 200
+
 /** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
 const isManualLoop = (t: TrainerConfig) => t.gapBeats > 0 || t.countInEachLoop
 
@@ -685,9 +688,27 @@ export function ScoreViewer({
             flushRef.current(false)
           }
         })
+        // The player reports its position many times a second; the page (time, bar, progress)
+        // re-renders at most five times a second, and once more after the last report.
+        let lastPaint = 0
+        let pending: ReturnType<typeof setTimeout> | undefined
+        let latest = { now: 0, end: 0, tick: 0 }
         a.playerPositionChanged.on((e) => {
-          setTime({ now: e.currentTime, end: e.endTime, tick: e.currentTick })
           rehPlayerRef.current.onPosition(e.currentTime)
+          latest = { now: e.currentTime, end: e.endTime, tick: e.currentTick }
+          const t = performance.now()
+          if (e.isSeek || t - lastPaint >= TIME_PAINT_MS) {
+            lastPaint = t
+            clearTimeout(pending)
+            pending = undefined
+            setTime(latest)
+          } else if (pending === undefined) {
+            pending = setTimeout(() => {
+              pending = undefined
+              lastPaint = performance.now()
+              if (!disposed) setTime(latest)
+            }, TIME_PAINT_MS)
+          }
         })
         a.activeBeatsChanged.on((e) => {
           if (live.current.prefs.fretboard)

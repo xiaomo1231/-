@@ -88,7 +88,9 @@ const REMOTE_CSS = `
 .gl-tm { font-family: var(--font-mono); font-size: 12px; color: hsl(var(--muted-foreground)); display: flex; justify-content: space-between; gap: 6px; font-variant-numeric: tabular-nums; }
 .gl-tm span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .gl-prog { height: 4px; background: hsl(var(--border)); border-radius: 2px; margin-top: 6px; overflow: hidden; }
-.gl-prog i { display: block; height: 100%; width: 0; background: hsl(var(--primary)); }
+/* Scaled, not resized (no layout); the 200 ms linear glide hides the 5-per-second updates. */
+.gl-prog i { display: block; height: 100%; width: 100%; background: hsl(var(--primary)); transform-origin: left; transform: scaleX(0); transition: transform 200ms linear; }
+@media (prefers-reduced-motion: reduce) { .gl-prog i { transition: none; } }
 .gl-min {
   border: 0; background: none; color: hsl(var(--muted-foreground)); width: 44px; height: 44px;
   border-radius: 10px; flex: none; font-size: 18px; line-height: 1;
@@ -301,7 +303,7 @@ export function Remote(p: RemoteProps) {
               )}
             </div>
             <div className="gl-prog" aria-hidden>
-              <i style={{ width: `${progress * 100}%` }} />
+              <i style={{ transform: `scaleX(${progress})` }} />
             </div>
           </div>
         )}
