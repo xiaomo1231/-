@@ -86,6 +86,14 @@ import {
 import { drumify, drumifyAvailable } from './drumify'
 import { generateFromTemplates } from '../src/songs/drumGenerate'
 import { buildSongIndex, songInfo } from './songs'
+import { annotateSongs, buildJianpuIndex, jianpuForSong } from './jianpu'
+import {
+  DailyProgressStore,
+  dailyState,
+  isDailyPath,
+  loadDailyProgram,
+  type DailyProgram,
+} from './daily'
 import { ComboError, ComboStore, canEditCombo, parseSaveCombo } from './combos'
 import {
   ConversionError,
@@ -105,6 +113,7 @@ import {
   sheetContentType,
 } from './sheets'
 import type { BandState } from '../src/songs/scoreServerTypes'
+import type { ScoreSong } from '../src/songs/scoreLibraryTypes'
 import {
   loadFromFiles,
   readCache,
@@ -242,6 +251,8 @@ let drums: DrumStore
 let sheets: SheetStore
 let combos: ComboStore
 let conversions: ConversionStore
+let daily: DailyProgressStore
+let dailyProgram: DailyProgram = { category: null, days: [], backing: [], extras: [] }
 const conversionQueue = new ConversionQueue()
 const drumLib = loadTemplates()
 const drumEngines: DrumEngines = {
@@ -274,6 +285,7 @@ async function refreshLibrary(useCache: boolean): Promise<void> {
         loaded = loadFromFiles(cached.files, cached.scannedAt)
         log(`已从缓存载入：${cached.files.length} 个文件。`)
         startEnsembles(loaded)
+        dailyProgram = await loadDailyProgram(cfg.root)
         return
       }
     }
@@ -282,6 +294,7 @@ async function refreshLibrary(useCache: boolean): Promise<void> {
     const scannedAt = Date.now()
     loaded = loadFromFiles(files, scannedAt)
     startEnsembles(loaded)
+    dailyProgram = await loadDailyProgram(cfg.root)
     try {
       await writeCache(cfg.dataDir, cfg.root, scannedAt, files)
     } catch (err) {
@@ -499,6 +512,7 @@ async function handleUsers(
   await users.remove(id).catch(asHttp)
   // Their part assignments, favourites and practice go with the account.
   await band.dropUser(id).catch(asHttp)
+  await daily.dropUser(id)
   await favoriteQueue(() => persistFavorites(id, null))
   await practiceQueue(async () => {
     const next = new Map(practice)
@@ -623,6 +637,13 @@ async function handleDrums(
   return sendJson(res, 404, { error: '找不到这个接口。' })
 }
 
+/** Songs with `jianpu` = how many 13-简谱 files of the library belong to each. */
+function withJianpu(songs: ScoreSong[]): ScoreSong[] {
+  const lib = requireLibrary()
+  const index = buildJianpuIndex(lib, tools)
+  return annotateSongs(index, lib, songs, (id) => lib.lib.artistById.get(id)?.name ?? '')
+}
+
 /** The song a score file belongs to (its key and versions); 404 when the library has no such file. */
 function songOfPath(rel: string) {
   const info = songInfo(buildSongIndex(requireLibrary()), rel)
@@ -643,6 +664,13 @@ async function handleSongs(
       throw new HttpError(403, '你的账号只能处理乐队歌单里的谱子。')
   }
   try {
+    if (p === '/api/jianpu') {
+      const rel = url.searchParams.get('path') ?? ''
+      allowed(rel)
+      const info = songOfPath(rel)
+      const index = buildJianpuIndex(requireLibrary(), tools)
+      return sendJson(res, 200, jianpuForSong(index, info.artist, info.title))
+    }
     if (p === '/api/song' || p === '/api/sheets') {
       if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
       const rel = url.searchParams.get('path') ?? ''
@@ -764,9 +792,9 @@ async function handleCombos(
   }
 }
 
-/** A file in the setlist: a song's own file, or a version used by a setlist song's 组合乐队谱. */
+/** A file every member may open: the setlist's files, a setlist 组合乐队谱's versions, and 每日一练. */
 function bandCanOpen(rel: string): boolean {
-  if (band.hasPath(rel)) return true
+  if (band.hasPath(rel) || isDailyPath(dailyProgram.category, rel)) return true
   return band.songs().some((x) => {
     const c = x.comboId ? combos.get(x.comboId) : undefined
     return c !== undefined && (c.base === rel || c.parts.some((pt) => pt.path === rel))
@@ -863,6 +891,44 @@ async function handleConversions(
   }
 }
 
+/** 每日一练: the program from the library, and each account's progress (day 1 = their first visit). */
+async function handleDaily(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  p: string,
+  me: StoredUser,
+): Promise<void> {
+  const state = () => dailyState(dailyProgram, daily.get(me.id))
+  if (p === '/api/daily') return sendJson(res, 200, state())
+  if (p === '/api/daily/members')
+    return sendJson(res, 200, daily.members(users.list().map((u) => u.id)))
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  if (p === '/api/daily/start') {
+    await daily.start(me.id, Date.now())
+    return sendJson(res, 200, state())
+  }
+  if (p === '/api/daily/bpm') {
+    const body = await readJsonBody(req)
+    const day = body.day
+    if (typeof day !== 'number' || !Number.isInteger(day) || day < 1 || day > 365)
+      throw new HttpError(400, '天数不对（1–365）。')
+    const bpm = body.bpm
+    if (typeof bpm !== 'number' || !Number.isInteger(bpm) || bpm < 20 || bpm > 300)
+      throw new HttpError(400, '速度不对（20–300 bpm）。')
+    await daily.markBpm(me.id, day, bpm, Date.now())
+    return sendJson(res, 200, state())
+  }
+  if (p === '/api/daily/done') {
+    const body = await readJsonBody(req)
+    const day = body.day
+    if (typeof day !== 'number' || !Number.isInteger(day) || day < 1 || day > 365)
+      throw new HttpError(400, '天数不对（1–365）。')
+    await daily.mark(me.id, day, body.done !== false, Date.now())
+    return sendJson(res, 200, state())
+  }
+  return sendJson(res, 404, { error: '找不到这个接口。' })
+}
+
 /** Every score file of the library, for the background track reader (找乐队谱). */
 function startEnsembles(lib: LoadedLibrary): void {
   const files: Array<{ path: string; title: string; artist: string }> = []
@@ -939,9 +1005,10 @@ async function handleApi(
   if (p === '/api/band' || p.startsWith('/api/band/')) return handleBand(req, res, p, me)
   if (p === '/api/live/events' || p === '/api/live/command') return handleLive(req, res, url, me)
   if (p === '/api/drums' || p.startsWith('/api/drums/')) return handleDrums(req, res, url, me)
-  if (p === '/api/song' || p === '/api/sheets' || p.startsWith('/api/sheets/'))
+  if (p === '/api/song' || p === '/api/jianpu' || p === '/api/sheets' || p.startsWith('/api/sheets/'))
     return handleSongs(req, res, url, me)
   if (p === '/api/combos' || p.startsWith('/api/combos/')) return handleCombos(req, res, url, me)
+  if (p === '/api/daily' || p.startsWith('/api/daily/')) return handleDaily(req, res, p, me)
   if (p === '/api/conversions' || p.startsWith('/api/conversions/'))
     return handleConversions(req, res, url, me)
 
@@ -968,7 +1035,7 @@ async function handleApi(
       run: () => {
         const artist = url.searchParams.get('artist')
         if (!artist) throw new HttpError(400, '缺少 artist 参数。')
-        return requireLibrary().lib.songs.get(artist) ?? []
+        return withJianpu(requireLibrary().lib.songs.get(artist) ?? [])
       },
     },
     '/api/search': {
@@ -982,7 +1049,9 @@ async function handleApi(
         const lib = requireLibrary()
         // Filters apply before the search's own 200-song limit.
         const result = search(lib.lib, narrowIndex(lib.index, opts), q, tools)
-        return { ...result, songs: sortResultSongs(result.songs, opts.sort) }
+        const sorted = sortResultSongs(result.songs, opts.sort)
+        const marked = withJianpu(sorted.map((r) => r.song))
+        return { ...result, songs: sorted.map((r, i) => ({ ...r, song: marked[i] ?? r.song })) }
       },
     },
     '/api/top': {
@@ -1003,7 +1072,11 @@ async function handleApi(
         )
         return {
           artists: [],
-          songs: songs.map((r) => ({ song: r.song, artistName: r.artistName, match: 'name' })),
+          songs: withJianpu(songs.map((r) => r.song)).map((song, i) => ({
+            song,
+            artistName: songs[i]!.artistName,
+            match: 'name',
+          })),
           moreSongs,
         }
       },
@@ -1238,6 +1311,7 @@ async function main(): Promise<void> {
   sheets = await SheetStore.load(cfg.dataDir)
   combos = await ComboStore.load(cfg.dataDir, inRoot)
   conversions = await ConversionStore.load(cfg.dataDir)
+  daily = await DailyProgressStore.load(cfg.dataDir)
   ensembles = new EnsembleIndex(cfg.root, cfg.dataDir)
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 

@@ -7,6 +7,7 @@ import { useMe } from '../lib/session'
 import {
   HREF_ACCOUNT,
   HREF_BAND,
+  HREF_DAILY,
   HREF_FAVORITES,
   HREF_USERS,
   hrefSearch,
@@ -29,6 +30,7 @@ import { AccountPage } from '../pages/AccountPage'
 import { UsersPage } from '../pages/UsersPage'
 import { DrumEditorPage } from '../pages/DrumEditorPage'
 import { CombinePage } from '../pages/CombinePage'
+import { DailyPage } from '../pages/DailyPage'
 import { Viewer } from '../viewer/Viewer'
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
@@ -45,19 +47,6 @@ const LIBRARY_ROUTES: ReadonlySet<Route['kind']> = new Set<Route['kind']>([
   'search',
   'favorites',
 ])
-
-/** Goes to 目录 and scrolls to 最近看过 (the phone's 「最近」 tab). */
-function showRecent() {
-  navigate('#/')
-  const reduce = window.matchMedia('(prefers-reduced-motion: reduce)').matches
-  window.setTimeout(
-    () =>
-      document
-        .getElementById('recent')
-        ?.scrollIntoView({ behavior: reduce ? 'auto' : 'smooth', block: 'start' }),
-    50,
-  )
-}
 
 /** The signed-in page: the library state (shared by every page), the top bar and the current page. */
 export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
@@ -218,6 +207,16 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
             )}
 
             <Link
+              href={HREF_DAILY}
+              className="hidden h-9 items-center gap-1.5 rounded-lg px-3 text-foreground transition-colors hover:bg-card min-[861px]:flex"
+            >
+              <span aria-hidden className="text-primary">
+                ◷
+              </span>
+              <span className="text-sm">每日一练</span>
+            </Link>
+
+            <Link
               href={HREF_BAND}
               className="hidden h-9 items-center gap-1.5 rounded-lg px-3 text-foreground transition-colors hover:bg-card min-[861px]:flex"
             >
@@ -330,12 +329,14 @@ function AccountLinks({ me }: { me: UserInfo }) {
   )
 }
 
-/** The phone's bottom navigation: 目录 / 搜索 / 乐队 / 收藏 / 最近, or 乐队 / 我的 without library access. */
+/** The phone's bottom navigation: 目录 / 搜索 / 乐队 / 每日 / 收藏, or 乐队 / 每日 / 我的 without library access (最近看过 is on 目录). */
 function TabBar({ route, libraryHidden }: { route: Route; libraryHidden: boolean }) {
   const current =
     route.kind === 'band' || route.kind === 'bandSong' || route.kind === 'ensembles'
       ? 'band'
-      : route.kind === 'account' || route.kind === 'users'
+      : route.kind === 'daily'
+        ? 'daily'
+        : route.kind === 'account' || route.kind === 'users'
         ? 'me'
         : route.kind === 'search'
           ? 'search'
@@ -343,7 +344,7 @@ function TabBar({ route, libraryHidden }: { route: Route; libraryHidden: boolean
             ? 'fav'
             : 'toc'
   const tab = (
-    id: 'toc' | 'search' | 'band' | 'fav' | 'recent' | 'me',
+    id: 'toc' | 'search' | 'band' | 'daily' | 'fav' | 'me',
     icon: string,
     label: string,
     onClick: () => void,
@@ -378,15 +379,15 @@ function TabBar({ route, libraryHidden }: { route: Route; libraryHidden: boolean
       aria-label="主导航"
       className={cx(
         'fixed inset-x-0 bottom-0 z-[35] grid gap-1 border-t border-border bg-background/95 px-4 pt-1.5 backdrop-blur-[12px] min-[861px]:hidden',
-        libraryHidden ? 'grid-cols-2' : 'grid-cols-5',
+        libraryHidden ? 'grid-cols-3' : 'grid-cols-5',
       )}
       style={{ paddingBottom: 'max(8px, env(safe-area-inset-bottom))' }}
     >
       {!libraryHidden && tab('toc', '☰', '目录', () => navigate('#/'))}
       {!libraryHidden && tab('search', '⌕', '搜索', () => navigate(hrefSearch()))}
       {tab('band', '♫', '乐队', () => navigate(HREF_BAND))}
+      {tab('daily', '◷', '每日', () => navigate(HREF_DAILY))}
       {!libraryHidden && tab('fav', '★', '收藏', () => navigate(HREF_FAVORITES))}
-      {!libraryHidden && tab('recent', '◷', '最近', showRecent)}
       {libraryHidden && tab('me', '☺', '我的', () => navigate(HREF_ACCOUNT))}
     </nav>
   )
@@ -417,6 +418,8 @@ function renderRoute(route: Route, libraryHidden: boolean) {
       return <AccountPage />
     case 'users':
       return <UsersPage />
+    case 'daily':
+      return <DailyPage key={route.day ?? 0} day={route.day} />
     case 'combine':
       return <CombinePage key={route.path + route.id} path={route.path} id={route.id} />
     case 'drums':

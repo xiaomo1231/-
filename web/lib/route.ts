@@ -33,6 +33,7 @@ export type Route =
   | { kind: 'users' }
   | { kind: 'drums'; path: string; title: string; artist: string }
   | { kind: 'combine'; path: string; id: string }
+  | { kind: 'daily'; day: number | null }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -69,6 +70,10 @@ export function parseHash(hash: string): Route {
   if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
   if (path === '/me') return { kind: 'account' }
   if (path === '/users') return { kind: 'users' }
+  if (path === '/daily') {
+    const d = Number(qs.get('d'))
+    return { kind: 'daily', day: Number.isInteger(d) && d >= 1 && d <= 365 ? d : null }
+  }
   if (path === '/combine') return { kind: 'combine', path: qs.get('p') ?? '', id: qs.get('id') ?? '' }
   if (path === '/d')
     return {
@@ -101,6 +106,7 @@ export function hrefSearch(q = ''): string {
 
 export const HREF_FAVORITES = '#/f'
 export const HREF_BAND = '#/b'
+export const HREF_DAILY = '#/daily'
 export const HREF_ACCOUNT = '#/me'
 export const HREF_USERS = '#/users'
 

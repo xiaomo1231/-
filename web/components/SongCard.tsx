@@ -3,7 +3,7 @@ import { cx } from '../lib/classes'
 import { formatSize } from '../lib/format'
 import { hrefViewer } from '../lib/route'
 import { Link } from './Link'
-import { FormatBadge } from './ui'
+import { FormatBadge, JianpuBadge } from './ui'
 
 /**
  * One song in an artist's list: a title row that opens its versions inline
@@ -38,6 +38,7 @@ export function SongCard({
       >
         <span className="min-w-0 break-words font-display text-[21px] font-black leading-snug">
           {title}
+          {(song.jianpu ?? 0) > 0 && <JianpuBadge />}
         </span>
         <span className="mono text-xs text-muted-foreground">{song.versions.length} 个版本</span>
         <span

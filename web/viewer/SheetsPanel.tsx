@@ -1,8 +1,17 @@
-import { useRef, useState, type ChangeEvent } from 'react'
-import { errorText, sheetFileUrl, type SheetUpload } from '../lib/api'
+import { useEffect, useRef, useState, type ChangeEvent } from 'react'
+import {
+  api,
+  errorText,
+  fileUrl,
+  sheetFileUrl,
+  type LibraryJianpu,
+  type SheetUpload,
+} from '../lib/api'
 import { buttonClass, cx, PANEL } from '../lib/classes'
+import { hrefViewer } from '../lib/route'
 import { moveSheet, removeSheet, uploadSheets, useSheets } from '../lib/sheets'
 import { useMe } from '../lib/session'
+import { Link } from '../components/Link'
 import { Notice } from '../components/ui'
 
 const MAX_BYTES = 20 * 1024 * 1024
@@ -28,11 +37,99 @@ function fmtSize(bytes: number): string {
 const ACTION =
   'inline-flex min-h-11 items-center rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-40'
 
+/** The library 简谱 files of the song this score belongs to (quiet while loading or on failure). */
+function useLibraryJianpu(path: string): {
+  items: LibraryJianpu[]
+  loaded: boolean
+  failed: boolean
+} {
+  const [state, setState] = useState<{
+    path: string
+    items: LibraryJianpu[] | null
+    failed: boolean
+  }>({ path, items: null, failed: false })
+  useEffect(() => {
+    const ctrl = new AbortController()
+    api
+      .jianpu(path, ctrl.signal)
+      .then((items) => {
+        if (!ctrl.signal.aborted) setState({ path, items, failed: false })
+      })
+      .catch(() => {
+        if (!ctrl.signal.aborted) setState({ path, items: null, failed: true })
+      })
+    return () => ctrl.abort()
+  }, [path])
+  const current = state.path === path ? state : null
+  return {
+    items: current?.items ?? [],
+    loaded: current !== null && (current.items !== null || current.failed),
+    failed: current?.failed ?? false,
+  }
+}
+
+/** 「谱库里的简谱」: the 13-简谱 PDFs in the library; embedded inline on wide screens only. */
+function LibraryJianpuList({ items }: { items: LibraryJianpu[] }) {
+  const [embedded, setEmbedded] = useState<string | null>(null)
+  return (
+    <section className="space-y-3">
+      <h4 className="m-0 text-sm font-semibold">谱库里的简谱</h4>
+      <ol className="m-0 list-none space-y-4 p-0">
+        {items.map((j) => {
+          const open = embedded === j.path
+          return (
+            <li key={j.path} className="space-y-2">
+              <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                <div className="min-w-0 flex-1 basis-48">
+                  <p className="m-0 break-words text-sm font-medium">{j.label}</p>
+                  {j.artist && (
+                    <p className="m-0 break-words text-xs text-muted-foreground">{j.artist}</p>
+                  )}
+                </div>
+                <div className="flex items-center">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() => setEmbedded(open ? null : j.path)}
+                    className="hidden min-h-11 items-center rounded-lg px-3 text-sm text-muted-foreground transition-colors hover:text-foreground md:inline-flex"
+                  >
+                    {open ? '收起' : '在这里看'}
+                  </button>
+                  <Link
+                    href={hrefViewer({
+                      path: j.path,
+                      format: 'pdf',
+                      title: j.title,
+                      artist: j.artist,
+                    })}
+                    className="inline-flex min-h-11 items-center px-1.5 text-[13px] text-primary"
+                  >
+                    打开 →
+                  </Link>
+                </div>
+              </div>
+              {open && (
+                <iframe
+                  title={`${j.label} PDF`}
+                  src={fileUrl(j.path)}
+                  className="hidden h-[70vh] w-full rounded-lg border border-border bg-white md:block"
+                />
+              )}
+            </li>
+          )
+        })}
+      </ol>
+    </section>
+  )
+}
+
 /** The song's uploaded 简谱 / 歌词谱 (photos or PDFs), shown in page order to the whole band. */
 export function SheetsPanel({ path }: { path: string }) {
   const { items, loaded, error, reload } = useSheets(path)
+  const library = useLibraryJianpu(path)
   const me = useMe()
   const inputRef = useRef<HTMLInputElement>(null)
+  const total = items.length + library.items.length
 
   const [label, setLabel] = useState(DEFAULT_LABEL)
   const [uploading, setUploading] = useState<{ done: number; total: number } | null>(null)
@@ -94,11 +191,22 @@ export function SheetsPanel({ path }: { path: string }) {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <h3 className="m-0 text-base font-semibold">
           简谱 / 歌词谱
-          {loaded && items.length > 0 && (
-            <span className="mono ml-2 text-sm font-normal text-muted-foreground">{items.length}</span>
+          {loaded && total > 0 && (
+            <span className="mono ml-2 text-sm font-normal text-muted-foreground">{total}</span>
           )}
         </h3>
       </div>
+
+      {/* library 简谱 */}
+      {library.loaded && library.items.length > 0 && <LibraryJianpuList items={library.items} />}
+      {!library.loaded && <p className="m-0 text-xs text-muted-foreground">正在查找谱库里的简谱…</p>}
+      {library.failed && (
+        <p className="m-0 text-xs text-muted-foreground">谱库里的简谱暂时读不到。</p>
+      )}
+
+      {library.items.length > 0 && (
+        <h4 className="m-0 text-sm font-semibold">大家上传的简谱</h4>
+      )}
 
       {/* uploader */}
       <div className={cx(PANEL, 'space-y-3 p-4')}>

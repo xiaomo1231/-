@@ -297,3 +297,79 @@ export interface ConversionStatus {
   /** Why not (Chinese), when unavailable. */
   reason: string | null
 }
+
+// ---------------------------------------------------------------------------
+// 每日一练 (12-每日一练: 52 weeks / 365 days of Guitar Aerobics)
+// ---------------------------------------------------------------------------
+
+/** One day of the program, from 每日练习索引.json plus the files found in its folder (library paths). */
+export interface DailyDay {
+  day: number
+  week: number
+  /** 周一…周日 */
+  weekday: string
+  /** Technique, e.g. 交替拨弦. */
+  technique: string
+  /** Backing style of the day, e.g. 金属 (matches DailyBacking.style). */
+  backingStyle: string
+  /** Suggested tempo ladder in bpm, e.g. [40, 48, 56, …]. */
+  tempos: number[]
+  demoSeconds: number | null
+  /** Exercise images: Chinese and English (null when missing). */
+  imageZh: string | null
+  imageEn: string | null
+  /** Demo audio of the day. */
+  demo: string | null
+  /** The day's own backing tracks from its 练习信息.json, slowest first (library paths). */
+  backingList: Array<{ bpm: number; path: string }>
+  /** Pages in the books (全书), when given. */
+  bookPage: { zh: number | null; en: number | null } | null
+  /** How to practise it (练法), when given. */
+  method: string | null
+}
+
+export interface DailyBacking {
+  track: number
+  style: string
+  bpm: number
+  /** Library path of the mp3. */
+  path: string
+}
+
+/** GET /api/daily */
+export interface DailyState {
+  /** False when the library has no 每日一练 folder or index. */
+  available: boolean
+  days: DailyDay[]
+  backing: DailyBacking[]
+  /** Extra files of the program (全书 PDFs, whole-week demos, tuning audio): library paths with labels. */
+  extras: Array<{ label: string; path: string }>
+  /** This account's progress: when they first opened 每日一练 (day 1), and the days marked done. */
+  startedAt: number | null
+  done: Record<string, number>
+  /** Highest backing tempo completed (10 times through) per day: day number → bpm. */
+  bpm: Record<string, number>
+}
+
+/** GET /api/daily/members: band members' progress (for the band page). */
+export interface DailyMemberProgress {
+  userId: string
+  startedAt: number | null
+  doneCount: number
+  /** Most recent day marked done (day number), or null. */
+  lastDay: number | null
+  lastDoneAt: number | null
+}
+
+// ---------------------------------------------------------------------------
+// 13-简谱 matched to songs
+// ---------------------------------------------------------------------------
+
+/** A 简谱 file of the library that belongs to the same song (same artist and title). */
+export interface LibraryJianpu {
+  path: string
+  title: string
+  artist: string
+  /** File name as shown. */
+  label: string
+}

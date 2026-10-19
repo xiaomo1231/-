@@ -4,12 +4,14 @@ import {
   api,
   errorText,
   type BandSong,
+  type DailyMemberProgress,
   type MemberProgress,
   type SongStatus,
   type UserInfo,
 } from '../lib/api'
 import { addSong, rename, reorder, STATUS_LABELS, updateSong, useBand } from '../lib/band'
 import { cx } from '../lib/classes'
+import { todayNumber } from '../lib/daily'
 import { canBrowseLibrary, INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { fmtDuration } from '../lib/practice'
 import { hrefBandSong, hrefEnsembles } from '../lib/route'
@@ -51,6 +53,21 @@ export function BandPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [renaming, setRenaming] = useState(false)
   const [nameDraft, setNameDraft] = useState('')
+  // Each member's 每日一练 progress; a failed read just leaves the lines out.
+  const [daily, setDaily] = useState<Map<string, DailyMemberProgress> | null>(null)
+
+  useEffect(() => {
+    let alive = true
+    api.dailyMembers().then(
+      (list) => {
+        if (alive) setDaily(new Map(list.map((p) => [p.userId, p])))
+      },
+      () => undefined,
+    )
+    return () => {
+      alive = false
+    }
+  }, [])
 
   const run = async (key: string, job: () => Promise<void>) => {
     if (busy) return
@@ -177,15 +194,22 @@ export function BandPage() {
           {state.members.map((m) => (
             <li
               key={m.id}
-              className="inline-flex min-h-11 items-center gap-2 rounded-full border border-border px-3.5 text-sm"
+              className="inline-flex min-h-11 flex-col justify-center gap-0.5 rounded-2xl border border-border px-3.5 py-1.5 text-sm"
             >
-              <span className="font-medium">
-                {m.displayName}
-                {me?.id === m.id && <span className="text-muted-foreground">（我）</span>}
+              <span className="flex items-center gap-2">
+                <span className="font-medium">
+                  {m.displayName}
+                  {me?.id === m.id && <span className="text-muted-foreground">（我）</span>}
+                </span>
+                <span className="mono text-xs text-muted-foreground">
+                  {m.instrument ? INSTRUMENT_LABELS[m.instrument] : '未设乐器'}
+                </span>
               </span>
-              <span className="mono text-xs text-muted-foreground">
-                {m.instrument ? INSTRUMENT_LABELS[m.instrument] : '未设乐器'}
-              </span>
+              {daily && (
+                <span className="mono text-[11px] text-muted-foreground">
+                  {dailyLine(daily.get(m.id))}
+                </span>
+              )}
             </li>
           ))}
         </ul>
@@ -504,6 +528,12 @@ function AddSongs({
       )}
     </section>
   )
+}
+
+/** A member's 每日一练 position and count, as one muted line. */
+function dailyLine(p: DailyMemberProgress | undefined): string {
+  if (!p || p.startedAt === null) return '还没开始每日一练'
+  return `每日一练 第 ${todayNumber(p.startedAt, Date.now())} 天 · 完成 ${p.doneCount}`
 }
 
 /** The order with the entries at i and j swapped; the same list when either index is out of range. */

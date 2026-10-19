@@ -21,6 +21,20 @@ export function FormatBadge({ format, className }: { format: ScoreFormat; classN
   )
 }
 
+/** 「简谱」 chip beside a song title whose library folder has 13-简谱 PDFs. */
+export function JianpuBadge({ className }: { className?: string }) {
+  return (
+    <span
+      className={cx(
+        'ml-2 inline-flex shrink-0 items-center rounded-[3px] border border-primary px-1 py-px align-middle font-sans text-[11px] font-normal leading-5 text-primary',
+        className,
+      )}
+    >
+      简谱
+    </span>
+  )
+}
+
 /** How a search hit matched (拼音 / 首字母 / 繁简 / 相近); a plain name match shows none. */
 export function MatchTag({ match }: { match: SearchMatch }) {
   const label = MATCH_LABEL[match]

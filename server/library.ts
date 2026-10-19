@@ -99,9 +99,15 @@ export async function scanFolder(
   return files
 }
 
+/** Folders that have their own page instead of the artist lists: 12-每日一练 (the practice program). */
+const OWN_PAGE = /^\d+-每日一练\//
+
 /** Builds the library and its search index from a file list. */
 export function loadFromFiles(files: FileList, scannedAt: number): LoadedLibrary {
-  const lib = buildLibrary(files, tools)
+  const lib = buildLibrary(
+    files.filter(([p]) => !OWN_PAGE.test(p)),
+    tools,
+  )
   const index = buildSearchIndex(lib, tools)
   return { lib, index, scannedAt, files }
 }

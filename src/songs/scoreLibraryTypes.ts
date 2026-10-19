@@ -55,6 +55,8 @@ export interface ScoreSong {
   versions: ScoreVersion[]
   /** The title could not be read from the file names (only digits etc.). */
   unknownTitle?: boolean
+  /** Score server only: how many 13-简谱 files of the library belong to this song. */
+  jianpu?: number
 }
 
 export interface ScoreArtist {

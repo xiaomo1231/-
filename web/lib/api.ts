@@ -12,7 +12,10 @@ import type {
   ComboRecipe,
   ConversionRecord,
   ConversionStatus,
+  DailyMemberProgress,
+  DailyState,
   EnsembleResult,
+  LibraryJianpu,
   SaveComboBody,
   SheetUpload,
   SheetUploadQuery,
@@ -258,6 +261,20 @@ export const api = {
     call<ConversionRecord>('/api/conversions/rate', { body: { id, stars } }),
   removeConversion: (id: string) =>
     call<{ ok: boolean }>('/api/conversions/remove', { body: { id } }),
+  // 每日一练
+  daily: (signal?: AbortSignal) => call<DailyState>('/api/daily', { signal }),
+  /** Day 1 = the first time this account opens 每日一练 (idempotent). */
+  startDaily: () => call<DailyState>('/api/daily/start', { method: 'POST' }),
+  markDaily: (day: number, done: boolean) =>
+    call<DailyState>('/api/daily/done', { body: { day, done } }),
+  /** Records that this tempo was played 10 times on that day (the server keeps the highest). */
+  markDailyBpm: (day: number, bpm: number) =>
+    call<DailyState>('/api/daily/bpm', { body: { day, bpm } }),
+  dailyMembers: (signal?: AbortSignal) =>
+    call<DailyMemberProgress[]>('/api/daily/members', { signal }),
+  // 谱库里的简谱
+  jianpu: (path: string, signal?: AbortSignal) =>
+    call<LibraryJianpu[]>(`/api/jianpu?path=${enc(path)}`, { signal }),
   // 一起播放
   serverTime: () => call<{ now: number }>('/api/time'),
   liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),
