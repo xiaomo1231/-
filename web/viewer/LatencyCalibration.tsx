@@ -162,7 +162,7 @@ export function LatencyCalibration({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
+      className="gl-fade-in fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4"
       onMouseDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -171,7 +171,7 @@ export function LatencyCalibration({
         role="dialog"
         aria-modal="true"
         aria-labelledby="latency-cal-title"
-        className="w-full max-w-md space-y-4 rounded-2xl border border-border bg-card p-5 text-foreground shadow-xl"
+        className="gl-dialog-in w-full max-w-md space-y-4 rounded-2xl border border-border bg-card p-5 text-foreground shadow-xl"
       >
         <h2 id="latency-cal-title" className="m-0 text-lg font-semibold">
           校准这台设备的声音延迟

@@ -324,8 +324,8 @@ function IndexingBar({ progress }: { progress: Progress }) {
         className="h-1 overflow-hidden rounded-full bg-border"
       >
         <div
-          className="h-full bg-primary transition-[width] duration-300"
-          style={{ width: `${pct}%` }}
+          className="h-full origin-left bg-primary transition-transform duration-300 ease-out"
+          style={{ transform: `scaleX(${pct / 100})` }}
         />
       </div>
       <p className="pt-1.5 text-xs leading-relaxed text-muted-foreground">

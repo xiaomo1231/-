@@ -213,6 +213,8 @@ export function ScoreViewer({
   const [activeNotes, setActiveNotes] = useState<FretNote[]>([])
   const [headerH, setHeaderH] = useState(0)
   const [pop, setPop] = useState<PopKind | null>(null)
+  /** The popover was opened with a key (S / T / K / P): it appears without animation. */
+  const [keyPop, setKeyPop] = useState(false)
   const [collapsed, setCollapsed] = useState(false)
   const [time, setTime] = useState({ now: 0, end: 0, tick: 0 })
   const [restoreNote, setRestoreNote] = useState('')
@@ -1095,6 +1097,7 @@ export function ScoreViewer({
     setSpeedPct(Math.max(SPEED_MIN, Math.min(SPEED_MAX, Math.round(pct))))
   const shift = (d: number) => setTranspose((t) => clampTranspose(t + d))
   const openPop = (k: PopKind) => {
+    setKeyPop(true)
     setCollapsed(false)
     setPop((cur) => (cur === k ? null : k))
   }
@@ -1505,7 +1508,11 @@ export function ScoreViewer({
       {loaded && score && (
         <Remote
           pop={pop}
-          onPop={setPop}
+          keyPop={keyPop}
+          onPop={(k) => {
+            setKeyPop(false)
+            setPop(k)
+          }}
           collapsed={collapsed}
           onCollapsed={(c) => {
             setCollapsed(c)
@@ -1599,7 +1606,7 @@ function RehearsalDialog(props: { title: string; onClose: () => void; children: 
   }, [onClose])
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+      className="gl-fade-in fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
       onPointerDown={(e) => {
         if (e.target === e.currentTarget) onClose()
       }}
@@ -1608,7 +1615,7 @@ function RehearsalDialog(props: { title: string; onClose: () => void; children: 
         role="dialog"
         aria-modal="true"
         aria-label={props.title}
-        className="max-h-[85dvh] w-full max-w-[860px] overflow-y-auto rounded-t-xl border border-border bg-card p-4 sm:rounded-xl"
+        className="gl-dialog-in gl-sheet-sm max-h-[85dvh] w-full max-w-[860px] overflow-y-auto rounded-t-xl border border-border bg-card p-4 sm:rounded-xl"
       >
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="m-0 text-base font-bold">{props.title}</h2>

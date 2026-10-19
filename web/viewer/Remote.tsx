@@ -81,6 +81,7 @@ const REMOTE_CSS = `
   background: hsl(var(--primary)); color: hsl(var(--primary-foreground)); display: grid; place-items: center;
   box-shadow: 0 4px 0 hsl(var(--primary-strong));
 }
+.gl-play { transition: transform 60ms, box-shadow 60ms; }
 .gl-play:active:not(:disabled) { transform: translateY(3px); box-shadow: 0 1px 0 hsl(var(--primary-strong)); }
 .gl-play:disabled { opacity: 0.5; cursor: not-allowed; }
 .gl-tl { flex: 1; min-width: 0; }
@@ -98,6 +99,11 @@ const REMOTE_CSS = `
   background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 14px;
   padding: 14px; box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.5);
 }
+/* Opened by tap / click: grows out of the remote (from its corner). Opened by a key: instant. */
+@keyframes gl-pop-in { from { opacity: 0; transform: scale(0.97); } }
+.gl-pop { transform-origin: bottom right; animation: gl-pop-in 150ms cubic-bezier(0.23, 1, 0.32, 1); }
+.gl-remote[data-key-pop] .gl-pop { animation: none; }
+@media (prefers-reduced-motion: reduce) { .gl-pop { animation: none; } }
 .gl-pop h4 { margin: 0 0 10px; font-size: 13px; letter-spacing: 0.12em; color: hsl(var(--muted-foreground)); font-weight: 600; }
 .gl-pop h4:not(:first-child) { margin-top: 14px; }
 .gl-pop .gl-hint { margin-top: 12px; }
@@ -153,6 +159,8 @@ const MS_LABEL = (n: number) => (n > 0 ? `+${n}` : n < 0 ? `−${-n}` : '±0')
 
 export interface RemoteProps {
   pop: PopKind | null
+  /** Opened from the keyboard: no entrance animation. */
+  keyPop?: boolean
   onPop: (p: PopKind | null) => void
   collapsed: boolean
   onCollapsed: (c: boolean) => void
@@ -244,7 +252,12 @@ export function Remote(p: RemoteProps) {
   const togglePop = (k: PopKind) => p.onPop(p.pop === k ? null : k)
 
   return (
-    <section className={cx('gl-remote', min && 'is-min')} role="region" aria-label="播放控制">
+    <section
+      className={cx('gl-remote', min && 'is-min')}
+      data-key-pop={p.keyPop ? '' : undefined}
+      role="region"
+      aria-label="播放控制"
+    >
       <style>{REMOTE_CSS}</style>
       {!min && p.pop && <Popover kind={p.pop} p={p} />}
       <div className="gl-r-row">
@@ -436,7 +449,7 @@ export function Remote(p: RemoteProps) {
         </div>
       )}
       {p.note && (
-        <p className="gl-hint" role="status">
+        <p key={p.note} className="gl-hint gl-fade-in" role="status">
           {p.note}
         </p>
       )}

@@ -17,13 +17,32 @@ import { trackLabels } from './trackNames'
 const PREVIEW_MSG = '这个文件没能预览，可以打开完整页面试试。'
 const DESKTOP_QUERY = '(min-width: 861px)'
 
+/** Exit lengths: the panel is unmounted only after its exit transition. */
+const EXIT_DESK_MS = 180
+const EXIT_PHONE_MS = 240
+/** A flick this fast (px per ms) closes the sheet however short the drag. */
+const FLICK_SPEED = 0.11
+
+// Transitions (not keyframes), so opening / closing / dragging retarget mid-motion.
 const PREVIEW_CSS = `
-@keyframes gl-preview-in { from { transform: translateX(24px); opacity: 0 } to { transform: none; opacity: 1 } }
-@keyframes gl-preview-up { from { transform: translateY(100%) } to { transform: none } }
-.gl-preview-desk { animation: gl-preview-in 220ms ease-out; }
-.gl-preview-phone { animation: gl-preview-up 240ms ease-out; }
+.gl-preview-desk {
+  transform: translateX(16px); opacity: 0;
+  transition: transform 200ms cubic-bezier(0.23, 1, 0.32, 1), opacity 200ms cubic-bezier(0.23, 1, 0.32, 1);
+}
+.gl-preview-desk[data-state="open"] { transform: none; opacity: 1; }
+.gl-preview-desk[data-state="leaving"] { transition-duration: ${EXIT_DESK_MS}ms; }
+.gl-preview-phone {
+  transform: translateY(100%);
+  transition: transform 280ms cubic-bezier(0.32, 0.72, 0, 1);
+}
+.gl-preview-phone[data-state="open"] { transform: translateY(var(--drag, 0px)); }
+.gl-preview-phone[data-state="leaving"] { transition-duration: ${EXIT_PHONE_MS}ms; }
+.gl-preview-phone[data-dragging] { transition: none; }
+.gl-preview-back { opacity: 0; transition: opacity 150ms ease-out; }
+.gl-preview-back[data-state="open"] { opacity: 1; }
 @media (prefers-reduced-motion: reduce) {
-  .gl-preview-desk, .gl-preview-phone { animation: none; }
+  .gl-preview-desk, .gl-preview-phone { transform: none; transition: opacity 150ms ease; opacity: 0; }
+  .gl-preview-desk[data-state="open"], .gl-preview-phone[data-state="open"] { transform: none; opacity: 1; }
 }
 `
 
@@ -80,7 +99,8 @@ function useIsDesktop(): boolean {
 export function PreviewHost() {
   const { item, siblings, index } = usePreview()
   if (!item) return null
-  return <PreviewSheet key={item.path} item={item} siblings={siblings} index={index} />
+  // One sheet for the whole visit: switching versions swaps the body, not the panel (no re-entry).
+  return <PreviewSheet item={item} siblings={siblings} index={index} />
 }
 
 function PreviewSheet({
@@ -96,10 +116,28 @@ function PreviewSheet({
   const [headerH, setHeaderH] = useState(0)
   const [kinds, setKinds] = useState('')
   const [dragY, setDragY] = useState(0)
-  const drag = useRef<number | null>(null)
+  const drag = useRef<{ y: number; t: number } | null>(null)
+  // Entering: rendered closed, then opened on the next frame so the transition runs.
+  const [state, setState] = useState<'closed' | 'open' | 'leaving'>('closed')
+  useEffect(() => {
+    const open = () => setState((st) => (st === 'closed' ? 'open' : st))
+    // Next frame; a timer too, because a background tab runs no frames.
+    const raf = requestAnimationFrame(open)
+    const timer = window.setTimeout(open, 50)
+    return () => {
+      cancelAnimationFrame(raf)
+      window.clearTimeout(timer)
+    }
+  }, [])
+  const leaveTimer = useRef<number | undefined>(undefined)
+  useEffect(() => () => window.clearTimeout(leaveTimer.current), [])
 
   useEffect(() => {
     markSeen(item.path)
+    setKinds('')
+    // Another preview opened while this one was leaving: stay open.
+    window.clearTimeout(leaveTimer.current)
+    setState((s) => (s === 'leaving' ? 'open' : s))
   }, [item.path])
 
   // The desktop panel starts just below the site header (as the score viewer measures it).
@@ -117,7 +155,7 @@ function PreviewSheet({
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
-        closePreview()
+        closeRef.current()
         return
       }
       if (e.key !== 'ArrowUp' && e.key !== 'ArrowDown') return
@@ -132,7 +170,16 @@ function PreviewSheet({
     return () => window.removeEventListener('keydown', onKey)
   }, [siblings, index])
 
-  const close = () => closePreview()
+  /** Plays the exit, then unmounts (a new preview opened meanwhile cancels it). */
+  const close = () => {
+    if (state === 'leaving') return
+    setState('leaving')
+    setDragY(0)
+    window.clearTimeout(leaveTimer.current)
+    leaveTimer.current = window.setTimeout(closePreview, desktop ? EXIT_DESK_MS : EXIT_PHONE_MS)
+  }
+  const closeRef = useRef(close)
+  closeRef.current = close
   const openFull = () => {
     navigate(
       hrefViewer({
@@ -147,25 +194,28 @@ function PreviewSheet({
   }
 
   const onHandleDown = (e: ReactPointerEvent<HTMLDivElement>) => {
-    drag.current = e.clientY
+    drag.current = { y: e.clientY, t: performance.now() }
     e.currentTarget.setPointerCapture(e.pointerId)
   }
   const onHandleMove = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (drag.current === null) return
-    setDragY(Math.max(0, e.clientY - drag.current))
+    setDragY(Math.max(0, e.clientY - drag.current.y))
   }
+  // Far enough or fast enough closes it (sliding on from where the finger left it);
+  // otherwise it springs back.
   const onHandleUp = (e: ReactPointerEvent<HTMLDivElement>) => {
     if (drag.current === null) return
-    const moved = Math.max(0, e.clientY - drag.current)
+    const moved = Math.max(0, e.clientY - drag.current.y)
+    const speed = moved / Math.max(1, performance.now() - drag.current.t)
     drag.current = null
-    setDragY(0)
-    if (moved > 80) close()
+    if (moved > 80 || speed > FLICK_SPEED) close()
+    else setDragY(0)
   }
 
   let body
   switch (item.format) {
     case 'score':
-      body = <ScoreBody path={item.path} onSummary={setKinds} />
+      body = <ScoreBody key={item.path} path={item.path} onSummary={setKinds} />
       break
     case 'pdf':
       body = (
@@ -213,7 +263,7 @@ function PreviewSheet({
     case 'text':
       body = (
         <div className="min-h-0 flex-1 overflow-auto p-4">
-          <TextViewer path={item.path} />
+          <TextViewer key={item.path} path={item.path} />
         </div>
       )
       break
@@ -256,6 +306,7 @@ function PreviewSheet({
         <style>{PREVIEW_CSS}</style>
         <aside
           aria-label="快速预览"
+          data-state={state}
           style={{ top: headerH }}
           className="gl-preview-desk fixed bottom-0 right-0 z-40 flex w-[min(46vw,720px)] flex-col border-l border-border bg-background shadow-[-12px_0_32px_-16px_rgba(0,0,0,0.45)]"
         >
@@ -270,11 +321,18 @@ function PreviewSheet({
   return (
     <>
       <style>{PREVIEW_CSS}</style>
-      <div className="fixed inset-0 z-[55] bg-black/25" onClick={close} aria-hidden />
+      <div
+        className="gl-preview-back fixed inset-0 z-[55] bg-black/25"
+        data-state={state}
+        onClick={close}
+        aria-hidden
+      />
       <section
         role="dialog"
         aria-label="快速预览"
-        style={{ height: '72dvh', transform: dragY ? `translateY(${dragY}px)` : undefined }}
+        data-state={state}
+        data-dragging={drag.current !== null && dragY > 0 ? '' : undefined}
+        style={{ height: '72dvh', ['--drag' as string]: `${dragY}px` }}
         className="gl-preview-phone fixed inset-x-0 bottom-0 z-[60] flex flex-col rounded-t-2xl border-t border-border bg-background shadow-[0_-12px_32px_-12px_rgba(0,0,0,0.45)]"
       >
         <div
