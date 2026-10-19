@@ -126,7 +126,12 @@ export default defineConfig({
   css: {
     postcss: {
       plugins: [
-        tailwindcss({ ...tailwindConfig, content: ['./web/**/*.{html,ts,tsx}'] }),
+        // Phones: no hover styles stuck after a tap (hover: only with a real hover pointer).
+        tailwindcss({
+          ...tailwindConfig,
+          content: ['./web/**/*.{html,ts,tsx}'],
+          future: { hoverOnlyWhenSupported: true },
+        }),
         autoprefixer(),
       ],
     },

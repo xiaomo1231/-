@@ -97,7 +97,7 @@ const REMOTE_CSS = `
 }
 .gl-hint { font-size: 12px; color: hsl(var(--muted-foreground)); margin: 8px 2px 0; }
 .gl-pop {
-  position: absolute; right: 0; bottom: calc(100% + 10px); width: 100%; max-height: 62vh; overflow-y: auto;
+  position: absolute; right: 0; bottom: calc(100% + 10px); width: 100%; max-height: 62dvh; overflow-y: auto; overscroll-behavior: contain;
   background: hsl(var(--background)); border: 1px solid hsl(var(--border)); border-radius: 14px;
   padding: 14px; box-shadow: 0 18px 40px -18px rgba(0, 0, 0, 0.5);
 }

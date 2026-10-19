@@ -239,7 +239,7 @@ function PreviewSheet({
     case 'image': {
       const pages = item.pages.length > 0 ? item.pages : [item.path]
       body = (
-        <div className="min-h-0 flex-1 overflow-auto">
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain">
           <ol className="space-y-4 p-4">
             {pages.map((p, i) => (
               <li key={p} className="space-y-2">
@@ -262,7 +262,7 @@ function PreviewSheet({
     }
     case 'text':
       body = (
-        <div className="min-h-0 flex-1 overflow-auto p-4">
+        <div className="min-h-0 flex-1 overflow-auto overscroll-contain p-4">
           <TextViewer key={item.path} path={item.path} />
         </div>
       )
@@ -598,7 +598,7 @@ function ScoreBody({ path, onSummary }: { path: string; onSummary: (summary: str
         </span>
       </div>
 
-      <div ref={scroll} className="min-h-0 flex-1 overflow-auto">
+      <div ref={scroll} className="min-h-0 flex-1 overflow-auto overscroll-contain">
         {error ? (
           <div className="p-4">
             <Notice tone="error">{error}</Notice>

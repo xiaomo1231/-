@@ -95,6 +95,34 @@
   html {
     -webkit-text-size-adjust: 100%;
     text-size-adjust: 100%;
+    /* No grey flash over tapped controls; each control has its own pressed state. */
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  /* Controls answer a tap at once (no double-tap-zoom wait) and a long press does not
+     select their label. Text that is content stays selectable. */
+  button,
+  a,
+  summary,
+  [role='button'],
+  label {
+    touch-action: manipulation;
+  }
+  button,
+  [role='button'],
+  summary {
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  /* iOS zooms the page into a field whose text is under 16px and never zooms back. */
+  @media (pointer: coarse) {
+    input:not([type='range']):not([type='checkbox']):not([type='radio']),
+    select,
+    textarea {
+      font-size: 16px;
+    }
   }
 
   body {

@@ -1636,7 +1636,7 @@ function RehearsalDialog(props: { title: string; onClose: () => void; children: 
         role="dialog"
         aria-modal="true"
         aria-label={props.title}
-        className="gl-dialog-in gl-sheet-sm max-h-[85dvh] w-full max-w-[860px] overflow-y-auto rounded-t-xl border border-border bg-card p-4 sm:rounded-xl"
+        className="gl-dialog-in gl-sheet-sm max-h-[85dvh] w-full max-w-[860px] overflow-y-auto overscroll-contain rounded-t-xl border border-border bg-card p-4 pb-[max(1rem,env(safe-area-inset-bottom))] sm:rounded-xl sm:pb-4"
       >
         <div className="mb-3 flex items-center justify-between gap-3">
           <h2 className="m-0 text-base font-bold">{props.title}</h2>
