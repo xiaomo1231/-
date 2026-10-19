@@ -1,5 +1,6 @@
 import { hrefGroup } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
+import { useRestoreScroll } from '../lib/scrollMemory'
 import { Link } from '../components/Link'
 import { Notice, PageBar, Staff } from '../components/ui'
 
@@ -7,6 +8,7 @@ import { Notice, PageBar, Staff } from '../components/ui'
 export function CategoryPage({ id }: { id: string }) {
   const { info } = useLibrary()
   const category = info?.categories.find((c) => c.id === id)
+  useRestoreScroll(category !== undefined)
 
   if (!category) {
     return (

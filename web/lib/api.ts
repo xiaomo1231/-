@@ -60,6 +60,10 @@ export interface FavoriteItem {
   title: string
   artist: string
   addedAt: number
+  /** This user's name for the file (private to the account). */
+  alias?: string
+  /** This user's name for the song heading the file is listed under. */
+  songAlias?: string
 }
 
 /** 搜索谱 filters: a format, a category id ("1-华语"), and the order. */
@@ -380,6 +384,12 @@ export const api = {
     call<FavoriteItem[]>('/api/favorites', { body: item }),
   removeFavorite: (path: string) =>
     call<FavoriteItem[]>('/api/favorites/remove', { body: { path } }),
+  /** Sets (or with null clears) this user's name for one starred file. */
+  renameFavorite: (path: string, alias: string | null) =>
+    call<FavoriteItem[]>('/api/favorites/rename', { body: { path, alias } }),
+  /** Sets (or with null clears) this user's name for the song heading of the listed files. */
+  renameFavoriteSong: (paths: string[], songAlias: string | null) =>
+    call<FavoriteItem[]>('/api/favorites/renameSong', { body: { paths, songAlias } }),
   /** All practice records, most recently practised first. */
   practice: (signal?: AbortSignal) => call<PracticeRecord[]>('/api/practice', { signal }),
   savePractice: (u: PracticeUpdate) => call<PracticeRecord>('/api/practice', { body: u }),

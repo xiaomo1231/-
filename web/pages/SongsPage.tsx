@@ -6,6 +6,7 @@ import { toggleFavorite, useFavorites } from '../lib/favorites'
 import { useLibrary } from '../lib/libraryContext'
 import { hrefGroup } from '../lib/route'
 import { useLoad } from '../lib/useLoad'
+import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
 import { SongCard } from '../components/SongCard'
 import { LoadMore, Notice, PageBar } from '../components/ui'
 
@@ -13,12 +14,13 @@ import { LoadMore, Notice, PageBar } from '../components/ui'
 export function SongsPage({ artist }: { artist: { id: string; name: string } }) {
   const { info, version } = useLibrary()
   const { items: favorites } = useFavorites()
-  const [limit, setLimit] = useState(PAGE_SIZE)
+  const [limit, setLimit] = useHistoryState('limit', PAGE_SIZE)
   // undefined: the first song is open (the default); null: all closed.
-  const [openId, setOpenId] = useState<string | null | undefined>(undefined)
+  const [openId, setOpenId] = useHistoryState<string | null | undefined>('open', undefined)
   const [busyPath, setBusyPath] = useState<string | null>(null)
   const [error, setError] = useState<string | null>(null)
   const state = useLoad((signal) => api.songs(artist.id, signal), `songs\n${artist.id}\n${version}`)
+  useRestoreScroll(state.status === 'ready')
   const name = artist.name || '歌手'
 
   // The group this artist sits in (the longest matching group id), for 「← 男歌手」.

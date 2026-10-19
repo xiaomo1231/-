@@ -44,6 +44,28 @@ export function isFavorite(path: string): boolean {
   return items.some((f) => f.path === path)
 }
 
+/** Sets (or with null clears) this user's name for one starred file. Rejects with a readable message. */
+export async function renameFavorite(path: string, alias: string | null): Promise<void> {
+  try {
+    items = await api.renameFavorite(path, alias)
+    loaded = true
+    emit()
+  } catch (e) {
+    throw new Error(errorText(e))
+  }
+}
+
+/** Sets (or with null clears) this user's name for the song heading of the listed files. */
+export async function renameFavoriteSong(paths: string[], songAlias: string | null): Promise<void> {
+  try {
+    items = await api.renameFavoriteSong(paths, songAlias)
+    loaded = true
+    emit()
+  } catch (e) {
+    throw new Error(errorText(e))
+  }
+}
+
 /** Stars or un-stars a score; resolves to whether it is starred now. Rejects with a readable message. */
 export async function toggleFavorite(item: Omit<FavoriteItem, 'addedAt'>): Promise<boolean> {
   const was = isFavorite(item.path)

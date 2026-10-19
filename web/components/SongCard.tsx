@@ -2,8 +2,21 @@ import type { ScoreSong, ScoreVersion } from '@/songs/scoreLibraryTypes'
 import { cx } from '../lib/classes'
 import { formatSize } from '../lib/format'
 import { hrefViewer } from '../lib/route'
+import { markSeen, openPreview, useSeen, usePreview, type PreviewItem } from '../lib/preview'
 import { Link } from './Link'
 import { FormatBadge, JianpuBadge } from './ui'
+
+/** A version as a preview item (the song's title, or the file name when the title is unknown). */
+function previewItemOf(song: ScoreSong, artistName: string, v: ScoreVersion): PreviewItem {
+  return {
+    path: v.file.path,
+    format: v.file.format,
+    pages: v.pages?.map((p) => p.path) ?? [],
+    title: song.unknownTitle ? v.label : song.title,
+    artist: artistName,
+    label: v.label,
+  }
+}
 
 /**
  * One song in an artist's list: a title row that opens its versions inline
@@ -53,21 +66,46 @@ export function SongCard({
       </button>
 
       {open && (
-        <ul className="mb-3.5 list-none border-l-2 border-primary pl-[18px]">
-          {song.versions.map((v) => (
-            <VersionRow
-              key={v.file.path}
-              song={song}
-              version={v}
-              artistName={artistName}
-              starred={isStarred(v.file.path)}
-              busy={busyPath === v.file.path}
-              onStar={onStar}
-            />
-          ))}
-        </ul>
+        <VersionList
+          song={song}
+          artistName={artistName}
+          isStarred={isStarred}
+          busyPath={busyPath}
+          onStar={onStar}
+        />
       )}
     </li>
+  )
+}
+
+/** A song's versions (pen-blue rule on the left), each with ☆, 预览 and 看谱 →. */
+export function VersionList({
+  song,
+  artistName,
+  isStarred,
+  busyPath,
+  onStar,
+}: {
+  song: ScoreSong
+  artistName: string
+  isStarred: (path: string) => boolean
+  busyPath: string | null
+  onStar: (song: ScoreSong, version: ScoreVersion) => void
+}) {
+  return (
+    <ul className="mb-3.5 list-none border-l-2 border-primary pl-[18px]">
+      {song.versions.map((v) => (
+        <VersionRow
+          key={v.file.path}
+          song={song}
+          version={v}
+          artistName={artistName}
+          starred={isStarred(v.file.path)}
+          busy={busyPath === v.file.path}
+          onStar={onStar}
+        />
+      ))}
+    </ul>
   )
 }
 
@@ -93,11 +131,23 @@ function VersionRow({
     title: song.unknownTitle ? version.label : song.title,
     artist: artistName,
   })
+  const seen = useSeen().has(version.file.path)
+  const previewing = usePreview().item?.path === version.file.path
   return (
-    <li className="grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 py-1.5 min-[861px]:grid-cols-[56px_minmax(0,1fr)_auto_auto]">
+    <li
+      className={cx(
+        'grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 py-1.5 min-[861px]:grid-cols-[56px_minmax(0,1fr)_auto_auto]',
+        previewing && 'rounded-lg bg-card px-2',
+      )}
+    >
       <FormatBadge format={version.file.format} className="w-[52px]" />
       <span className="min-w-0 truncate text-sm">
         {version.label}
+        {seen && (
+          <span className="ml-2 text-xs text-muted-foreground" title="看过">
+            看过
+          </span>
+        )}
         {version.tags.length > 0 && (
           <em className="ml-2 text-xs not-italic text-muted-foreground">
             {version.tags.join(' · ')}
@@ -122,12 +172,27 @@ function VersionRow({
         >
           <span aria-hidden>{starred ? '★' : '☆'}</span>
         </button>
-        <Link
-          href={href}
-          className="inline-flex min-h-11 items-center px-1.5 text-[13px] text-primary"
+        <button
+          type="button"
+          onClick={() =>
+            openPreview(
+              previewItemOf(song, artistName, version),
+              song.versions.map((x) => previewItemOf(song, artistName, x)),
+            )
+          }
+          className="inline-flex h-11 items-center px-1.5 text-[13px] text-muted-foreground transition-colors hover:text-primary min-[861px]:h-8"
         >
-          看谱 →
-        </Link>
+          预览
+        </button>
+        {/* Opening the full viewer marks the version as seen (the link still navigates). */}
+        <span className="inline-flex" onClickCapture={() => markSeen(version.file.path)}>
+          <Link
+            href={href}
+            className="inline-flex min-h-11 items-center px-1.5 text-[13px] text-primary"
+          >
+            看谱 →
+          </Link>
+        </span>
       </span>
     </li>
   )

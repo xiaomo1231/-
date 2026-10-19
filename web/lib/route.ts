@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from 'react'
 import { parsePages } from './format'
+import { saveScroll } from './scrollMemory'
 
 /** The score viewer's route: the file, how it is shown, and the header texts. */
 export interface ViewerRoute {
@@ -178,6 +179,8 @@ export function hrefViewer(v: {
 /** Pushes a history entry (so the phone's back gesture returns here) and tells the router. */
 export function navigate(hash: string): void {
   if (window.location.hash === hash) return
+  // Where this page was left, for the way back.
+  saveScroll()
   window.history.pushState({ sv: 1 }, '', hash)
   window.dispatchEvent(new Event(ROUTE_EVENT))
 }

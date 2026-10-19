@@ -7,6 +7,7 @@ import { fileBaseName } from '../lib/format'
 import { hrefEnsembles, hrefViewer } from '../lib/route'
 import { Link } from '../components/Link'
 import { Notice } from '../components/ui'
+import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
 
 const PAGE = 50
 const POLL_MS = 5000
@@ -89,7 +90,9 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
   const [items, setItems] = useState<EnsembleFile[]>([])
   const [total, setTotal] = useState(0)
   /** Files whose title could not be read: hidden unless asked for. */
-  const [untitled, setUntitled] = useState(false)
+  const [untitled, setUntitled] = useHistoryState('untitled', false)
+  /** Rows shown when this entry was left (再看 …), loaded again on the way back. */
+  const [shownCount, setShownCount] = useHistoryState('count', PAGE)
   const [hidden, setHidden] = useState(0)
   const [progress, setProgress] = useState<Progress>({ indexed: 0, toIndex: 0, indexing: false })
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
@@ -108,7 +111,8 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
     setItems([])
     setTotal(0)
     setMoreError('')
-    api.ensembles({ q: query, need: needKey, offset: 0, limit: PAGE, untitled }, ac.signal).then(
+    const first = Math.max(PAGE, Math.min(500, shownCount))
+    api.ensembles({ q: query, need: needKey, offset: 0, limit: first, untitled }, ac.signal).then(
       (r) => {
         if (ac.signal.aborted) return
         setItems(r.items)
@@ -124,7 +128,11 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
       },
     )
     return () => ac.abort()
-  }, [query, needKey, untitled])
+  }, [query, needKey, untitled]) // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    if (items.length) setShownCount(items.length)
+  }, [items.length, setShownCount])
+  useRestoreScroll(phase === 'ready')
 
   // While the background reader works, refresh the shown rows every 5 s.
   const indexing = progress.indexing

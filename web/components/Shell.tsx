@@ -34,6 +34,8 @@ import { CombinePage } from '../pages/CombinePage'
 import { DailyPage } from '../pages/DailyPage'
 import { InvitePage } from '../pages/InvitePage'
 import { Viewer } from '../viewer/Viewer'
+import { PreviewHost } from '../viewer/PreviewPanel'
+import { closePreview, usePreview } from '../lib/preview'
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
 
@@ -150,6 +152,11 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
   )
 
   const onViewer = route.kind === 'viewer'
+  const previewOpen = usePreview().item !== null
+  // The score viewer replaces any quick preview.
+  useEffect(() => {
+    if (onViewer) closePreview()
+  }, [onViewer])
   // Band and account pages do not need the library, so they never wait for it.
   const pageReady = info !== null || onViewer || libraryHidden || !LIBRARY_ROUTES.has(route.kind)
 
@@ -263,6 +270,8 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
         <main
           className={cx(
             'mx-auto w-full flex-1',
+            // An open preview takes the right side on wide screens: the list moves over.
+            previewOpen && !onViewer && 'min-[861px]:pr-[min(46vw,720px)]',
             // The score fills the whole window; every other page sits in the 1180 px column.
             onViewer
               ? 'max-w-none'
@@ -286,6 +295,8 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
             <p className="py-16 text-center text-sm text-muted-foreground">正在读取谱库…</p>
           )}
         </main>
+
+        <PreviewHost />
 
         {!onViewer && <TabBar route={route} libraryHidden={libraryHidden} />}
       </div>

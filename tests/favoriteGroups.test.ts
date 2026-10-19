@@ -183,3 +183,37 @@ describe('filterGroups', () => {
     expect(filterGroups(groups, '不存在')).toEqual([])
   })
 })
+
+describe('renamed files and songs', () => {
+  const a1 = fav('6-动漫音乐/BanG Dream!/春日影/Final春日影.gp5', 100, { alias: '我的指弹版' })
+  const a2 = fav('6-动漫音乐/BanG Dream!/春日影/春日影 (songsterr 3).gp5', 300, {
+    songAlias: '春日影（练习）',
+  })
+  const b1 = fav('1-华语/男歌手/周杰伦/晴天/晴天.gp5', 200)
+
+  it('the heading shows the song alias when any item has one, else the song name', () => {
+    const groups = groupFavorites([a1, a2, b1], 'added')
+    const spring = groups.find((g) => g.name === '春日影')!
+    expect(spring.songAlias).toBe('春日影（练习）')
+    expect(spring.displayTitle).toBe('春日影（练习）')
+    expect(spring.originalTitle).toBe('春日影')
+    const sunny = groups.find((g) => g.name === '晴天')!
+    expect(sunny.songAlias).toBeUndefined()
+    expect(sunny.displayTitle).toBe('晴天')
+    expect(sunny.originalTitle).toBe('晴天')
+  })
+
+  it('search matches the file alias and the song alias', () => {
+    const groups = groupFavorites([a1, a2, b1], 'added')
+    expect(filterGroups(groups, '指弹版').map((g) => g.name)).toEqual(['春日影'])
+    expect(filterGroups(groups, '指弹版')[0]?.items.map((f) => f.alias)).toEqual(['我的指弹版'])
+    expect(filterGroups(groups, '练习').map((g) => g.name)).toEqual(['春日影'])
+    expect(filterGroups(groups, '练习')[0]?.items.length).toBe(2)
+  })
+
+  it('original names still match', () => {
+    const groups = groupFavorites([a1, a2, b1], 'added')
+    expect(filterGroups(groups, 'Final春日影').map((g) => g.name)).toEqual(['春日影'])
+    expect(filterGroups(groups, '周杰伦').map((g) => g.name)).toEqual(['晴天'])
+  })
+})

@@ -1,6 +1,14 @@
-import { useEffect, useRef, useState, type ReactNode } from 'react'
-import type { ScoreFormat, ScoreSearchResult } from '@/songs/scoreLibraryTypes'
-import { api, type SearchOptions } from '../lib/api'
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
+import type {
+  ScoreFormat,
+  ScoreSearchResult,
+  ScoreSong,
+  ScoreVersion,
+} from '@/songs/scoreLibraryTypes'
+import { api, errorText, type SearchOptions } from '../lib/api'
+import { toggleFavorite, useFavorites } from '../lib/favorites'
+import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
+import { VersionList } from '../components/SongCard'
 import { cx } from '../lib/classes'
 import { hrefArtist, hrefSearch, hrefViewer } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
@@ -9,6 +17,9 @@ import { Link } from '../components/Link'
 import { MatchTag, Notice } from '../components/ui'
 
 type Sort = NonNullable<SearchOptions['sort']>
+
+const ROW =
+  'grid min-h-11 grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2 rounded-lg px-1 py-3 transition-colors hover:bg-card active:bg-card min-[861px]:grid-cols-[52px_minmax(0,1fr)_auto]'
 
 const FORMATS: ReadonlyArray<readonly [ScoreFormat | '', string]> = [
   ['', '全部格式'],
@@ -32,9 +43,9 @@ export function SearchPage({ q }: { q: string }) {
   const { info, version } = useLibrary()
   const [text, setText] = useState(q)
   const [query, setQuery] = useState(q.trim())
-  const [fmt, setFmt] = useState<ScoreFormat | ''>('')
-  const [cat, setCat] = useState('')
-  const [sort, setSort] = useState<Sort>('rel')
+  const [fmt, setFmt] = useHistoryState<ScoreFormat | ''>('fmt', '')
+  const [cat, setCat] = useHistoryState('cat', '')
+  const [sort, setSort] = useHistoryState<Sort>('sort', 'rel')
   const field = useRef<HTMLInputElement>(null)
 
   // The route's q changed (a tab, Ctrl K, back): show that instead.
@@ -60,6 +71,7 @@ export function SearchPage({ q }: { q: string }) {
     (signal) => (query ? api.search(query, opts, signal) : api.top(opts, signal)),
     `search\n${query}\n${fmt}\n${cat}\n${sort}\n${version}`,
   )
+  useRestoreScroll(state.status === 'ready')
 
   const files = info?.files ?? 0
   const placeholder = info
@@ -197,9 +209,38 @@ function Pill({
   )
 }
 
-/** Artist chips, then the numbered song results (each opens its best version). */
+/**
+ * Artist chips, then the numbered song results: a song with one score opens it, one
+ * with several opens its versions in place (each with ☆, 预览 and 看谱 →).
+ */
 function Results({ query, data }: { query: string; data: ScoreSearchResult }) {
   const { artists, songs, moreSongs } = data
+  const [openIds, setOpenIds] = useHistoryState<string[]>('open', [])
+  const open = useMemo(() => new Set(openIds), [openIds])
+  const toggle = (id: string) =>
+    setOpenIds((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
+  const { items: favorites } = useFavorites()
+  const starred = useMemo(() => new Set(favorites.map((f) => f.path)), [favorites])
+  const [busyPath, setBusyPath] = useState<string | null>(null)
+  const [error, setError] = useState<string | null>(null)
+  const star = async (song: ScoreSong, v: ScoreVersion, artist: string) => {
+    if (busyPath) return
+    setBusyPath(v.file.path)
+    setError(null)
+    try {
+      await toggleFavorite({
+        path: v.file.path,
+        format: v.file.format,
+        pages: v.pages?.map((p) => p.path) ?? [],
+        title: song.unknownTitle ? v.label : song.title,
+        artist,
+      })
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusyPath(null)
+    }
+  }
 
   if (artists.length === 0 && songs.length === 0) {
     return (
@@ -236,32 +277,26 @@ function Results({ query, data }: { query: string; data: ScoreSearchResult }) {
           const title = song.unknownTitle ? best.label : song.title
           const count = song.versions.length
           const filled = Math.min(8, Math.ceil(count / 4))
-          return (
-            <li key={song.id}>
-              <Link
-                href={hrefViewer({
-                  path: best.file.path,
-                  format: best.file.format,
-                  pages: best.pages?.map((p) => p.path),
-                  title,
-                  artist: artistName,
-                })}
-                className="grid min-h-11 grid-cols-[38px_minmax(0,1fr)_auto] items-center gap-2 rounded-lg px-1 py-3 transition-colors hover:bg-card active:bg-card min-[861px]:grid-cols-[52px_minmax(0,1fr)_auto]"
-              >
-                <span className="mono pr-3.5 text-right text-base font-semibold text-muted-foreground">
-                  {i + 1}.
+          const body = (
+            <>
+              <span className="mono pr-3.5 text-right text-base font-semibold text-muted-foreground">
+                {i + 1}.
+              </span>
+              <span className="min-w-0">
+                <span className="block break-words text-lg font-bold leading-snug">
+                  {title}
+                  {match !== 'name' && <MatchTag match={match} />}
                 </span>
-                <span className="min-w-0">
-                  <span className="block break-words text-lg font-bold leading-snug">
-                    {title}
-                    {match !== 'name' && <MatchTag match={match} />}
-                  </span>
-                  <span className="block truncate text-[15px] text-muted-foreground">
-                    {artistName}
-                  </span>
+                <span className="block truncate text-[15px] text-muted-foreground">
+                  {artistName}
                 </span>
+              </span>
+              <span className="flex items-center gap-2 pr-2">
+                {count > 1 && (
+                  <span className="mono text-xs text-muted-foreground">{count} 个谱</span>
+                )}
                 <span
-                  className="flex gap-1 pr-2"
+                  className="flex gap-1"
                   role="img"
                   aria-label={`${count} 个版本`}
                   title={`${count} 个版本`}
@@ -277,11 +312,66 @@ function Results({ query, data }: { query: string; data: ScoreSearchResult }) {
                     />
                   ))}
                 </span>
-              </Link>
+                {count > 1 && (
+                  <span
+                    aria-hidden
+                    className={cx(
+                      'text-lg text-muted-foreground transition-transform duration-200 motion-reduce:transition-none',
+                      open.has(song.id) && 'rotate-90',
+                    )}
+                  >
+                    ›
+                  </span>
+                )}
+              </span>
+            </>
+          )
+          return (
+            <li key={song.id}>
+              {count > 1 ? (
+                <button
+                  type="button"
+                  aria-expanded={open.has(song.id)}
+                  onClick={() => toggle(song.id)}
+                  className={cx(ROW, 'w-full text-left')}
+                >
+                  {body}
+                </button>
+              ) : (
+                <Link
+                  href={hrefViewer({
+                    path: best.file.path,
+                    format: best.file.format,
+                    pages: best.pages?.map((p) => p.path),
+                    title,
+                    artist: artistName,
+                  })}
+                  className={ROW}
+                >
+                  {body}
+                </Link>
+              )}
+              {count > 1 && open.has(song.id) && (
+                <div className="pb-2 pl-[38px] min-[861px]:pl-[52px]">
+                  <VersionList
+                    song={song}
+                    artistName={artistName}
+                    isStarred={(path) => starred.has(path)}
+                    busyPath={busyPath}
+                    onStar={(sg, v) => void star(sg, v, artistName)}
+                  />
+                </div>
+              )}
             </li>
           )
         })}
       </ol>
+
+      {error && (
+        <p role="alert" className="px-1 pb-3 text-sm text-destructive">
+          {error}
+        </p>
+      )}
 
       {moreSongs && (
         <p className="px-1 pb-24 text-xs text-muted-foreground">

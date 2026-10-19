@@ -2,6 +2,9 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './styles.css'
 import { App } from './App'
+import { startScrollMemory } from './lib/scrollMemory'
+
+startScrollMemory()
 
 const container = document.getElementById('root')
 if (!container) throw new Error('页面缺少 #root 节点')

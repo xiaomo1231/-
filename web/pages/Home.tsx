@@ -1,4 +1,5 @@
 import { useState } from 'react'
+import { useRestoreScroll } from '../lib/scrollMemory'
 import type { ScoreCategory } from '@/songs/scoreLibraryTypes'
 import { useFavorites } from '../lib/favorites'
 import { practiceLine, usePractice } from '../lib/practice'
@@ -27,6 +28,7 @@ export function Home() {
   const { info, scanning } = useLibrary()
   const categories = info?.categories ?? []
   const practice = usePractice()
+  useRestoreScroll(info !== null && info !== undefined)
 
   return (
     <>

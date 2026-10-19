@@ -34,7 +34,10 @@ import {
   loadFavoritesByUser,
   parseFavoriteInput,
   parseFavoritePath,
+  parseRenameInput,
+  parseRenameSongInput,
   removeFavorite,
+  renameItems,
   saveFavoritesByUser,
   upsertFavorite,
   type FavoriteItem,
@@ -425,9 +428,28 @@ async function handleFavorites(
     )
     return sendJson(res, 200, next)
   }
-  // POST /api/favorites/remove
   if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
   const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+  // POST /api/favorites/rename: this account's own name for one favourite.
+  if (p === '/api/favorites/rename') {
+    const { path: rel, alias } = orBadRequest(parseRenameInput(body, inRoot))
+    const next = await favoriteQueue(() =>
+      persistFavorites(uid, (list) => {
+        if (!list.some((f) => f.path === rel)) throw new HttpError(404, '收藏里没有这个谱。')
+        return renameItems(list, [rel], 'alias', alias)
+      }),
+    )
+    return sendJson(res, 200, next)
+  }
+  // POST /api/favorites/renameSong: this account's own name for a song heading.
+  if (p === '/api/favorites/renameSong') {
+    const { paths, songAlias } = orBadRequest(parseRenameSongInput(body))
+    const next = await favoriteQueue(() =>
+      persistFavorites(uid, (list) => renameItems(list, paths, 'songAlias', songAlias)),
+    )
+    return sendJson(res, 200, next)
+  }
+  // POST /api/favorites/remove
   const rel = orBadRequest(parseFavoritePath(body, inRoot))
   const next = await favoriteQueue(() => persistFavorites(uid, (list) => removeFavorite(list, rel)))
   return sendJson(res, 200, next)
@@ -1446,7 +1468,12 @@ async function handleApi(
   const me = currentUser(req)
   if (!me) return sendJson(res, 401, { error: '请先登录。' })
 
-  if (p === '/api/favorites' || p === '/api/favorites/remove')
+  if (
+    p === '/api/favorites' ||
+    p === '/api/favorites/remove' ||
+    p === '/api/favorites/rename' ||
+    p === '/api/favorites/renameSong'
+  )
     return handleFavorites(req, res, p, me.id)
   if (p === '/api/practice' || p === '/api/practice/remove')
     return handlePractice(req, res, p, me.id)

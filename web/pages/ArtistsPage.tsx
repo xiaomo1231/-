@@ -6,6 +6,7 @@ import { hrefArtist, hrefCategory } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
 import { groupByInitial, initialOf, sortArtists, type ArtistSort } from '../lib/sort'
 import { useLoad } from '../lib/useLoad'
+import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
 import { Link } from '../components/Link'
 import { LoadMore, Notice, PageBar, Seg, Staff } from '../components/ui'
 
@@ -20,13 +21,14 @@ const LETTERS = Array.from({ length: 26 }, (_, i) => String.fromCharCode(65 + i)
 /** 索引: a group's artists as a back-of-book index, with an A–Z jump row above. */
 export function ArtistsPage({ group }: { group: GroupRoute }) {
   const { info, version } = useLibrary()
-  const [sort, setSort] = useState<ArtistSort>('name')
-  const [limit, setLimit] = useState(PAGE_SIZE)
+  const [sort, setSort] = useHistoryState<ArtistSort>('sort', 'name')
+  const [limit, setLimit] = useHistoryState('limit', PAGE_SIZE)
   const [jump, setJump] = useState<string | null>(null)
   const state = useLoad(
     (signal) => api.artists(group.id, signal),
     `artists\n${group.id}\n${version}`,
   )
+  useRestoreScroll(state.status === 'ready')
 
   const sorted = useMemo(
     () => (state.status === 'ready' ? sortArtists(state.data, sort) : []),

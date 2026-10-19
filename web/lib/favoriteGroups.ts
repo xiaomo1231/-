@@ -15,8 +15,15 @@ export type FavoriteSort = 'added' | 'artist' | 'practiced'
 
 export interface FavoriteGroup {
   key: string
+  /** The song folder's name (the original, not renamed). */
   name: string
   artist: string
+  /** This user's name for the song, from the first starred file that has one. */
+  songAlias?: string
+  /** The heading to show: the song alias when set, else the song name. */
+  displayTitle: string
+  /** The song folder's name, as in the library. */
+  originalTitle: string
   /** Starred scores of this song, newest starred first. */
   items: FavoriteItem[]
 }
@@ -92,10 +99,20 @@ export function groupFavorites(
     const folder = songFolderOf(item.path)
     const group = map.get(folder.key)
     if (group) group.items.push(item)
-    else map.set(folder.key, { ...folder, items: [item] })
+    else
+      map.set(folder.key, {
+        ...folder,
+        displayTitle: folder.name,
+        originalTitle: folder.name,
+        items: [item],
+      })
   }
   const groups = [...map.values()]
-  for (const g of groups) g.items.sort((a, b) => b.addedAt - a.addedAt)
+  for (const g of groups) {
+    g.items.sort((a, b) => b.addedAt - a.addedAt)
+    g.songAlias = g.items.find((f) => f.songAlias)?.songAlias
+    g.displayTitle = g.songAlias ?? g.name
+  }
 
   if (sort === 'artist') {
     return groups.sort(
@@ -118,8 +135,9 @@ export function groupFavorites(
 }
 
 /**
- * Keeps the groups whose song name or artist matches the query, and within other groups
- * the items whose file name matches. Empty query returns the groups unchanged.
+ * Keeps the groups whose song name (or the user's song name) or artist matches the query,
+ * and within other groups the items whose file name (or the user's file name) matches.
+ * Empty query returns the groups unchanged.
  */
 export function filterGroups(groups: FavoriteGroup[], query: string): FavoriteGroup[] {
   const q = normalizeForSearch(query)
@@ -128,11 +146,13 @@ export function filterGroups(groups: FavoriteGroup[], query: string): FavoriteGr
 
   const out: FavoriteGroup[] = []
   for (const g of groups) {
-    if (hit(g.name) || hit(g.artist)) {
+    if (hit(g.name) || hit(g.artist) || (g.songAlias !== undefined && hit(g.songAlias))) {
       out.push(g)
       continue
     }
-    const items = g.items.filter((f) => hit(fileNameOf(f.path)))
+    const items = g.items.filter(
+      (f) => hit(fileNameOf(f.path)) || (f.alias !== undefined && hit(f.alias)),
+    )
     if (items.length > 0) out.push({ ...g, items })
   }
   return out

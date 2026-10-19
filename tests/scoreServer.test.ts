@@ -44,10 +44,14 @@ import {
   createSerialQueue,
   inRootOf,
   MAX_FAVORITES,
+  parseAlias,
   parseFavoriteInput,
   parseFavoritePath,
+  parseRenameInput,
+  parseRenameSongInput,
   loadFavoritesByUser,
   removeFavorite,
+  renameItems,
   sanitizeFavorites,
   saveFavoritesByUser,
   type FavoritesByUser,
@@ -345,6 +349,92 @@ describe('favourites (server/favorites.ts)', () => {
     )
     expect(kept.map((f) => f.addedAt)).toEqual([5])
     expect(sanitizeFavorites({ not: 'array' }, inRoot)).toEqual([])
+  })
+
+  it('parses a name: trimmed, 1–60 code points, empty clears', () => {
+    expect(parseAlias('  春日影  ')).toEqual({ ok: true, value: '春日影' })
+    expect(parseAlias('')).toEqual({ ok: true, value: null })
+    expect(parseAlias('   ')).toEqual({ ok: true, value: null })
+    expect(parseAlias(null)).toEqual({ ok: true, value: null })
+    expect(parseAlias('七'.repeat(60))).toEqual({ ok: true, value: '七'.repeat(60) })
+    expect(parseAlias('七'.repeat(61))).toEqual({ ok: false, error: '名字要在 1–60 个字之间。' })
+    expect(parseAlias(3).ok).toBe(false)
+    expect(parseAlias(undefined).ok).toBe(false)
+  })
+
+  it('parses a rename request and rejects an unknown or outside path', () => {
+    expect(parseRenameInput({ path: '1-华语/a.gp5', alias: ' 我的版本 ' }, inRoot)).toEqual({
+      ok: true,
+      value: { path: '1-华语/a.gp5', alias: '我的版本' },
+    })
+    expect(parseRenameInput({ path: '1-华语/a.gp5', alias: null }, inRoot)).toEqual({
+      ok: true,
+      value: { path: '1-华语/a.gp5', alias: null },
+    })
+    expect(parseRenameInput({ path: '../a.gp5', alias: 'x' }, inRoot).ok).toBe(false)
+    expect(parseRenameInput({ path: 'a.gp5', alias: 'a'.repeat(61) }, inRoot)).toEqual({
+      ok: false,
+      error: '名字要在 1–60 个字之间。',
+    })
+  })
+
+  it('parses a song rename request with at most 500 paths', () => {
+    expect(parseRenameSongInput({ paths: ['a', 'b'], songAlias: '春日影' })).toEqual({
+      ok: true,
+      value: { paths: ['a', 'b'], songAlias: '春日影' },
+    })
+    expect(parseRenameSongInput({ paths: 'a', songAlias: 'x' }).ok).toBe(false)
+    expect(parseRenameSongInput({ paths: [1], songAlias: 'x' }).ok).toBe(false)
+    const many = Array.from({ length: 501 }, (_, i) => `p${i}`)
+    expect(parseRenameSongInput({ paths: many, songAlias: null }).ok).toBe(false)
+    expect(parseRenameSongInput({ paths: ['a'], songAlias: 'x'.repeat(61) }).ok).toBe(false)
+  })
+
+  it('renames and clears names on the listed items only', () => {
+    const base = (p: string, extra: Partial<FavoriteItem> = {}): FavoriteItem => ({
+      path: p,
+      format: 'score',
+      pages: [],
+      title: p,
+      artist: '',
+      addedAt: 1,
+      ...extra,
+    })
+    const list = [base('a'), base('b', { songAlias: '旧名' }), base('c')]
+    const named = renameItems(list, ['a'], 'alias', '我的')
+    expect(named[0]!.alias).toBe('我的')
+    expect(named[1]).toBe(list[1])
+    const song = renameItems(named, ['a', 'b', 'zz'], 'songAlias', '新名')
+    expect(song.map((f) => f.songAlias)).toEqual(['新名', '新名', undefined])
+    const cleared = renameItems(song, ['a'], 'alias', null)
+    expect('alias' in cleared[0]!).toBe(false)
+    expect(cleared[0]!.songAlias).toBe('新名')
+  })
+
+  it('keeps names when a file is added again, and drops invalid stored names on load', () => {
+    const item = (addedAt: number, extra: Partial<FavoriteItem> = {}): FavoriteItem => ({
+      path: '1-华语/a.gp5',
+      format: 'score',
+      pages: [],
+      title: 'a',
+      artist: '',
+      addedAt,
+      ...extra,
+    })
+    const again = upsertFavorite([item(1, { alias: '我的', songAlias: '歌' })], item(9))
+    expect(again[0]).toMatchObject({ addedAt: 9, alias: '我的', songAlias: '歌' })
+
+    const kept = sanitizeFavorites(
+      [
+        { ...body({ addedAt: 5 }), alias: '  好名字 ', songAlias: 'x'.repeat(61) },
+        { ...body({ path: '1-华语/b.gp5', addedAt: 6 }), alias: 42 },
+      ],
+      inRoot,
+    )
+    expect(kept[0]).toMatchObject({ alias: '好名字' })
+    expect('songAlias' in kept[0]!).toBe(false)
+    expect(kept[1]!.alias).toBeUndefined()
+    expect(kept).toHaveLength(2)
   })
 
   it('runs queued writes one at a time', async () => {

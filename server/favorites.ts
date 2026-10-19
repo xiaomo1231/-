@@ -26,6 +26,9 @@ export const FAVORITE_FORMATS = [
 
 export type FavoriteFormat = (typeof FAVORITE_FORMATS)[number]
 
+export const MAX_ALIAS_CHARS = 60
+export const MAX_RENAME_PATHS = 500
+
 export interface FavoriteItem {
   path: string
   format: FavoriteFormat
@@ -33,9 +36,31 @@ export interface FavoriteItem {
   title: string
   artist: string
   addedAt: number
+  /** This user's name for the file (private to the account). */
+  alias?: string
+  /** This user's name for the song heading the file is listed under. */
+  songAlias?: string
 }
 
 export type ParseResult<T> = { ok: true; value: T } | { ok: false; error: string }
+
+/** Which of the two private names a rename changes. */
+export type AliasField = 'alias' | 'songAlias'
+
+const ALIAS_ERROR = '名字要在 1–60 个字之间。'
+
+/**
+ * A user's name for a file or song: trimmed, 1–60 code points. null or an empty
+ * (or blank) string means "no name" and yields null.
+ */
+export function parseAlias(v: unknown): ParseResult<string | null> {
+  if (v === null) return { ok: true, value: null }
+  if (typeof v !== 'string') return { ok: false, error: ALIAS_ERROR }
+  const t = v.trim()
+  if (t === '') return { ok: true, value: null }
+  if ([...t].length > MAX_ALIAS_CHARS) return { ok: false, error: ALIAS_ERROR }
+  return { ok: true, value: t }
+}
 
 /** True when `rel` is a relative path that stays inside the score root. */
 export type InRoot = (rel: string) => boolean
@@ -93,9 +118,58 @@ export function parseFavoritePath(
   return { ok: true, value: p }
 }
 
-/** The list with `item` at the front (an existing entry for the same path is replaced). */
+/** Validates the body of POST /api/favorites/rename. */
+export function parseRenameInput(
+  body: Record<string, unknown>,
+  inRoot: InRoot,
+): ParseResult<{ path: string; alias: string | null }> {
+  const p = parseFavoritePath(body, inRoot)
+  if (!p.ok) return p
+  const alias = parseAlias(body.alias)
+  if (!alias.ok) return alias
+  return { ok: true, value: { path: p.value, alias: alias.value } }
+}
+
+/** Validates the body of POST /api/favorites/renameSong. Unknown paths are ignored later. */
+export function parseRenameSongInput(
+  body: Record<string, unknown>,
+): ParseResult<{ paths: string[]; songAlias: string | null }> {
+  const paths = body.paths
+  if (!Array.isArray(paths) || paths.length > MAX_RENAME_PATHS)
+    return { ok: false, error: `要改名的谱不对（最多 ${MAX_RENAME_PATHS} 个）。` }
+  for (const p of paths) if (typeof p !== 'string') return { ok: false, error: '要改名的谱不对。' }
+  const songAlias = parseAlias(body.songAlias)
+  if (!songAlias.ok) return songAlias
+  return { ok: true, value: { paths: [...(paths as string[])], songAlias: songAlias.value } }
+}
+
+/** The list with `item` at the front (an existing entry for the same path is replaced; its names are kept). */
 export function upsertFavorite(list: FavoriteItem[], item: FavoriteItem): FavoriteItem[] {
-  return [item, ...list.filter((f) => f.path !== item.path)].slice(0, MAX_FAVORITES)
+  const old = list.find((f) => f.path === item.path)
+  const kept: FavoriteItem = { ...item }
+  if (old?.alias) kept.alias = old.alias
+  if (old?.songAlias) kept.songAlias = old.songAlias
+  return [kept, ...list.filter((f) => f.path !== item.path)].slice(0, MAX_FAVORITES)
+}
+
+/**
+ * The list with `field` set on the items whose path is in `paths` (null clears it).
+ * Other items and other fields are unchanged.
+ */
+export function renameItems(
+  list: FavoriteItem[],
+  paths: string[],
+  field: AliasField,
+  value: string | null,
+): FavoriteItem[] {
+  const wanted = new Set(paths)
+  return list.map((f) => {
+    if (!wanted.has(f.path)) return f
+    const next: FavoriteItem = { ...f }
+    if (value === null) delete next[field]
+    else next[field] = value
+    return next
+  })
 }
 
 /** The list without the entry for `path`. */
@@ -112,7 +186,14 @@ export function sanitizeFavorites(raw: unknown, inRoot: InRoot): FavoriteItem[] 
     const rec = e as Record<string, unknown>
     const added = typeof rec.addedAt === 'number' && Number.isFinite(rec.addedAt) ? rec.addedAt : 0
     const r = parseFavoriteInput(rec, inRoot, added)
-    if (r.ok) out.push(r.value)
+    if (!r.ok) continue
+    const item = r.value
+    // A name that no longer validates is dropped, the favourite itself is kept.
+    for (const field of ['alias', 'songAlias'] as const) {
+      const name = parseAlias(rec[field])
+      if (name.ok && name.value !== null) item[field] = name.value
+    }
+    out.push(item)
   }
   return out.slice(0, MAX_FAVORITES)
 }
