@@ -1,0 +1,376 @@
+/**
+ * Invite links (邀请链接) of the score server: an admin makes a link, the new
+ * member opens it and creates his own account. Only a sha256 hash of each
+ * token is stored (the token is shown once, at creation). Reserving a use,
+ * confirming an account and releasing a use all run through one serial queue
+ * and save atomically, like the other stores.
+ */
+import { createHash, randomBytes, timingSafeEqual } from 'node:crypto'
+import fs from 'node:fs'
+import path from 'node:path'
+import type {
+  AcceptInviteBody,
+  Instrument,
+  InviteInfo,
+  NewInviteBody,
+  NewInviteResult,
+  NewUserBody,
+} from '../src/songs/scoreServerTypes'
+import { createSerialQueue, type ParseResult } from './favorites'
+import { INSTRUMENTS } from './users'
+import { writeFileAtomic } from './util'
+
+export const INVITES_FILE = 'invites.json'
+export const MAX_INVITES = 200
+
+const INVITES_VERSION = 1
+const DAY_MS = 86_400_000
+const NOTE_MAX_CHARS = 100
+const ID_RE = /^[0-9a-f]{12}$/
+const HASH_RE = /^[0-9a-f]{64}$/
+const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/
+const MAX_NAME_CHARS = 64
+const MAX_PASSWORD_CHARS = 1024
+
+const REASON_UNKNOWN = '这个邀请链接不存在或已经失效。'
+const REASON_REVOKED = '这个邀请链接已经被管理员作废。'
+const REASON_EXPIRED = '这个邀请链接已经过期了。'
+const REASON_USED_UP = '这个邀请链接的名额已经用完了。'
+
+/** An error the route can turn into an HTTP status and a Chinese message. */
+export class InviteError extends Error {
+  readonly status: number
+
+  constructor(message: string, status = 400) {
+    super(message)
+    this.name = 'InviteError'
+    this.status = status
+  }
+}
+
+/** A stored invite: the public fields plus the token's hash. */
+interface StoredInvite extends InviteInfo {
+  tokenHash: string
+}
+
+type Items = readonly StoredInvite[]
+
+const good = <T>(value: T): ParseResult<T> => ({ ok: true, value })
+const fail = (error: string): { ok: false; error: string } => ({ ok: false, error })
+const charLen = (s: string): number => [...s].length
+const asRecord = (v: unknown): Record<string, unknown> | null =>
+  v && typeof v === 'object' && !Array.isArray(v) ? (v as Record<string, unknown>) : null
+
+const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex')
+
+/** Why an invite cannot be used now, or null when it can. */
+function reasonFor(row: StoredInvite, now: number): string | null {
+  if (row.revoked) return REASON_REVOKED
+  if (row.expiresAt !== null && now >= row.expiresAt) return REASON_EXPIRED
+  if (row.maxUses !== null && row.uses >= row.maxUses) return REASON_USED_UP
+  return null
+}
+
+/** The page-facing shape: never the hash. */
+function publicInvite(row: StoredInvite): InviteInfo {
+  return {
+    id: row.id,
+    createdBy: row.createdBy,
+    createdAt: row.createdAt,
+    expiresAt: row.expiresAt,
+    maxUses: row.maxUses,
+    uses: row.uses,
+    usedBy: [...row.usedBy],
+    instrument: row.instrument,
+    libraryAccess: row.libraryAccess,
+    note: row.note,
+    revoked: row.revoked,
+  }
+}
+
+/** Drops the oldest unusable invites first, then the oldest, until the store is within MAX_INVITES. */
+function trimRows(rows: Items, now: number): StoredInvite[] {
+  const out = [...rows]
+  while (out.length > MAX_INVITES) {
+    const spent = out.findIndex((r) => reasonFor(r, now) !== null)
+    out.splice(spent >= 0 ? spent : 0, 1)
+  }
+  return out
+}
+
+function freshId(rows: Items): string {
+  const taken = new Set(rows.map((r) => r.id))
+  for (;;) {
+    const id = randomBytes(6).toString('hex')
+    if (!taken.has(id)) return id
+  }
+}
+
+function sanitizeRow(raw: unknown): StoredInvite | null {
+  const r = asRecord(raw)
+  if (!r) return null
+  const id = r.id
+  const expiresAt = r.expiresAt
+  const maxUses = r.maxUses
+  const instrument = r.instrument
+  if (typeof id !== 'string' || !ID_RE.test(id)) return null
+  if (typeof r.createdBy !== 'string' || typeof r.createdAt !== 'number') return null
+  if (!Number.isFinite(r.createdAt)) return null
+  if (expiresAt !== null && (typeof expiresAt !== 'number' || !Number.isFinite(expiresAt)))
+    return null
+  if (
+    maxUses !== null &&
+    (typeof maxUses !== 'number' || !Number.isSafeInteger(maxUses) || maxUses < 1)
+  )
+    return null
+  if (typeof r.uses !== 'number' || !Number.isSafeInteger(r.uses) || r.uses < 0) return null
+  if (!Array.isArray(r.usedBy) || !r.usedBy.every((u) => typeof u === 'string')) return null
+  if (instrument !== null && !INSTRUMENTS.includes(instrument as Instrument)) return null
+  if (typeof r.libraryAccess !== 'boolean' || typeof r.revoked !== 'boolean') return null
+  if (typeof r.note !== 'string') return null
+  if (typeof r.tokenHash !== 'string' || !HASH_RE.test(r.tokenHash)) return null
+  return {
+    id,
+    createdBy: r.createdBy,
+    createdAt: r.createdAt,
+    expiresAt,
+    maxUses,
+    uses: r.uses,
+    usedBy: [...r.usedBy] as string[],
+    instrument: instrument as Instrument | null,
+    libraryAccess: r.libraryAccess,
+    note: [...r.note].slice(0, NOTE_MAX_CHARS).join(''),
+    revoked: r.revoked,
+    tokenHash: r.tokenHash,
+  }
+}
+
+/** Validates the body of POST /api/invites (admin). */
+export function parseNewInvite(body: unknown): ParseResult<NewInviteBody> {
+  const b = asRecord(body)
+  if (!b) return fail('请求内容不对。')
+  const { days, maxUses, instrument, libraryAccess, note } = b
+  if (days !== null && !(Number.isInteger(days) && (days as number) >= 1 && (days as number) <= 90))
+    return fail('有效期只能是 1–90 天，或永不过期。')
+  if (
+    maxUses !== null &&
+    !(Number.isInteger(maxUses) && (maxUses as number) >= 1 && (maxUses as number) <= 50)
+  )
+    return fail('可用次数只能是 1–50 次，或不限。')
+  if (
+    instrument !== null &&
+    !(typeof instrument === 'string' && INSTRUMENTS.includes(instrument as Instrument))
+  )
+    return fail('乐器选择不对。')
+  if (typeof libraryAccess !== 'boolean') return fail('谱库权限必须是是或否。')
+  if (typeof note !== 'string') return fail('备注必须是文字。')
+  const trimmed = note.trim()
+  if (charLen(trimmed) > NOTE_MAX_CHARS) return fail('备注最多 100 个字符。')
+  return good({
+    days: days as number | null,
+    maxUses: maxUses as number | null,
+    instrument: instrument as Instrument | null,
+    libraryAccess,
+    note: trimmed,
+  })
+}
+
+/** Validates the body of POST /api/invite/accept. Username and password rules are checked by UserStore. */
+export function parseAccept(body: unknown): ParseResult<AcceptInviteBody> {
+  const b = asRecord(body)
+  if (!b) return fail('请求内容不对。')
+  if (typeof b.token !== 'string' || !TOKEN_RE.test(b.token))
+    return fail('这个邀请链接不存在或已经失效。')
+  if (typeof b.username !== 'string' || charLen(b.username) > MAX_NAME_CHARS)
+    return fail('用户名不对。')
+  if (typeof b.displayName !== 'string' || charLen(b.displayName) > MAX_NAME_CHARS)
+    return fail('显示名称需要 1–32 个字符。')
+  if (typeof b.password !== 'string' || b.password.length > MAX_PASSWORD_CHARS)
+    return fail('密码需要 6–128 个字符。')
+  const instrument = b.instrument === undefined ? null : b.instrument
+  if (
+    instrument !== null &&
+    !(typeof instrument === 'string' && INSTRUMENTS.includes(instrument as Instrument))
+  )
+    return fail('乐器选择不对。')
+  return good({
+    token: b.token,
+    username: b.username,
+    displayName: b.displayName,
+    password: b.password,
+    instrument: instrument as Instrument | null,
+  })
+}
+
+/**
+ * The account an accepted invite creates: always a member, with the instrument the
+ * person picked (the form starts from the invite's default; 不选 means none).
+ */
+export function newUserFromInvite(invite: InviteInfo, body: AcceptInviteBody): NewUserBody {
+  return {
+    username: body.username,
+    displayName: body.displayName,
+    password: body.password,
+    role: 'member',
+    libraryAccess: invite.libraryAccess,
+    instrument: body.instrument,
+  }
+}
+
+export class InviteStore {
+  private rows: StoredInvite[]
+  private readonly dataDir: string
+  private readonly queue = createSerialQueue()
+
+  private constructor(dataDir: string, rows: StoredInvite[]) {
+    this.dataDir = dataDir
+    this.rows = rows
+  }
+
+  /** Reads invites.json once. Missing is empty; damaged is set aside and the store starts empty. */
+  static async load(dataDir: string): Promise<InviteStore> {
+    const file = path.join(dataDir, INVITES_FILE)
+    let text: string
+    try {
+      text = await fs.promises.readFile(file, 'utf8')
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return new InviteStore(dataDir, [])
+      throw err
+    }
+    let raw: unknown
+    try {
+      raw = JSON.parse(text)
+    } catch {
+      raw = undefined
+    }
+    const rec = asRecord(raw)
+    if (!rec || rec.version !== INVITES_VERSION || !Array.isArray(rec.items)) {
+      await fs.promises.rename(file, `${file}.broken-${Date.now()}`).catch(() => {})
+      console.warn(`[谱库] 邀请链接数据文件损坏，已改名保留并从空开始：${file}`)
+      return new InviteStore(dataDir, [])
+    }
+    const seen = new Set<string>()
+    const rows: StoredInvite[] = []
+    for (const item of rec.items) {
+      const row = sanitizeRow(item)
+      if (!row || seen.has(row.id)) continue
+      seen.add(row.id)
+      rows.push(row)
+    }
+    return new InviteStore(dataDir, rows)
+  }
+
+  /** The stored row for this token, found by comparing hashes in constant time. */
+  private find(token: string): StoredInvite | undefined {
+    if (typeof token !== 'string') return undefined
+    const want = Buffer.from(hashToken(token), 'hex')
+    let found: StoredInvite | undefined
+    for (const row of this.rows) {
+      if (timingSafeEqual(Buffer.from(row.tokenHash, 'hex'), want)) found = row
+    }
+    return found
+  }
+
+  /** Admin: a new link. The token is returned here only; it is never stored. */
+  create(body: NewInviteBody, adminId: string, now: number): Promise<NewInviteResult> {
+    return this.queue(async () => {
+      const token = randomBytes(24).toString('base64url')
+      const row: StoredInvite = {
+        id: freshId(this.rows),
+        createdBy: adminId,
+        createdAt: now,
+        expiresAt: body.days === null ? null : now + body.days * DAY_MS,
+        maxUses: body.maxUses,
+        uses: 0,
+        usedBy: [],
+        instrument: body.instrument,
+        libraryAccess: body.libraryAccess,
+        note: body.note,
+        revoked: false,
+        tokenHash: hashToken(token),
+      }
+      await this.commit(trimRows([...this.rows, row], now))
+      return { invite: publicInvite(row), token }
+    })
+  }
+
+  /** Admin: every link, newest first (no hashes). */
+  list(): InviteInfo[] {
+    return this.rows.slice().reverse().map(publicInvite)
+  }
+
+  /** Admin: marks a link as revoked. */
+  revoke(id: string): Promise<void> {
+    return this.queue(async () => {
+      const row = this.rows.find((r) => r.id === id)
+      if (!row) throw new InviteError('找不到这个邀请链接。', 404)
+      await this.commit(this.rows.map((r) => (r === row ? { ...r, revoked: true } : r)))
+    })
+  }
+
+  /**
+   * Whether a token still works. `invite` is set only when it is usable (the
+   * page needs the band's defaults then); `reason` (Chinese) says why not.
+   */
+  check(token: string, now: number): { invite: InviteInfo | null; reason: string | null } {
+    const row = this.find(token)
+    if (!row) return { invite: null, reason: REASON_UNKNOWN }
+    const reason = reasonFor(row, now)
+    return reason ? { invite: null, reason } : { invite: publicInvite(row), reason: null }
+  }
+
+  /** Re-checks and takes one use before an account is created. Throws InviteError(410) when unusable. */
+  reserve(token: string, now: number): Promise<InviteInfo> {
+    return this.queue(async () => {
+      const row = this.find(token)
+      if (!row) throw new InviteError(REASON_UNKNOWN, 410)
+      const reason = reasonFor(row, now)
+      if (reason) throw new InviteError(reason, 410)
+      const updated: StoredInvite = { ...row, uses: row.uses + 1 }
+      await this.commit(this.rows.map((r) => (r === row ? updated : r)))
+      return publicInvite(updated)
+    })
+  }
+
+  /** Records the new account as having joined with this invite. */
+  confirm(id: string, userId: string): Promise<void> {
+    return this.queue(async () => {
+      const row = this.rows.find((r) => r.id === id)
+      if (!row || row.usedBy.includes(userId)) return
+      const updated: StoredInvite = { ...row, usedBy: [...row.usedBy, userId] }
+      await this.commit(this.rows.map((r) => (r === row ? updated : r)))
+    })
+  }
+
+  /** Gives back a use taken by reserve() when the account could not be created. */
+  release(id: string): Promise<void> {
+    return this.queue(async () => {
+      const row = this.rows.find((r) => r.id === id)
+      if (!row || row.uses === 0) return
+      const updated: StoredInvite = { ...row, uses: row.uses - 1 }
+      await this.commit(this.rows.map((r) => (r === row ? updated : r)))
+    })
+  }
+
+  /** An account was deleted: drop it from every invite's list of joiners. */
+  forgetUser(userId: string): Promise<void> {
+    return this.queue(async () => {
+      if (!this.rows.some((r) => r.usedBy.includes(userId))) return
+      await this.commit(
+        this.rows.map((r) =>
+          r.usedBy.includes(userId) ? { ...r, usedBy: r.usedBy.filter((u) => u !== userId) } : r,
+        ),
+      )
+    })
+  }
+
+  /** Writes the new state first; only then does it replace the in-memory one. */
+  private async commit(next: StoredInvite[]): Promise<void> {
+    await fs.promises.mkdir(this.dataDir, { recursive: true })
+    await writeFileAtomic(
+      path.join(this.dataDir, INVITES_FILE),
+      JSON.stringify({ version: INVITES_VERSION, items: next }),
+    )
+    this.rows = next
+  }
+}

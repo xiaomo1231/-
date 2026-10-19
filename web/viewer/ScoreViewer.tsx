@@ -12,8 +12,22 @@ import { hrefCombine } from '../lib/combos'
 import { hrefViewer } from '../lib/route'
 import { StarRating } from '../components/StarRating'
 import type { ConversionRecord } from '../lib/api'
-import { useLiveSync, type LivePlayer } from './liveSync'
-import { LiveBar } from './LiveBar'
+import { useRehearsalPlayer } from './useRehearsalPlayer'
+import { RehearsalPanel } from './RehearsalPanel'
+import { RehearsalStrip } from './RehearsalStrip'
+import { CountInOverlay } from './CountInOverlay'
+import { CommentsLayer } from './CommentsLayer'
+import { CommentsPanel } from './CommentsPanel'
+import { FillPanel } from './FillPanel'
+import { LatencyCalibration } from './LatencyCalibration'
+import { addComment, removeComment, updateSong } from '../lib/band'
+import { openInRehearsal } from '../lib/rehearsalNav'
+import { sendRehearsal } from '../lib/rehearsal'
+import { useDrumStyles } from '../lib/drums'
+import { HREF_BAND } from '../lib/route'
+import { fillOf, planFill, speakerMix, type ResolvedDrumSource } from '@/songs/rehearsalFill'
+import { nextSection, sectionAt, sectionsOf } from '@/songs/rehearsalSections'
+import type { FillConfig } from '../lib/api'
 import { trackLabels } from './trackNames'
 import {
   buildDrumTrack,
@@ -103,6 +117,24 @@ interface Props {
   combo: string
   /** PDF 转换版 id: play the converted GP5 of the PDF at `path` ('' = none). */
   conv: string
+  /** Opened by the band's rehearsal: follow it (音箱 / 看谱) instead of practising alone. */
+  rehearsal: boolean
+}
+
+type RehearsalPop = 'fill' | 'comments' | 'calibrate' | null
+
+/** First (MIDI) tick where 1-based `bar` is played, and the tick after it (repeats unrolled). */
+function barTicks(a: AlphaTabApi | null, s: model.Score | null, bar: number): [number, number] {
+  const look = (
+    a?.tickCache as unknown as {
+      masterBarLookup?: Map<number, { start: number; end: number }>
+    } | null
+  )?.masterBarLookup?.get(bar - 1)
+  if (look) return [look.start, look.end]
+  const mb = s?.masterBars[bar - 1]
+  const next = s?.masterBars[bar]
+  const start = mb?.start ?? 0
+  return [start, next ? next.start : start + (mb ? mb.calculateDuration() : 3840)]
 }
 
 /** Passes with a pause or a count-in between them are restarted by hand; others loop seamlessly. */
@@ -138,7 +170,17 @@ const sameBars = (a: [number, number] | null, b: [number, number] | null) =>
   a === b || (a !== null && b !== null && a[0] === b[0] && a[1] === b[1])
 
 /** A Guitar Pro / MusicXML file, shown and played by alphaTab (read in place, never saved). */
-export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo, conv }: Props) {
+export function ScoreViewer({
+  path,
+  title,
+  artist,
+  pages,
+  band,
+  showDrums,
+  combo,
+  conv,
+  rehearsal,
+}: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
@@ -197,7 +239,9 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     original: number | null
     /** A standard-notation copy of the file's own drum track: drawn in its place, never played. */
     std: number | null
-  }>({ part: null, added: null, original: null, std: null })
+    /** Rehearsal: a saved drum part exists for this file (whether or not it was loaded). */
+    savedExists: boolean
+  }>({ part: null, added: null, original: null, std: null, savedExists: false })
   const me = useMe()
   const { state: bandState } = useBand()
   const bandSong = band ? bandState?.songs.find((x) => x.id === band) : undefined
@@ -211,6 +255,37 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     return mine[0] ?? null
   })()
   const bandSpeed = bandSong?.rehearsalSpeedPct ?? null
+  /** 排练: this page follows the band's rehearsal. */
+  const rehearsalMode = rehearsal && Boolean(band)
+  const savedFill: FillConfig | null = bandSong ? fillOf(bandSong) : null
+  /** What the drums are made of in the rehearsal (changing it rebuilds the player). */
+  const rehDrumKey =
+    rehearsalMode && savedFill ? `${savedFill.drumSource}|${savedFill.drumStyle ?? ''}` : ''
+  const rehRef = useRef({ mode: rehearsalMode, fill: savedFill, songId: band })
+  rehRef.current = { mode: rehearsalMode, fill: savedFill, songId: band }
+  const [rehPop, setRehPop] = useState<RehearsalPop>(null)
+  const [renderVersion, setRenderVersion] = useState(0)
+  const [commentsOpen, setCommentsOpen] = useState(false)
+  const [focusBar, setFocusBar] = useState<number | null>(null)
+  // 补位 changes are shared: saved shortly after the last change (sliders send many);
+  // until then the draft is what this screen shows and plays.
+  const fillTimer = useRef<number | undefined>(undefined)
+  const [fillDraft, setFillDraft] = useState<FillConfig | null>(null)
+  const fill: FillConfig | null = fillDraft ?? savedFill
+  const saveFill = (f: FillConfig) => {
+    setFillDraft(f)
+    window.clearTimeout(fillTimer.current)
+    fillTimer.current = window.setTimeout(() => {
+      if (!band) return
+      void updateSong({ id: band, fill: f })
+        .catch((e: unknown) => {
+          setRestoreNote(e instanceof Error ? e.message : '补位设置没能保存。')
+          window.setTimeout(() => setRestoreNote(''), 5000)
+        })
+        .finally(() => setFillDraft(null))
+    }, 500)
+  }
+  const drumStyles = useDrumStyles()
   const star = useStar({
     path,
     format: 'score' as ScoreFormat,
@@ -264,43 +339,20 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     gapTimer.current = undefined
   }
 
-  // 一起播放: the band song's shared transport drives this player.
-  const livePlayer = useMemo<LivePlayer>(
-    () => ({
-      startAt(tick, pct) {
-        const a = api.current
-        if (!a) return
-        cancelGap()
-        if (a.playerState === 1) a.pause()
-        a.playbackSpeed = pct / 100
-        setSpeedPct(pct)
-        a.tickPosition = tick
-        a.play()
-      },
-      pause(tick) {
-        const a = api.current
-        if (!a) return
-        cancelGap()
-        a.pause()
-        a.tickPosition = tick
-      },
-      seek(tick) {
-        if (api.current) api.current.tickPosition = tick
-      },
-      setSpeed(pct) {
-        if (api.current) api.current.playbackSpeed = pct / 100
-        setSpeedPct(pct)
-      },
-      currentTick: () => api.current?.tickPosition ?? 0,
-      currentSpeed: () => live.current.speedPct,
-    }),
-    [],
-  )
-  const together = useLiveSync(bandSong ? bandSong.id : null, me?.id ?? null, livePlayer)
-  const leaderId = together.connected ? (together.state?.leaderId ?? null) : null
-  /** Someone else leads: this player follows and its own transport keys wait. */
-  const following = leaderId !== null && leaderId !== me?.id
-  const leading = leaderId !== null && leaderId === me?.id
+  const reh = useRehearsalPlayer({
+    enabled: rehearsalMode,
+    songId: band,
+    meId: me?.id ?? null,
+    api,
+    ready,
+    score,
+    onSpeed: setSpeedPct,
+  })
+  const rehPlayerRef = useRef(reh)
+  rehPlayerRef.current = reh
+  /** Someone else conducts: this player follows and its own transport keys wait. */
+  const following = reh.here && !reh.isLeader
+  const leading = reh.here && reh.isLeader
 
   useEffect(() => {
     if (phase !== 'loading') return
@@ -415,8 +467,51 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
             window.setTimeout(() => setRestoreNote(''), 8000)
           }
         }
+        // 排练: the drums the band chose (补位). 'file' / 'metronome' keep the file's own drums;
+        // 'generated' builds a part from the templates (the same on every device).
+        let drumsToAdd = savedDrums
+        let rehSource: ResolvedDrumSource | null = null
+        const reh0 = rehRef.current
+        if (reh0.mode && reh0.fill && !combo) {
+          const settings = new at.Settings()
+          settings.importer.encoding = chooseEncoding(at, bytes)
+          const probe = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings)
+          const hasFile = findDrumTrack(probe) !== null
+          const hasSaved = savedDrums !== null && savedDrums.bars.length === probe.masterBars.length
+          rehSource = planFill({
+            tracks: hasFile ? [{ index: 0, name: '', isDrums: true }] : [],
+            parts: {},
+            present: [],
+            members: [],
+            fill: reh0.fill,
+            hasSavedDrums: hasSaved,
+          }).drums.source
+          drumsToAdd = null
+          if (rehSource === 'saved') drumsToAdd = savedDrums
+          else if (rehSource === 'generated') {
+            try {
+              const g = await server.rehearsalDrums(reh0.songId, reh0.fill.drumStyle, ac.signal)
+              if (g.first === 0 && g.bars.length === probe.masterBars.length)
+                drumsToAdd = {
+                  version: 1,
+                  path,
+                  title,
+                  artist,
+                  bars: g.bars,
+                  source: 'template',
+                  edited: false,
+                  style: g.style,
+                  updatedAt: 0,
+                  updatedBy: '',
+                }
+            } catch {
+              drumsToAdd = null
+            }
+          }
+          if (disposed) return
+        }
         let stdTrack: number | null = null
-        if (!combo && !savedDrums) {
+        if (!combo && !drumsToAdd) {
           // The file's own drum track, redrawn in standard drum notation (hands up, feet down,
           // standard positions, % for repeated bars); the original keeps playing.
           try {
@@ -433,14 +528,15 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
             fileBytes = bytes
           }
         }
-        if (savedDrums && !combo) {
+        if (drumsToAdd && !combo) {
           try {
             const settings = new at.Settings()
             settings.importer.encoding = chooseEncoding(at, bytes)
             const copy = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings)
-            if (savedDrums.bars.length === copy.masterBars.length) {
+            if (drumsToAdd.bars.length === copy.masterBars.length) {
               fileDrums = findDrumTrack(copy)
-              drumTrack = buildDrumTrack(at, copy, savedDrums, '鼓（鼓谱）').index
+              const label = rehSource === 'generated' ? '鼓（自动生成）' : '鼓（鼓谱）'
+              drumTrack = buildDrumTrack(at, copy, drumsToAdd, label).index
               fileBytes = exportGp(at, copy)
             }
           } catch {
@@ -481,7 +577,13 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           const added = drumTrack !== null && drumTrack < s.tracks.length ? drumTrack : null
           const original = added !== null ? fileDrums : findDrumTrack(s)
           const std = stdTrack !== null && stdTrack < s.tracks.length ? stdTrack : null
-          setDrums({ part: added !== null ? savedDrums : null, added, original, std })
+          setDrums({
+            part: added !== null ? drumsToAdd : null,
+            added,
+            original,
+            std,
+            savedExists: savedDrums !== null,
+          })
           if (showDrumsRef.current && (added ?? original) !== null) setTrack((added ?? original)!)
           // Instruments the font cannot play are swapped before the player reads the score.
           for (const t of s.tracks) {
@@ -542,6 +644,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           setRendering(false)
           // The loop range can be drawn only once the bars are laid out.
           rendered = true
+          setRenderVersion((v) => v + 1)
           const bars = pendingBars.current
           const s = live.current.score
           if (bars && s) {
@@ -580,9 +683,10 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
             flushRef.current(false)
           }
         })
-        a.playerPositionChanged.on((e) =>
-          setTime({ now: e.currentTime, end: e.endTime, tick: e.currentTick }),
-        )
+        a.playerPositionChanged.on((e) => {
+          setTime({ now: e.currentTime, end: e.endTime, tick: e.currentTick })
+          rehPlayerRef.current.onPosition(e.currentTime)
+        })
         a.activeBeatsChanged.on((e) => {
           if (live.current.prefs.fretboard)
             setActiveNotes(notesFromBeats(e.activeBeats, live.current.track))
@@ -590,6 +694,8 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
         // One pass of the loop is over: count it, speed up, and (with a pause or a count-in)
         // start the next one by hand.
         a.playerFinished.on(() => {
+          // In the rehearsal the 音箱 reports the end of a pass; the server decides what's next.
+          if (rehPlayerRef.current.here && rehPlayerRef.current.onFinished()) return
           const L = live.current
           if (!L.loop || !L.loopState || L.loopState.done) return
           const t = L.prefs.trainer
@@ -662,7 +768,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
       api.current?.destroy()
       api.current = null
     }
-  }, [path, soundFontChoice, combo, conv])
+  }, [path, soundFontChoice, combo, conv, rehDrumKey]) // eslint-disable-line react-hooks/exhaustive-deps
 
   // Band song: show this member's own part, play along with the others, at the band's speed.
   const bandApplied = useRef('')
@@ -729,29 +835,116 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     a.loadMidiForScore()
   }, [transpose, score])
 
-  const togetherRef = useRef(together)
-  togetherRef.current = together
+  const rehState = reh.here ? reh.conn.state : null
   useEffect(() => {
-    if (!leading) return
-    const t = togetherRef.current
-    if (t.state && t.state.speedPct !== speedPct) t.speed(speedPct)
-  }, [speedPct, leading])
+    if (!leading || !rehState) return
+    if (rehState.speedPct !== speedPct)
+      void sendRehearsal({ type: 'speed', speedPct }).catch(() => undefined)
+  }, [speedPct, leading]) // eslint-disable-line react-hooks/exhaustive-deps
+  // The conductor arriving at a song brings its 预备拍 setting along.
+  const countInSent = useRef('')
+  useEffect(() => {
+    if (!leading || !rehState || !fill || rehState.playing) return
+    const key = `${rehState.songId}:${rehState.startedAt}`
+    if (countInSent.current === key) return
+    countInSent.current = key
+    if (rehState.countIn !== fill.countIn)
+      void sendRehearsal({ type: 'countIn', on: fill.countIn }).catch(() => undefined)
+  }, [leading, rehState, fill])
   useEffect(() => {
     if (api.current) api.current.playbackSpeed = speedPct / 100
     const c = clock.current
     if (c.startedAt) c.maxSpeed = Math.max(c.maxSpeed, speedPct)
   }, [speedPct])
   useEffect(() => {
-    if (api.current) api.current.countInVolume = countIn ? 1 : 0
-  }, [countIn])
+    if (api.current && !reh.here) api.current.countInVolume = countIn ? 1 : 0
+  }, [countIn, reh.here])
+
+  // 补位: what this song's 音箱 plays, from who is in the room right now.
+  const presentIds = useMemo(
+    () => [...new Set((rehState?.devices ?? []).map((d) => d.userId))],
+    [rehState?.devices],
+  )
+  const rehTrackInfo = useMemo(
+    () =>
+      (score?.tracks ?? [])
+        .map((t, i) => ({
+          index: i,
+          isDrums: Boolean(t.isPercussion || t.staves[0]?.isPercussion),
+        }))
+        .filter((t) => t.index !== drums.added && t.index !== drums.std),
+    [score, drums.added, drums.std],
+  )
+  const myTracks = useMemo(
+    () =>
+      bandSong && me
+        ? Object.entries(bandSong.parts)
+            .filter(([, uid]) => uid === me.id)
+            .map(([k]) => Number(k))
+        : [],
+    [bandSong, me],
+  )
+  const rehNames = useMemo(
+    () =>
+      trackLabels(score?.tracks ?? []).map((l, i) =>
+        l.original ? `${l.zh}（${l.original}）` : l.zh || `音轨 ${i + 1}`,
+      ),
+    [score],
+  )
+  const plan = useMemo(() => {
+    if (!fill || !bandSong) return null
+    return planFill({
+      tracks: rehTrackInfo.map((t) => ({ ...t, name: rehNames[t.index] ?? '' })),
+      parts: bandSong.parts,
+      present: reh.here ? presentIds : (bandState?.members ?? []).map((m) => m.id),
+      members: bandState?.members ?? [],
+      fill,
+      hasSavedDrums: drums.savedExists,
+    })
+  }, [
+    fill,
+    bandSong,
+    rehTrackInfo,
+    rehNames,
+    reh.here,
+    presentIds,
+    bandState?.members,
+    drums.savedExists,
+  ])
+  const mix = useMemo(() => {
+    if (!reh.here || !plan || !score) return null
+    return speakerMix(plan, {
+      trackCount: score.tracks.length,
+      fileDrums: rehTrackInfo.filter((t) => t.isDrums).map((t) => t.index),
+      added: drums.added,
+      std: drums.std,
+      own: reh.sounding && !reh.isSpeaker ? myTracks : [],
+    })
+  }, [
+    reh.here,
+    reh.sounding,
+    reh.isSpeaker,
+    plan,
+    score,
+    rehTrackInfo,
+    drums.added,
+    drums.std,
+    myTracks,
+  ])
+
   useEffect(() => {
-    if (api.current) api.current.metronomeVolume = metro || metroOnly ? 1 : 0
-  }, [metro, metroOnly])
+    if (!api.current) return
+    api.current.metronomeVolume = (mix ? plan?.metronome : metro || metroOnly) ? 1 : 0
+  }, [metro, metroOnly, mix, plan?.metronome])
 
   // Muting: the student's M keys, plus 跟着练 (the shown track) and 只放节拍器 (everything).
   useEffect(() => {
     const a = api.current
     if (!a || !score) return
+    if (mix) {
+      score.tracks.forEach((t, i) => a.changeTrackMute([t], mix.mute[i] ?? true))
+      return
+    }
     score.tracks.forEach((t, i) =>
       a.changeTrackMute(
         [t],
@@ -762,13 +955,13 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           i === drums.std,
       ),
     )
-  }, [mute, followAlong, metroOnly, track, score, drums])
+  }, [mute, followAlong, metroOnly, track, score, drums, mix])
 
   useEffect(() => {
     const a = api.current
     if (!a || !score) return
-    score.tracks.forEach((t, i) => a.changeTrackSolo([t], solo.has(i)))
-  }, [solo, score])
+    score.tracks.forEach((t, i) => a.changeTrackSolo([t], !mix && solo.has(i)))
+  }, [solo, score, mix])
 
   useEffect(() => {
     const a = api.current
@@ -777,17 +970,20 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     score.tracks.forEach((t, i) =>
       a.changeTrackVolume(
         [t],
-        ((volumes[i] ?? 100) / 100) * fontGain(activeFont, t.playbackInfo.program, t.isPercussion),
+        ((volumes[i] ?? 100) / 100) *
+          (mix ? (mix.volume[i] ?? 1) : 1) *
+          fontGain(activeFont, t.playbackInfo.program, t.isPercussion),
       ),
     )
-  }, [volumes, score, activeFont])
+  }, [volumes, score, activeFont, mix])
 
   // Loop: the range, and how passes follow each other.
   const manual = isManualLoop(prefs.trainer)
   useEffect(() => {
+    if (reh.here) return
     if (api.current && score) syncLoop(api.current, loop, selRef.current, manual)
     if (!loop) cancelGap()
-  }, [loop, score, manual])
+  }, [loop, score, manual, reh.here])
 
   // A new loop run (loop switched on, trainer switched, or another selection) starts at pass 1.
   const trainerOn = prefs.trainer.enabled
@@ -845,13 +1041,18 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
   const togglePlay = () => {
     if (!playable) return
     if (following) {
-      setRestoreNote('正在跟随主控播放，由主控开始和暂停。')
+      setRestoreNote('排练中由指挥开始和暂停。')
       window.setTimeout(() => setRestoreNote(''), 3000)
       return
     }
-    if (leading) {
-      if (playing) together.pause()
-      else together.play()
+    if (leading && rehState) {
+      const a = api.current
+      const tick = a?.tickPosition ?? 0
+      void (
+        rehState.playing
+          ? sendRehearsal({ type: 'pause', tick })
+          : sendRehearsal({ type: 'play', tick, speedPct: live.current.speedPct })
+      ).catch(() => undefined)
       return
     }
     if (gapTimer.current !== undefined) {
@@ -873,9 +1074,11 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
   const backToStart = () => {
     const a = api.current
     if (!a || !playable || following) return
-    if (leading) {
-      together.seek(a.playbackRange?.startTick ?? 0)
-      if (playing) together.pause()
+    if (leading && rehState) {
+      const start = rehState.loop?.startTick ?? 0
+      void sendRehearsal(
+        rehState.playing ? { type: 'pause', tick: start } : { type: 'seek', tick: start },
+      ).catch(() => undefined)
       return
     }
     cancelGap()
@@ -943,6 +1146,12 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     return () => window.removeEventListener('keydown', onKey)
   }, [])
 
+  useEffect(() => {
+    if (!reh.movedTo) return
+    const next = bandState?.songs.find((x) => x.id === reh.movedTo)
+    if (next) void openInRehearsal(next, true)
+  }, [reh.movedTo, bandState?.songs])
+
   const tracks = score?.tracks ?? []
   const masterBars = score?.masterBars ?? []
   let bar = 0
@@ -950,6 +1159,9 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     if ((masterBars[i]?.start ?? 0) <= time.tick) bar = i + 1
     else break
   }
+  const sections = useMemo(() => sectionsOf((score?.masterBars ?? []) as never), [score])
+  const sectionIdx = sectionAt(sections, bar)
+  const nextSec = nextSection(sections, bar)
   const loaded = phase === 'ready'
   const sound: 'loading' | 'ready' | 'off' = soundFailed ? 'off' : ready ? 'ready' : 'loading'
   const trackNames = useMemo(
@@ -997,16 +1209,160 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
   return (
     <div className="score-bleed">
       <style>{SHEET_CSS}</style>
-      {bandSong && (
+      {bandSong && rehearsalMode && reh.ended && (
         <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
-          <LiveBar live={together} members={bandState?.members ?? []} myId={me?.id ?? null} />
+          <Notice tone="muted">
+            排练已经结束，现在是自己练习。
+            <a className="ml-2 underline-offset-4 hover:underline" href={HREF_BAND}>
+              回到乐队 →
+            </a>
+          </Notice>
+        </div>
+      )}
+      {bandSong && reh.here && rehState && me && (
+        <>
+          {/* The status line stays under the site header while the score scrolls. */}
+          <div className="sticky z-30" style={{ top: headerH }}>
+            <div className="gutter mx-auto w-full max-w-[1180px]">
+              <RehearsalStrip
+                songTitle={bandSong.title}
+                songIndex={(bandState?.rehearsalSetlist.indexOf(bandSong.id) ?? -1) + 1}
+                songCount={bandState?.rehearsalSetlist.length ?? 0}
+                section={sectionIdx >= 0 ? (sections[sectionIdx]?.name ?? null) : null}
+                nextSection={nextSec?.name ?? null}
+                bar={bar}
+                bars={masterBars.length}
+                speedPct={speedPct}
+                loop={
+                  rehState.loop
+                    ? {
+                        pass: rehState.pass,
+                        passes: rehState.loop.passes,
+                        startBar: rehState.loop.startBar,
+                        endBar: rehState.loop.endBar,
+                      }
+                    : null
+                }
+                playing={rehState.playing}
+                role={reh.isSpeaker ? '你是音箱' : reh.sounding ? '耳机出声' : '静音看谱'}
+              />
+            </div>
+          </div>
+          <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
+            <RehearsalPanel
+              state={rehState}
+              me={me}
+              deviceId={reh.conn.deviceId}
+              members={bandState?.members ?? []}
+              songs={bandState?.songs ?? []}
+              setlist={bandState?.rehearsalSetlist ?? []}
+              connected={reh.conn.connected}
+              error={reh.conn.error}
+              sections={sections}
+              currentBar={bar}
+              bars={masterBars.length}
+              selection={selBars}
+              speedPct={speedPct}
+              commentCount={bandSong.comments?.length ?? 0}
+              latencyMs={reh.conn.myDevice?.latencyMs ?? 0}
+              onCommand={(c) => void sendRehearsal(c).catch(() => undefined)}
+              tickOfBar={(b) => barTicks(api.current, score, b)[0]}
+              endTickOfBar={(b) => barTicks(api.current, score, b)[1]}
+              onSeekBar={(b) =>
+                void sendRehearsal({
+                  type: 'seek',
+                  tick: barTicks(api.current, score, b)[0],
+                }).catch(() => undefined)
+              }
+              onPlayFromBar={(b) => {
+                const tick = barTicks(api.current, score, b)[0]
+                void sendRehearsal({ type: 'play', tick, speedPct }).catch(() => undefined)
+              }}
+              onOpenFill={() => setRehPop('fill')}
+              onOpenComments={() => setRehPop('comments')}
+              onCalibrate={() => setRehPop('calibrate')}
+            />
+          </div>
+        </>
+      )}
+      {bandSong && !reh.here && (
+        <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
           {myTrack !== null && (
             <p className="mt-1 text-xs text-muted-foreground">
               你在这首歌里弹「{trackNames[myTrack] ?? `音轨 ${myTrack + 1}`}
               」，已自动显示你的声部并静音它，其他声部照常伴奏。
             </p>
           )}
+          <button
+            type="button"
+            className="mt-1 text-xs text-muted-foreground underline-offset-4 hover:underline"
+            onClick={() => setCommentsOpen(true)}
+          >
+            小节留言（{bandSong.comments?.length ?? 0}）
+          </button>
         </div>
+      )}
+      {bandSong && (rehPop === 'comments' || commentsOpen) && (
+        <RehearsalDialog
+          title="小节留言"
+          onClose={() => {
+            setRehPop(null)
+            setCommentsOpen(false)
+          }}
+        >
+          <CommentsPanel
+            comments={bandSong.comments ?? []}
+            members={bandState?.members ?? []}
+            me={me}
+            currentBar={Math.max(1, bar)}
+            bars={masterBars.length || 999}
+            focusBar={focusBar}
+            onAdd={(b, text) => addComment(bandSong.id, b, text)}
+            onRemove={(id) => removeComment(bandSong.id, id)}
+            onJump={(b) => {
+              const tick = barTicks(api.current, score, b)[0]
+              if (leading) void sendRehearsal({ type: 'seek', tick }).catch(() => undefined)
+              else if (!following && api.current) api.current.tickPosition = tick
+              setRehPop(null)
+              setCommentsOpen(false)
+            }}
+          />
+        </RehearsalDialog>
+      )}
+      {bandSong && rehPop === 'fill' && plan && fill && (
+        <RehearsalDialog title="补位：音箱放什么" onClose={() => setRehPop(null)}>
+          <FillPanel
+            plan={plan}
+            fill={fill}
+            onChange={saveFill}
+            nameOf={(id) => bandState?.members.find((m) => m.id === id)?.displayName ?? '成员'}
+            hasFileDrums={rehTrackInfo.some((t) => t.isDrums)}
+            hasSavedDrums={drums.savedExists}
+            drumStyles={drumStyles.styles}
+            caption={
+              reh.here
+                ? '按现在在场的人自动决定；改动会马上同步到每台设备。'
+                : '假设全员到齐；排练时会按实际到场的人自动决定。'
+            }
+          />
+        </RehearsalDialog>
+      )}
+      {rehPop === 'calibrate' && (
+        <LatencyCalibration
+          initialMs={reh.conn.myDevice?.latencyMs ?? 0}
+          onSave={(ms) => {
+            void sendRehearsal({ type: 'device', latencyMs: ms }).catch(() => undefined)
+            setRehPop(null)
+          }}
+          onClose={() => setRehPop(null)}
+        />
+      )}
+      {reh.here && reh.countIn && (
+        <CountInOverlay
+          startAt={reh.countIn.at}
+          beats={reh.countIn.beats}
+          beatMs={reh.countIn.beatMs}
+        />
       )}
       {convRec && (
         <div className="gutter mx-auto mb-3 w-full max-w-[1180px] rounded-lg border border-border px-3 py-2">
@@ -1125,6 +1481,19 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           </div>
         )}
         <div ref={host} className={cx('at-surface w-full', gridShown && 'hidden')} />
+        {bandSong && !gridShown && (
+          <CommentsLayer
+            api={api.current}
+            surface={host.current}
+            comments={bandSong.comments ?? []}
+            renderVersion={renderVersion}
+            onOpen={(b) => {
+              setFocusBar(b)
+              if (reh.here) setRehPop('comments')
+              else setCommentsOpen(true)
+            }}
+          />
+        )}
         {isDrumTrack && !gridShown && loaded && keyPieces.length > 0 && (
           <div className="mt-6 px-1">
             <p className="mb-2 text-xs text-[color:var(--sheet-dim)]">鼓谱图例</p>
@@ -1214,6 +1583,46 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           onSoundFont={(id: SoundFontId) => setPrefs((p) => ({ ...p, soundFont: id }))}
         />
       )}
+    </div>
+  )
+}
+
+/** A simple dialog over the score (補位, 留言): closes with Escape or the ✕. */
+function RehearsalDialog(props: { title: string; onClose: () => void; children: React.ReactNode }) {
+  const { onClose } = props
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [onClose])
+  return (
+    <div
+      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40 sm:items-center"
+      onPointerDown={(e) => {
+        if (e.target === e.currentTarget) onClose()
+      }}
+    >
+      <div
+        role="dialog"
+        aria-modal="true"
+        aria-label={props.title}
+        className="max-h-[85dvh] w-full max-w-[860px] overflow-y-auto rounded-t-xl border border-border bg-card p-4 sm:rounded-xl"
+      >
+        <div className="mb-3 flex items-center justify-between gap-3">
+          <h2 className="m-0 text-base font-bold">{props.title}</h2>
+          <button
+            type="button"
+            className="h-9 w-9 rounded-md border border-border"
+            aria-label="关闭"
+            onClick={onClose}
+          >
+            ✕
+          </button>
+        </div>
+        {props.children}
+      </div>
     </div>
   )
 }

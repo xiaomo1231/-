@@ -1,15 +1,37 @@
-import { useEffect, useState } from 'react'
-import { api, errorText, fetchBytes, fileUrl, type MemberProgress, type SongStatus, type UserInfo } from '../lib/api'
-import { removeSong, STATUS_LABELS, updateSong, useBand } from '../lib/band'
+import { useEffect, useRef, useState } from 'react'
+import {
+  api,
+  errorText,
+  fetchBytes,
+  fileUrl,
+  type FillConfig,
+  type MemberProgress,
+  type SongStatus,
+  type UserInfo,
+} from '../lib/api'
+import {
+  addComment,
+  removeComment,
+  removeSong,
+  STATUS_LABELS,
+  updateSong,
+  useBand,
+} from '../lib/band'
 import { cx, SELECT } from '../lib/classes'
+import { useDrumPart, useDrumStyles } from '../lib/drums'
 import { fmtDuration } from '../lib/practice'
+import { useRehearsal } from '../lib/rehearsal'
 import { HREF_BAND, hrefViewer, navigate } from '../lib/route'
 import { hrefCombine } from '../lib/combos'
 import type { ComboRecipe } from '../lib/api'
 import { INSTRUMENT_LABELS, useMe } from '../lib/session'
+import { fillOf, planFill } from '@/songs/rehearsalFill'
 import { Link } from '../components/Link'
+import { RecordingsPanel } from '../components/RecordingsPanel'
 import { Notice, PageBar, Seg, Staff } from '../components/ui'
 import { chooseEncoding, loadAlphaTab } from '../viewer/alphaTab'
+import { CommentsPanel } from '../viewer/CommentsPanel'
+import { FillPanel } from '../viewer/FillPanel'
 import { SheetsPanel } from '../viewer/SheetsPanel'
 import { trackLabels } from '../viewer/trackNames'
 
@@ -34,7 +56,18 @@ const SPEED_OPTIONS: ReadonlyArray<readonly [Speed, string]> = [
 type Tracks =
   | { status: 'loading' }
   | { status: 'error'; message: string }
-  | { status: 'ready'; labels: Array<{ zh: string; original: string }> }
+  | {
+      status: 'ready'
+      labels: Array<{ zh: string; original: string }>
+      /** Per track, in the same order as `labels`: a drum track. */
+      drums: boolean[]
+      /** Bars in the score, when known (a combo's bars are not read). */
+      bars: number | null
+    }
+
+type FillSave = 'idle' | 'pending' | 'saving' | 'saved' | 'error'
+
+const DRUM_NAME = /鼓|drum/i
 
 const clamp = (n: number) => Math.min(SPEED_MAX, Math.max(SPEED_MIN, n))
 
@@ -58,6 +91,29 @@ export function BandSongPage({ id }: { id: string }) {
   const comboId = song?.comboId ?? null
   const combo = combos.find((c) => c.id === comboId) ?? null
 
+  const rehearsal = useRehearsal()
+  const drumStyles = useDrumStyles()
+  // A combo's saved drums live under its base score.
+  const savedDrums = useDrumPart(combo ? combo.base : songPath)
+  const hasSavedDrums = savedDrums.part !== null
+
+  // 补位 edits: shown at once, saved to the band 600 ms after the last change.
+  const [fillEdit, setFillEdit] = useState<FillConfig | null>(null)
+  const [fillSave, setFillSave] = useState<FillSave>('idle')
+  const fillPending = useRef<{ songId: string; fill: FillConfig } | null>(null)
+  const fillTimer = useRef<number | undefined>(undefined)
+
+  // Leaving the page with an unsaved 补位 change still saves it.
+  useEffect(
+    () => () => {
+      const p = fillPending.current
+      if (!p) return
+      window.clearTimeout(fillTimer.current)
+      void updateSong({ id: p.songId, fill: p.fill }).catch(() => undefined)
+    },
+    [],
+  )
+
   useEffect(() => {
     if (!songPath) return
     let cancelled = false
@@ -80,7 +136,12 @@ export function BandSongPage({ id }: { id: string }) {
   // the tracks are the recipe's parts, in order.
   useEffect(() => {
     if (combo) {
-      setTracks({ status: 'ready', labels: combo.parts.map((p) => ({ zh: p.name, original: '' })) })
+      setTracks({
+        status: 'ready',
+        labels: combo.parts.map((p) => ({ zh: p.name, original: '' })),
+        drums: combo.parts.map((p) => DRUM_NAME.test(p.name)),
+        bars: null,
+      })
       return
     }
     if (!songPath) return
@@ -94,7 +155,9 @@ export function BandSongPage({ id }: { id: string }) {
         settings.importer.encoding = chooseEncoding(at, bytes)
         const score = at.importer.ScoreLoader.loadScoreFromBytes(bytes, settings)
         const labels = trackLabels(score.tracks)
-        if (!cancelled) setTracks({ status: 'ready', labels })
+        const drums = score.tracks.map((t) => Boolean(t.isPercussion || t.staves[0]?.isPercussion))
+        const bars = score.masterBars.length
+        if (!cancelled) setTracks({ status: 'ready', labels, drums, bars })
       } catch (e) {
         if (!cancelled)
           setTracks({
@@ -201,6 +264,68 @@ export function BandSongPage({ id }: { id: string }) {
 
   const saveNote = () => void run('note', () => updateSong({ id: song.id, note: noteDraft }))
 
+  // 补位
+  const saveFillNow = async () => {
+    const p = fillPending.current
+    if (!p) return
+    window.clearTimeout(fillTimer.current)
+    setFillSave('saving')
+    try {
+      await updateSong({ id: p.songId, fill: p.fill })
+      if (fillPending.current === p) {
+        fillPending.current = null
+        setFillEdit(null)
+        setFillSave('saved')
+      }
+    } catch (e) {
+      setFillSave('error')
+      setNotice(errorText(e))
+    }
+  }
+
+  const changeFill = (next: FillConfig) => {
+    fillPending.current = { songId: song.id, fill: next }
+    setFillEdit(next)
+    setFillSave('pending')
+    window.clearTimeout(fillTimer.current)
+    fillTimer.current = window.setTimeout(() => void saveFillNow(), 600)
+  }
+
+  const fill = fillEdit ?? fillOf({ fill: song.fill })
+  const rehearsing = rehearsal.state?.active === true
+  const presentIds = rehearsing
+    ? (rehearsal.state?.devices ?? []).map((d) => d.userId)
+    : state.members.map((m) => m.id)
+  const readyTracks = tracks.status === 'ready' ? tracks : null
+  const fillPlan = readyTracks
+    ? planFill({
+        tracks: readyTracks.labels.map((l, i) => ({
+          index: i,
+          name: l.zh,
+          isDrums: readyTracks.drums[i] ?? false,
+        })),
+        parts: song.parts,
+        present: presentIds,
+        members: state.members.map((m) => ({
+          id: m.id,
+          displayName: m.displayName,
+          instrument: m.instrument,
+        })),
+        fill,
+        hasSavedDrums,
+      })
+    : null
+  const fillCaption = rehearsing
+    ? '按现在在场的人自动决定'
+    : '假设全员到齐；排练时会按实际到场的人自动决定'
+  const fillStatusText: Record<FillSave, string> = {
+    idle: '',
+    pending: '待保存…',
+    saving: '正在保存…',
+    saved: '已保存',
+    error: '保存失败，请再改一次试试',
+  }
+
   const doDelete = () =>
     void run('delete', async () => {
       await removeSong(song.id)
@@ -209,7 +334,12 @@ export function BandSongPage({ id }: { id: string }) {
 
   return (
     <>
-      <PageBar title={song.title || '未识别的曲名'} subtitle={song.artist} fallback={HREF_BAND} back="← 乐队" />
+      <PageBar
+        title={song.title || '未识别的曲名'}
+        subtitle={song.artist}
+        fallback={HREF_BAND}
+        back="← 乐队"
+      />
       <Staff />
 
       <div className="max-w-[640px] pt-6">
@@ -260,7 +390,10 @@ export function BandSongPage({ id }: { id: string }) {
         </select>
         <p className="mt-2 text-xs text-muted-foreground">
           换谱后声部要重新分配。
-          <a className="ml-1 underline-offset-4 hover:underline" href={hrefCombine(song.path, comboId ?? undefined)}>
+          <a
+            className="ml-1 underline-offset-4 hover:underline"
+            href={hrefCombine(song.path, comboId ?? undefined)}
+          >
             {comboId ? '编辑这个组合 →' : '从不同版本组合一份乐队谱 →'}
           </a>
         </p>
@@ -292,7 +425,12 @@ export function BandSongPage({ id }: { id: string }) {
           排练速度
         </h2>
         <div className="flex flex-wrap items-center gap-3 pt-2.5">
-          <Seg<Speed> label="排练速度" value={speedMode} onChange={changeSpeedMode} options={SPEED_OPTIONS} />
+          <Seg<Speed>
+            label="排练速度"
+            value={speedMode}
+            onChange={changeSpeedMode}
+            options={SPEED_OPTIONS}
+          />
           {speedMode === 'set' && (
             <div className="inline-flex items-center gap-1" role="group" aria-label="速度">
               <button
@@ -428,6 +566,30 @@ export function BandSongPage({ id }: { id: string }) {
         )}
       </section>
 
+      {/* 补位 */}
+      {fillPlan && (
+        <section aria-labelledby="song-fill" className="max-w-[640px] pt-8">
+          <h2 id="song-fill" className="label m-0">
+            补位（排练时音箱放什么）
+          </h2>
+          <div className="pt-2.5">
+            <FillPanel
+              plan={fillPlan}
+              fill={fill}
+              onChange={changeFill}
+              nameOf={(userId) => memberById.get(userId)?.displayName ?? '已离开的成员'}
+              hasFileDrums={readyTracks?.drums.some(Boolean) ?? false}
+              hasSavedDrums={hasSavedDrums}
+              drumStyles={drumStyles.styles}
+              caption={fillCaption}
+            />
+            <p aria-live="polite" className="pt-2 text-xs text-muted-foreground">
+              {fillStatusText[fillSave]}
+            </p>
+          </div>
+        </section>
+      )}
+
       {/* 主唱简谱 */}
       <section aria-labelledby="song-sheets" className="max-w-[640px] pt-8">
         <h2 id="song-sheets" className="label m-0">
@@ -435,6 +597,35 @@ export function BandSongPage({ id }: { id: string }) {
         </h2>
         <div className="pt-2.5">
           <SheetsPanel path={song.path} />
+        </div>
+      </section>
+
+      {/* 小节留言 */}
+      <section aria-labelledby="song-comments" className="max-w-[640px] pt-8">
+        <h2 id="song-comments" className="label m-0">
+          小节留言
+        </h2>
+        <div className="pt-2.5">
+          <CommentsPanel
+            comments={song.comments ?? []}
+            members={state.members}
+            me={me}
+            currentBar={1}
+            bars={readyTracks?.bars ?? 999}
+            focusBar={null}
+            onAdd={(bar, text) => addComment(song.id, bar, text)}
+            onRemove={(commentId) => removeComment(song.id, commentId)}
+          />
+        </div>
+      </section>
+
+      {/* 排练录音 */}
+      <section aria-labelledby="song-recordings" className="max-w-[640px] pt-8">
+        <h2 id="song-recordings" className="label m-0">
+          排练录音
+        </h2>
+        <div className="pt-2.5">
+          <RecordingsPanel songId={song.id} members={state.members} />
         </div>
       </section>
 
@@ -460,7 +651,11 @@ export function BandSongPage({ id }: { id: string }) {
                   <tr key={m.id} className="border-b border-border last:border-b-0">
                     <td className="break-words py-2.5 pr-2 font-medium">{m.displayName}</td>
                     <td className="mono py-2.5 pr-2 tabular-nums">
-                      {p ? fmtDuration(p.totalSeconds) : <span className="text-muted-foreground">还没练过</span>}
+                      {p ? (
+                        fmtDuration(p.totalSeconds)
+                      ) : (
+                        <span className="text-muted-foreground">还没练过</span>
+                      )}
                     </td>
                     <td className="mono py-2.5 pr-2 tabular-nums">
                       {p && p.maxSpeedPct ? `${p.maxSpeedPct}%` : '—'}

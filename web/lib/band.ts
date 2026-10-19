@@ -63,6 +63,11 @@ export function useBand(): { state: BandState | null; error: string | null; relo
   return { state: s, error: e, reload: () => void refresh() }
 }
 
+/** Re-reads the band (another member changed it: the rehearsal stream says so). */
+export function reloadBand(): void {
+  void refresh()
+}
+
 /** Sends a change and stores the band it returns. Rejects with a readable message. */
 async function commit(request: Promise<BandState>): Promise<void> {
   try {
@@ -79,3 +84,8 @@ export const updateSong = (b: UpdateBandSongBody) => commit(api.updateBandSong(b
 export const removeSong = (id: string) => commit(api.removeBandSong(id))
 export const reorder = (ids: string[]) => commit(api.reorderBandSongs(ids))
 export const rename = (name: string) => commit(api.renameBand(name))
+export const setSetlist = (ids: string[]) => commit(api.setRehearsalSetlist(ids))
+export const addComment = (songId: string, bar: number, text: string) =>
+  commit(api.addComment({ songId, bar, text }))
+export const removeComment = (songId: string, commentId: string) =>
+  commit(api.removeComment(songId, commentId))

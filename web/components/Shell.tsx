@@ -31,6 +31,7 @@ import { UsersPage } from '../pages/UsersPage'
 import { DrumEditorPage } from '../pages/DrumEditorPage'
 import { CombinePage } from '../pages/CombinePage'
 import { DailyPage } from '../pages/DailyPage'
+import { InvitePage } from '../pages/InvitePage'
 import { Viewer } from '../viewer/Viewer'
 
 const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
@@ -149,8 +150,7 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
 
   const onViewer = route.kind === 'viewer'
   // Band and account pages do not need the library, so they never wait for it.
-  const pageReady =
-    info !== null || onViewer || libraryHidden || !LIBRARY_ROUTES.has(route.kind)
+  const pageReady = info !== null || onViewer || libraryHidden || !LIBRARY_ROUTES.has(route.kind)
 
   return (
     <LibraryContext.Provider value={value}>
@@ -337,12 +337,12 @@ function TabBar({ route, libraryHidden }: { route: Route; libraryHidden: boolean
       : route.kind === 'daily'
         ? 'daily'
         : route.kind === 'account' || route.kind === 'users'
-        ? 'me'
-        : route.kind === 'search'
-          ? 'search'
-          : route.kind === 'favorites'
-            ? 'fav'
-            : 'toc'
+          ? 'me'
+          : route.kind === 'search'
+            ? 'search'
+            : route.kind === 'favorites'
+              ? 'fav'
+              : 'toc'
   const tab = (
     id: 'toc' | 'search' | 'band' | 'daily' | 'fav' | 'me',
     icon: string,
@@ -420,6 +420,8 @@ function renderRoute(route: Route, libraryHidden: boolean) {
       return <UsersPage />
     case 'daily':
       return <DailyPage key={route.day ?? 0} day={route.day} />
+    case 'invite':
+      return <InvitePage key={route.token} token={route.token} />
     case 'combine':
       return <CombinePage key={route.path + route.id} path={route.path} id={route.id} />
     case 'drums':

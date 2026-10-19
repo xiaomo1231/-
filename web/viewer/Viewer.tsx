@@ -53,6 +53,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
           showDrums={route.drums}
           combo={route.combo}
           conv={route.conv}
+          rehearsal={route.rehearsal}
         />
       )
       break

@@ -47,6 +47,22 @@ export function ArtistsPage({ group }: { group: GroupRoute }) {
   const back = category ? `← 目录 · ${category.name}` : '← 目录'
   const backTo = category && category.groups.length > 1 ? hrefCategory(category.id) : '#/'
 
+  // An old link: this folder used to be a group (e.g. 动漫音乐/BanG Dream!) and is now an
+  // artist / work of its category. Go to that page instead of an empty one.
+  const known = info?.categories.some((c) => c.groups.some((g) => g.id === group.id)) ?? true
+  useEffect(() => {
+    if (known || state.status !== 'ready' || state.data.length > 0) return
+    const ac = new AbortController()
+    const parent = info?.categories.find((c) => c.id === categoryId)?.groups ?? []
+    void Promise.all(parent.map((g) => api.artists(g.id, ac.signal)))
+      .then((lists) => {
+        const hit = lists.flat().find((x) => x.id === group.id)
+        if (hit) window.location.replace(hrefArtist(hit))
+      })
+      .catch(() => undefined)
+    return () => ac.abort()
+  }, [known, state, info, categoryId, group.id])
+
   // After a letter tap, scroll to its section once it is on screen.
   useEffect(() => {
     if (!jump) return

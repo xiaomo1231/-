@@ -7,7 +7,19 @@ import type {
 } from '@/songs/scoreLibraryTypes'
 
 import type {
+  AcceptInviteBody,
+  AddCommentBody,
+  InviteCheck,
+  InviteInfo,
+  NewInviteBody,
+  NewInviteResult,
+  RecordingInfo,
+  RecordingUploadQuery,
+  RehearsalCommandBody,
+  RehearsalState,
   AddBandSongBody,
+  LiveCommand,
+  LiveState,
   BandState,
   ComboRecipe,
   ConversionRecord,
@@ -20,8 +32,6 @@ import type {
   SheetUpload,
   SheetUploadQuery,
   SongInfo,
-  LiveCommand,
-  LiveState,
   LoginBody,
   NewUserBody,
   UpdateBandSongBody,
@@ -185,7 +195,10 @@ export const api = {
     return (await res.json()) as UserInfo
   },
   login: (username: string, password: string) =>
-    call<UserInfo>('/api/login', { body: { username, password } satisfies LoginBody, quietAuth: true }),
+    call<UserInfo>('/api/login', {
+      body: { username, password } satisfies LoginBody,
+      quietAuth: true,
+    }),
   updateMe: (b: UpdateMeBody) => call<UserInfo>('/api/me/update', { body: b }),
   // accounts (admin)
   users: (signal?: AbortSignal) => call<UserInfo[]>('/api/users', { signal }),
@@ -195,8 +208,7 @@ export const api = {
   // band
   band: (signal?: AbortSignal) => call<BandState>('/api/band', { signal }),
   addBandSong: (b: AddBandSongBody) => call<BandState>('/api/band/songs/add', { body: b }),
-  updateBandSong: (b: UpdateBandSongBody) =>
-    call<BandState>('/api/band/songs/update', { body: b }),
+  updateBandSong: (b: UpdateBandSongBody) => call<BandState>('/api/band/songs/update', { body: b }),
   removeBandSong: (id: string) => call<BandState>('/api/band/songs/remove', { body: { id } }),
   reorderBandSongs: (ids: string[]) =>
     call<BandState>('/api/band/songs/reorder', { body: { ids } }),
@@ -275,9 +287,53 @@ export const api = {
   // 谱库里的简谱
   jianpu: (path: string, signal?: AbortSignal) =>
     call<LibraryJianpu[]>(`/api/jianpu?path=${enc(path)}`, { signal }),
-  // 一起播放
+  // 排练
   serverTime: () => call<{ now: number }>('/api/time'),
+  /** Old per-song 一起播放 (replaced by the rehearsal; kept until its files are removed). */
   liveCommand: (c: LiveCommand) => call<LiveState>('/api/live/command', { body: c }),
+  rehearsal: (signal?: AbortSignal) => call<RehearsalState>('/api/rehearsal', { signal }),
+  rehearsalCommand: (b: RehearsalCommandBody) =>
+    call<RehearsalState>('/api/rehearsal/command', { body: b }),
+  /** Template drums for a band song, the same on every device (fixed seed). */
+  rehearsalDrums: (songId: string, style: string | null, signal?: AbortSignal) =>
+    call<GenerateDrumsResult>(
+      `/api/rehearsal/drums?songId=${enc(songId)}&style=${enc(style ?? '')}`,
+      { signal },
+    ),
+  addComment: (b: AddCommentBody) => call<BandState>('/api/band/comments/add', { body: b }),
+  removeComment: (songId: string, commentId: string) =>
+    call<BandState>('/api/band/comments/remove', { body: { songId, commentId } }),
+  setRehearsalSetlist: (ids: string[]) => call<BandState>('/api/band/setlist', { body: { ids } }),
+  // 排练录音
+  recordings: (songId: string, signal?: AbortSignal) =>
+    call<RecordingInfo[]>(`/api/recordings?songId=${enc(songId)}`, { signal }),
+  /** Raw upload (no multipart): the audio file is the body. */
+  async uploadRecording(q: RecordingUploadQuery, file: Blob): Promise<RecordingInfo[]> {
+    const res = await fetch(
+      `/api/recordings/upload?songId=${enc(q.songId)}&label=${enc(q.label)}&name=${enc(q.name)}`,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      },
+    )
+    if (res.status === 401) throw unauthorized()
+    if (!res.ok) throw await failure(res)
+    return (await res.json()) as RecordingInfo[]
+  },
+  removeRecording: (id: string) =>
+    call<RecordingInfo[]>('/api/recordings/remove', { body: { id } }),
+  // 邀请链接
+  invites: (signal?: AbortSignal) => call<InviteInfo[]>('/api/invites', { signal }),
+  createInvite: (b: NewInviteBody) => call<NewInviteResult>('/api/invites', { body: b }),
+  revokeInvite: (id: string) => call<InviteInfo[]>('/api/invites/revoke', { body: { id } }),
+  /** No login needed. */
+  checkInvite: (token: string) =>
+    call<InviteCheck>(`/api/invite/check?token=${enc(token)}`, { quietAuth: true }),
+  /** No login needed: creates the account and sets the session cookie. */
+  acceptInvite: (b: AcceptInviteBody) =>
+    call<UserInfo>('/api/invite/accept', { body: b, quietAuth: true }),
   logout: () => call<unknown>('/api/logout', { method: 'POST' }),
   library: (signal?: AbortSignal) => call<LibraryInfo>('/api/library', { signal }),
   rescan: () => call<unknown>('/api/rescan', { method: 'POST' }),
@@ -326,4 +382,9 @@ export function sheetFileUrl(id: string): string {
 /** A converted GP5 file (PDF 转换版). */
 export function conversionFileUrl(id: string): string {
   return `/api/conversions/file?id=${encodeURIComponent(id)}`
+}
+
+/** A rehearsal recording's audio (supports seeking: the server answers Range requests). */
+export function recordingFileUrl(id: string): string {
+  return `/api/recordings/file?id=${encodeURIComponent(id)}`
 }

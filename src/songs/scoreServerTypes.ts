@@ -81,6 +81,10 @@ export interface BandSong {
   rehearsalSpeedPct: number | null
   /** A combined band score (组合乐队谱) used instead of `path`, or null. Optional for older rows. */
   comboId?: string | null
+  /** 补位: what the 音箱 plays in a rehearsal. Missing on older rows = all automatic. */
+  fill?: FillConfig
+  /** 小节留言, oldest first. Missing on older rows = none. */
+  comments?: BarComment[]
   addedBy: string
   addedAt: number
   updatedAt: number
@@ -99,6 +103,8 @@ export interface BandState {
   name: string
   /** Setlist order. */
   songs: BandSong[]
+  /** 今天排练的歌 (band song ids, in order). */
+  rehearsalSetlist: string[]
   members: UserInfo[]
   /** songId → the members' practice of it (members who never practised it are left out). */
   progress: Record<string, MemberProgress[]>
@@ -119,6 +125,260 @@ export interface UpdateBandSongBody {
   parts?: Record<string, string>
   note?: string
   rehearsalSpeedPct?: number | null
+  fill?: FillConfig
+}
+
+// ---------------------------------------------------------------------------
+// 补位 (fill-in): which tracks the 音箱 plays for missing members
+// ---------------------------------------------------------------------------
+
+/** 'auto' = play when nobody present plays it; 'on' / 'off' = the conductor's choice. */
+export type FillMode = 'auto' | 'on' | 'off'
+
+/**
+ * Where the drums come from.
+ * auto      — the saved drum part (鼓谱编辑器) if any, else the file's drum track, else generated;
+ * file      — the file's own drum track;
+ * saved     — the saved drum part;
+ * generated — generated from the templates (the same on every device: fixed seed);
+ * metronome — no drums, the metronome only.
+ */
+export type FillDrumSource = 'auto' | 'file' | 'saved' | 'generated' | 'metronome'
+
+export interface FillConfig {
+  /** Track index (string key "0".."63") → mode; missing = 'auto'. Drum tracks are governed by `drums`. */
+  tracks: Record<string, FillMode>
+  /** Track index or 'drums' → volume in percent (0–150); missing = 100. */
+  volumes: Record<string, number>
+  drums: FillMode
+  drumSource: FillDrumSource
+  /** Template style id for generated drums; null = automatic. */
+  drumStyle: string | null
+  /** Metronome on the 音箱 (on regardless when drumSource is 'metronome' and drums play). */
+  metronome: boolean
+  countIn: boolean
+}
+
+/** POST /api/band/comments/add */
+export interface AddCommentBody {
+  songId: string
+  /** 1-based bar number. */
+  bar: number
+  text: string
+}
+
+/** One 小节留言 on a band song. */
+export interface BarComment {
+  id: string
+  /** 1-based bar number. */
+  bar: number
+  /** Up to 200 chars. */
+  text: string
+  userId: string
+  at: number
+}
+
+// ---------------------------------------------------------------------------
+// 排练 (rehearsal in one room): one 音箱 device plays, the others follow the score
+// ---------------------------------------------------------------------------
+
+/** A device connected to the rehearsal (one browser tab). */
+export interface RehearsalDevice {
+  /** Random id kept by the browser (localStorage). */
+  deviceId: string
+  userId: string
+  /** e.g. "iPad", "电脑", "手机". */
+  label: string
+  /** 我准备好了 for the current song. */
+  ready: boolean
+  /** This device also makes sound (耳机出声); the 音箱 always does. */
+  audible: boolean
+  /** Calibrated output latency of this device in ms (0–1000). */
+  latencyMs: number
+  /** Last measured distance from the reference position in ms (null = not measured / not playing). */
+  driftMs: number | null
+}
+
+/** A conductor's loop: bars, passes and the speed ladder (爬速度). */
+export interface RehearsalLoop {
+  startTick: number
+  /** Exclusive end tick (the start of the bar after the last one). */
+  endTick: number
+  /** 1-based, inclusive, for display. */
+  startBar: number
+  endBar: number
+  /** Number of passes; null = until stopped. */
+  passes: number | null
+  /** Speed added after each pass, 0–20 (percent points). */
+  rampPct: number
+  /** Ramp stops at this speed (15–175). */
+  rampMaxPct: number
+}
+
+/** 从第 X 小节再来: a member's request, waiting for the conductor. */
+export interface RehearsalRequest {
+  id: string
+  userId: string
+  /** 1-based bar number. */
+  bar: number
+  tick: number
+  at: number
+}
+
+/** Event "rehearsal" of GET /api/rehearsal/events: the band's one rehearsal. Times are server epoch ms. */
+export interface RehearsalState {
+  active: boolean
+  /** The song on everyone's stand (a band song id), or null. */
+  songId: string | null
+  /** 指挥 (user id), and the device the conductor uses. */
+  leaderId: string | null
+  leaderDevice: string | null
+  /** 音箱 device id, or null (no device plays for the room yet). */
+  speakerDevice: string | null
+  playing: boolean
+  /** Position (MIDI tick) where playback starts / stopped. */
+  tick: number
+  speedPct: number
+  countIn: boolean
+  /** When playing: server time at which the 音箱 starts `tick` (its count-in first, if on). */
+  startAt: number
+  loop: RehearsalLoop | null
+  /** Current pass of the loop, 1-based (1 when not looping). */
+  pass: number
+  requests: RehearsalRequest[]
+  devices: RehearsalDevice[]
+  /** Bumped on every change of the transport, song or loop (not on device status changes). */
+  seq: number
+  startedAt: number
+}
+
+/**
+ * The reference device's position (the 音箱, else the conductor's device), sent every
+ * ~2 s while playing (event "clock"): `timeMs` is its player's position (alphaTab
+ * timePosition, i.e. real milliseconds at the current speed) at server time `at`.
+ */
+export interface RehearsalClock {
+  seq: number
+  pass: number
+  timeMs: number
+  at: number
+}
+
+/** POST /api/rehearsal/command (the device id is sent with every command). */
+export type RehearsalCommand =
+  /** Starts the rehearsal with the first song of the setlist (the server saves the setlist). */
+  | { type: 'start'; setlist: string[] }
+  | { type: 'end' }
+  | { type: 'lead'; take: boolean }
+  | { type: 'speaker'; take: boolean }
+  | { type: 'song'; songId: string }
+  | { type: 'play'; tick: number; speedPct: number }
+  | { type: 'pause'; tick: number }
+  | { type: 'seek'; tick: number }
+  | { type: 'speed'; speedPct: number }
+  | { type: 'countIn'; on: boolean }
+  | { type: 'loop'; loop: RehearsalLoop | null }
+  /** The reference device finished a pass (or the song): next pass, or stop. */
+  | { type: 'passEnded'; seq: number; pass: number }
+  | { type: 'clock'; seq: number; pass: number; timeMs: number; at: number }
+  | {
+      type: 'device'
+      ready?: boolean
+      audible?: boolean
+      latencyMs?: number
+      label?: string
+      driftMs?: number | null
+    }
+  | { type: 'request'; bar: number; tick: number }
+  | { type: 'dismiss'; requestId: string }
+
+export interface RehearsalCommandBody {
+  deviceId: string
+  command: RehearsalCommand
+}
+
+// ---------------------------------------------------------------------------
+// 邀请链接 (invite links)
+// ---------------------------------------------------------------------------
+
+/** An invite as the admin sees it (never the token itself after creation). */
+export interface InviteInfo {
+  id: string
+  createdBy: string
+  createdAt: number
+  /** Epoch ms; null = never. */
+  expiresAt: number | null
+  /** null = unlimited. */
+  maxUses: number | null
+  uses: number
+  /** User ids that joined with it. */
+  usedBy: string[]
+  instrument: Instrument | null
+  libraryAccess: boolean
+  /** Shown to the person invited, up to 100 chars. */
+  note: string
+  revoked: boolean
+}
+
+/** POST /api/invites (admin). */
+export interface NewInviteBody {
+  /** 1–90 days; null = never expires. */
+  days: number | null
+  /** 1–50; null = unlimited. */
+  maxUses: number | null
+  instrument: Instrument | null
+  libraryAccess: boolean
+  note: string
+}
+
+/** Answer of POST /api/invites: the only time the token is shown. */
+export interface NewInviteResult {
+  invite: InviteInfo
+  token: string
+}
+
+/** GET /api/invite/check?token= (no login): whether the link still works. */
+export interface InviteCheck {
+  valid: boolean
+  /** Why not (Chinese), when invalid. */
+  reason: string | null
+  bandName: string
+  instrument: Instrument | null
+  note: string
+}
+
+/** POST /api/invite/accept (no login): creates the account and signs it in. */
+export interface AcceptInviteBody {
+  token: string
+  username: string
+  displayName: string
+  password: string
+  instrument: Instrument | null
+}
+
+// ---------------------------------------------------------------------------
+// 排练录音 (rehearsal recordings, uploaded by members)
+// ---------------------------------------------------------------------------
+
+export interface RecordingInfo {
+  id: string
+  /** Band song id. */
+  songId: string
+  /** e.g. "10 月 19 日排练", up to 60 chars. */
+  label: string
+  fileName: string
+  size: number
+  /** MIME type (audio/mpeg, audio/mp4, audio/wav, audio/ogg, audio/webm, audio/flac). */
+  type: string
+  uploadedBy: string
+  uploadedAt: number
+}
+
+/** POST /api/recordings/upload?songId=&label=&name= with the raw audio file as body. */
+export interface RecordingUploadQuery {
+  songId: string
+  label: string
+  name: string
 }
 
 // ---------------------------------------------------------------------------

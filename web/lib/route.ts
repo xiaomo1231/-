@@ -17,6 +17,8 @@ export interface ViewerRoute {
   combo: string
   /** A PDF 转换版 id: the converted GP5 is shown instead of the PDF at `path`. */
   conv: string
+  /** Opened by the band's rehearsal: follow the rehearsal (音箱 / 看谱) instead of practising alone. */
+  rehearsal: boolean
 }
 
 export type Route =
@@ -34,6 +36,7 @@ export type Route =
   | { kind: 'drums'; path: string; title: string; artist: string }
   | { kind: 'combine'; path: string; id: string }
   | { kind: 'daily'; day: number | null }
+  | { kind: 'invite'; token: string }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -69,12 +72,15 @@ export function parseHash(hash: string): Route {
   if (bs) return { kind: 'bandSong', id: decode(bs[1] ?? '') }
   if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
   if (path === '/me') return { kind: 'account' }
+  const inv = /^\/invite\/([A-Za-z0-9_-]{16,64})$/.exec(path)
+  if (inv) return { kind: 'invite', token: inv[1] ?? '' }
   if (path === '/users') return { kind: 'users' }
   if (path === '/daily') {
     const d = Number(qs.get('d'))
     return { kind: 'daily', day: Number.isInteger(d) && d >= 1 && d <= 365 ? d : null }
   }
-  if (path === '/combine') return { kind: 'combine', path: qs.get('p') ?? '', id: qs.get('id') ?? '' }
+  if (path === '/combine')
+    return { kind: 'combine', path: qs.get('p') ?? '', id: qs.get('id') ?? '' }
   if (path === '/d')
     return {
       kind: 'drums',
@@ -94,6 +100,7 @@ export function parseHash(hash: string): Route {
       drums: qs.get('drums') === '1',
       combo: qs.get('combo') ?? '',
       conv: qs.get('conv') ?? '',
+      rehearsal: qs.get('r') === '1',
     }
   }
   return { kind: 'home' }
@@ -109,6 +116,11 @@ export const HREF_BAND = '#/b'
 export const HREF_DAILY = '#/daily'
 export const HREF_ACCOUNT = '#/me'
 export const HREF_USERS = '#/users'
+
+/** An invite link (full URL, to copy and send). */
+export function inviteUrl(token: string): string {
+  return `${window.location.origin}${window.location.pathname}#/invite/${token}`
+}
 
 export function hrefBandSong(id: string): string {
   return `#/b/s/${enc(id)}`
@@ -140,11 +152,17 @@ export function hrefViewer(v: {
   artist: string
   /** Band song id when opened from the setlist. */
   band?: string
+  /** Opened by the rehearsal (see ViewerRoute.rehearsal). */
+  rehearsal?: boolean
+  /** A 组合乐队谱 recipe id. */
+  combo?: string
 }): string {
   const parts = [`p=${enc(v.path)}`, `f=${enc(v.format)}`]
   if (v.pages && v.pages.length > 0) parts.push(`pages=${enc(JSON.stringify(v.pages))}`)
   parts.push(`title=${enc(v.title)}`, `artist=${enc(v.artist)}`)
   if (v.band) parts.push(`b=${enc(v.band)}`)
+  if (v.combo) parts.push(`combo=${enc(v.combo)}`)
+  if (v.rehearsal) parts.push('r=1')
   return `#/v?${parts.join('&')}`
 }
 
