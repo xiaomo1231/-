@@ -6,7 +6,7 @@ import { hrefCombine } from '../lib/combos'
 import { formatSize } from '../lib/format'
 import { HREF_BAND, hrefBandSong, hrefUpload, hrefViewer, navigate } from '../lib/route'
 import { Link } from '../components/Link'
-import { Notice, PageBar, Staff } from '../components/ui'
+import { Notice, PageBar } from '../components/ui'
 
 /** The instrument / part names offered for a file. */
 const LABELS = ['吉他', '主音吉他', '节奏吉他', '贝斯', '鼓', '键盘', '主唱', '其他'] as const
@@ -90,7 +90,6 @@ function NewUploadForm({ band }: { band: string }) {
   return (
     <>
       <PageBar title={heading} fallback={backFallback} back={band ? '← 排练' : '← 乐队'} />
-      <Staff />
 
       <div className="max-w-[640px] pt-6">
         {band && state && !bandSong ? (
@@ -213,7 +212,6 @@ function UploadEditor({ id }: { id: string }) {
     return (
       <>
         <PageBar title="上传自己的谱" fallback={HREF_BAND} back="← 乐队" />
-        <Staff />
         <div className="max-w-[640px] py-6">
           {loadError ? (
             <>
@@ -317,7 +315,6 @@ function UploadEditor({ id }: { id: string }) {
         fallback={HREF_BAND}
         back="← 乐队"
       />
-      <Staff />
 
       <div className="max-w-[640px] space-y-8 pt-6">
         {/* names */}

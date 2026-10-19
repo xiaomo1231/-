@@ -4,7 +4,7 @@ import { api, errorText } from '../lib/api'
 import { buttonClass, cx, SELECT } from '../lib/classes'
 import { inviteUrl } from '../lib/route'
 import { INSTRUMENT_LABELS, useMe } from '../lib/session'
-import { Notice, PageBar, Staff } from '../components/ui'
+import { Notice, PageBar } from '../components/ui'
 
 const INPUT =
   'h-11 w-full rounded-lg border border-border bg-transparent px-3 text-base text-foreground outline-none focus:border-primary'
@@ -754,7 +754,6 @@ export function UsersPage() {
     return (
       <>
         <PageBar title="成员管理" back="← 我的账号" fallback="#/me" />
-        <Staff />
         <div className="max-w-[640px] py-6">
           <Notice tone="error">只有管理员可以管理成员。</Notice>
         </div>
@@ -789,7 +788,6 @@ export function UsersPage() {
           添加成员
         </button>
       </PageBar>
-      <Staff />
 
       <div className="max-w-[640px] space-y-6 pb-20 pt-6">
         {message && (

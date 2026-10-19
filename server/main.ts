@@ -1409,6 +1409,25 @@ function startEnsembles(lib: LoadedLibrary): void {
   void ensembles.start(files)
 }
 
+/** POST /api/versions/info: tracks, tempo and bars of score files for the version lines. */
+async function handleVersionInfo(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  me: StoredUser,
+): Promise<void> {
+  if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+  const raw = (await readJsonBody(req)).paths
+  if (!Array.isArray(raw) || raw.length > MAX_VERSION_INFO_PATHS)
+    throw new HttpError(400, '请求格式不对。')
+  // Paths outside the library, or the member may not open, are left out.
+  const paths = raw.filter(
+    (p): p is string => typeof p === 'string' && inRoot(p) && (canBrowse(me) || bandCanOpen(p)),
+  )
+  sendJson(res, 200, ensembles.info(paths))
+}
+
+const MAX_VERSION_INFO_PATHS = 400
+
 /** GET /api/ensembles: a search narrows to the matching songs' files first. */
 function queryEnsembles(url: URL): unknown {
   const q = (url.searchParams.get('q') ?? '').trim()
@@ -1498,6 +1517,7 @@ async function handleApi(
   if (p === '/api/daily' || p.startsWith('/api/daily/')) return handleDaily(req, res, p, me)
   if (p === '/api/conversions' || p.startsWith('/api/conversions/'))
     return handleConversions(req, res, url, me)
+  if (p === '/api/versions/info') return handleVersionInfo(req, res, me)
 
   const routes: Record<
     string,

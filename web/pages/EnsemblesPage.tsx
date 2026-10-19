@@ -203,8 +203,8 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
 
   return (
     <>
-      <header className="pb-2 pt-[22px] min-[861px]:pt-9">
-        <h1 className="m-0 font-display text-[clamp(30px,5vw,44px)] font-black tracking-[0.02em]">
+      <header className="pb-2 pt-4 min-[861px]:pt-6">
+        <h1 className="m-0 border-b border-foreground pb-2.5 font-display text-[26px] font-black leading-tight min-[861px]:text-[30px]">
           找乐队谱
         </h1>
         <p className="pt-1.5 text-sm leading-relaxed text-muted-foreground">

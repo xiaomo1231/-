@@ -27,7 +27,7 @@ import { openInRehearsal } from '../lib/rehearsalNav'
 import { canBrowseLibrary, INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { fmtDuration } from '../lib/practice'
 import { hrefBandSong, hrefEnsembles, hrefUpload } from '../lib/route'
-import { FormatBadge, Notice, PageBar, Seg, Staff } from '../components/ui'
+import { FormatBadge, Notice, PageBar, Seg } from '../components/ui'
 import { Link } from '../components/Link'
 
 type Filter = 'all' | SongStatus
@@ -98,7 +98,6 @@ export function BandPage() {
     return (
       <>
         <PageBar title="乐队" fallback="#/" back="← 目录" />
-        <Staff />
         <div className="max-w-[640px] py-6">
           {error ? (
             <Notice tone="error">{error}</Notice>
@@ -163,7 +162,6 @@ export function BandPage() {
           </button>
         )}
       </PageBar>
-      <Staff />
 
       {renaming && (
         <form

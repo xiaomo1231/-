@@ -5,7 +5,7 @@ import { buttonClass } from '../lib/classes'
 import { HREF_BAND } from '../lib/route'
 import { INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { Link } from '../components/Link'
-import { Notice, Staff } from '../components/ui'
+import { Notice } from '../components/ui'
 
 const FIELD =
   'h-12 w-full rounded-lg border border-border bg-card px-4 text-base text-foreground outline-none transition-colors focus:border-primary'
@@ -106,7 +106,6 @@ export function InvitePage({
   if (me) {
     return (
       <div className="mx-auto w-full max-w-sm space-y-6 py-8">
-        <Staff />
         <Notice>
           你已经登录为「{me.displayName}」。这个链接是给新成员注册用的，请发给要加入的人。
         </Notice>
@@ -123,7 +122,6 @@ export function InvitePage({
   if (loadError) {
     return (
       <div className="mx-auto w-full max-w-sm space-y-6 py-8">
-        <Staff />
         <Notice tone="error">{loadError}</Notice>
       </div>
     )
@@ -140,7 +138,6 @@ export function InvitePage({
   if (!check.valid) {
     return (
       <div className="mx-auto w-full max-w-sm space-y-6 py-8">
-        <Staff />
         <Notice tone="error">{check.reason ?? '这个邀请链接不能用了。'}</Notice>
         <p className="text-xs text-muted-foreground">请向乐队管理员要一个新的邀请链接。</p>
       </div>
@@ -153,7 +150,6 @@ export function InvitePage({
         加入「{check.bandName}」
       </h1>
       <div className="mt-5">
-        <Staff />
       </div>
       {check.note && (
         <p className="mt-5 text-sm leading-relaxed text-muted-foreground">{check.note}</p>

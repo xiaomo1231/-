@@ -6,7 +6,7 @@ import { DRUM_PIECES, type DrumBar, type DrumPart, type DrumPiece, type DrumSour
 import { buttonClass, cx, SELECT } from '../lib/classes'
 import { removeDrumPart, saveDrumPart, useDrumPart, useDrumStyles } from '../lib/drums'
 import { goBack, hrefViewer, navigate } from '../lib/route'
-import { Notice, Seg, Staff } from '../components/ui'
+import { Notice, Seg } from '../components/ui'
 import { chooseEncoding, loadAlphaTab, type Score } from '../viewer/alphaTab'
 import { DrumEditorGrid } from '../viewer/DrumEditorGrid'
 import { DrumKey } from '../viewer/DrumKey'
@@ -471,7 +471,7 @@ export function DrumEditorPage({ path, title, artist }: { path: string; title: s
         >
           ← 返回
         </button>
-        <h1 className="m-0 break-words font-display text-[clamp(36px,7vw,64px)] font-black leading-none tracking-[-0.01em]">
+        <h1 className="m-0 break-words font-display text-[26px] font-black leading-tight min-[861px]:text-[30px]">
           编辑鼓谱
         </h1>
       </div>
@@ -777,7 +777,6 @@ export function DrumEditorPage({ path, title, artist }: { path: string; title: s
   return (
     <>
       {header}
-      <Staff />
 
       {note && (
         <div className="pt-4">

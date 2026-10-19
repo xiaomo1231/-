@@ -6,11 +6,13 @@ export function Link({
   href,
   className,
   ariaLabel,
+  title,
   children,
 }: {
   href: string
   className?: string
   ariaLabel?: string
+  title?: string
   children: ReactNode
 }) {
   const onClick = (e: MouseEvent<HTMLAnchorElement>) => {
@@ -20,7 +22,7 @@ export function Link({
     navigate(href)
   }
   return (
-    <a href={href} onClick={onClick} className={className} aria-label={ariaLabel}>
+    <a href={href} onClick={onClick} className={className} aria-label={ariaLabel} title={title}>
       {children}
     </a>
   )

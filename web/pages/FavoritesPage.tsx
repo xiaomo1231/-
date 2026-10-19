@@ -11,7 +11,7 @@ import {
   type FavoriteGroup,
   type FavoriteSort,
 } from '../lib/favoriteGroups'
-import { FormatBadge, Notice, PageBar, Seg, Staff } from '../components/ui'
+import { FormatBadge, Notice, PageBar, Seg } from '../components/ui'
 import { Link } from '../components/Link'
 import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
 
@@ -243,7 +243,6 @@ export function FavoritesPage() {
           ]}
         />
       </PageBar>
-      <Staff />
 
       {!loaded ? (
         <p className="py-10 text-center text-sm text-muted-foreground">正在读取…</p>

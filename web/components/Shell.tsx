@@ -205,6 +205,7 @@ export function Shell({ onLoggedOut }: { onLoggedOut: () => void }) {
               <Link
                 href={HREF_FAVORITES}
                 ariaLabel={`我的收藏，${favorites.length} 个`}
+                title={`我的收藏（${favorites.length} 个）`}
                 className="hidden h-9 items-center gap-1.5 rounded-lg px-3 text-foreground transition-colors hover:bg-card min-[861px]:flex"
               >
                 <span aria-hidden className="text-primary">
@@ -311,7 +312,7 @@ function AccountLinks({ me }: { me: UserInfo }) {
       {me.role === 'admin' && (
         <Link
           href={HREF_USERS}
-          className="flex h-9 items-center rounded-lg px-2.5 text-sm text-muted-foreground transition-colors hover:bg-card hover:text-foreground"
+          className="flex h-9 items-center rounded-lg px-2.5 text-sm text-foreground transition-colors hover:bg-card"
         >
           成员
         </Link>

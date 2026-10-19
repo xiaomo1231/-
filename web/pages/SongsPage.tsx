@@ -98,10 +98,11 @@ export function SongsPage({ artist }: { artist: { id: string; name: string } }) 
         </div>
       ) : (
         <div className="pb-20">
-          <ul className="m-0 list-none border-t-2 border-foreground p-0">
-            {shown.map((song) => (
+          <ul className="m-0 list-none p-0">
+            {shown.map((song, i) => (
               <SongCard
                 key={song.id}
+                index={i + 1}
                 song={song}
                 artistName={name}
                 open={current === song.id}

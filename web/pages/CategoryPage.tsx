@@ -2,7 +2,7 @@ import { hrefGroup } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
 import { useRestoreScroll } from '../lib/scrollMemory'
 import { Link } from '../components/Link'
-import { Notice, PageBar, Staff } from '../components/ui'
+import { Notice, PageBar } from '../components/ui'
 
 /** A category with several groups (分组): the groups as contents rows; tap one for its artists. */
 export function CategoryPage({ id }: { id: string }) {
@@ -14,7 +14,6 @@ export function CategoryPage({ id }: { id: string }) {
     return (
       <>
         <PageBar title="分类" back="← 目录" fallback="#/" />
-        <Staff />
         <div className="py-6">
           <Notice>找不到这个分类。文件夹可能已经改过名字，回到目录重新看一下。</Notice>
         </div>
@@ -30,7 +29,6 @@ export function CategoryPage({ id }: { id: string }) {
         fallback="#/"
         subtitle={`${category.groups.length} 个分组 · ${category.files.toLocaleString('zh-CN')} 份`}
       />
-      <Staff />
       {category.groups.length === 0 ? (
         <div className="py-6">
           <Notice>这个分类里还没有内容。</Notice>

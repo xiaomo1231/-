@@ -60,8 +60,9 @@ export function BackLink({ label, fallback }: { label: string; fallback: string 
 }
 
 /**
- * Page head, as on a printed contents page: a back link, a heavy title and a
- * mono note, with optional tools on the right. The staff rule follows it.
+ * Page head as a book's running head (书眉): a back link, the page's title, a mono
+ * note and optional tools at the right, closed by one ink rule. Only the home page
+ * (the book's contents) keeps the big title and the five hairlines.
  */
 export function PageBar({
   title,
@@ -78,15 +79,19 @@ export function PageBar({
   children?: ReactNode
 }) {
   return (
-    <header className="flex flex-wrap items-end gap-x-4 gap-y-2 pb-[18px] pt-9">
-      <div className="min-w-0 flex-1 basis-64">
-        {back && <BackLink label={back} fallback={fallback} />}
-        <h1 className="m-0 break-words font-display text-[clamp(36px,7vw,64px)] font-black leading-none tracking-[-0.01em]">
+    <header className="pb-5 pt-4 min-[861px]:pt-6">
+      {back && <BackLink label={back} fallback={fallback} />}
+      <div className="flex flex-wrap items-center gap-x-4 gap-y-2 border-b border-foreground pb-2.5">
+        <h1 className="m-0 min-w-0 break-words font-display text-[26px] font-black leading-tight min-[861px]:text-[30px]">
           {title}
         </h1>
+        {subtitle && (
+          <p className="mono ml-auto text-xs text-muted-foreground">{subtitle}</p>
+        )}
+        {children && (
+          <div className={cx('flex items-center gap-1.5', !subtitle && 'ml-auto')}>{children}</div>
+        )}
       </div>
-      {subtitle && <p className="mono pb-1.5 text-xs text-muted-foreground">{subtitle}</p>}
-      {children && <div className="flex items-center gap-1.5 pb-1">{children}</div>}
     </header>
   )
 }
@@ -123,7 +128,7 @@ export function Seg<T extends string>({
           className={cx(
             'min-h-11 px-3 text-[13px] transition-colors',
             value === v
-              ? 'bg-foreground text-background'
+              ? 'bg-primary text-primary-foreground'
               : 'text-muted-foreground hover:text-foreground',
           )}
         >

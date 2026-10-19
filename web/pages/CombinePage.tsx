@@ -12,7 +12,7 @@ import { fileBaseName, formatSize } from '../lib/format'
 import { hrefSearch, hrefViewer, navigate } from '../lib/route'
 import { useLoad, type Loaded } from '../lib/useLoad'
 import { Link } from '../components/Link'
-import { Notice, PageBar, Staff } from '../components/ui'
+import { Notice, PageBar } from '../components/ui'
 import { loadAlphaTab, type AlphaTab, type Score } from '../viewer/alphaTab'
 import { trackLabels, type TrackLabel } from '../viewer/trackNames'
 import {
@@ -229,7 +229,6 @@ export function CombinePage({ path, id }: { path: string; id: string }) {
         fallback={back}
         back="← 返回"
       />
-      <Staff />
 
       {info.status === 'loading' && (
         <p className="max-w-[640px] pt-6 text-sm text-muted-foreground">正在读取这首歌…</p>

@@ -5,7 +5,7 @@ import { buttonClass, cx, SELECT } from '../lib/classes'
 import { INSTRUMENT_LABELS, setMe, useMe } from '../lib/session'
 import { HREF_USERS } from '../lib/route'
 import { Link } from '../components/Link'
-import { Notice, PageBar, Staff } from '../components/ui'
+import { Notice, PageBar } from '../components/ui'
 
 const INPUT =
   'h-11 w-full rounded-lg border border-border bg-transparent px-3 text-base text-foreground outline-none focus:border-primary'
@@ -34,7 +34,6 @@ export function AccountPage() {
     return (
       <>
         <PageBar title="我的账号" fallback="#/" />
-        <Staff />
         <div className="max-w-[640px] py-6">
           <Notice>还没有登录。</Notice>
         </div>
@@ -120,7 +119,6 @@ export function AccountPage() {
   return (
     <>
       <PageBar title="我的账号" fallback="#/" />
-      <Staff />
 
       <div className="max-w-[640px] space-y-10 pb-20 pt-6">
         <section className="space-y-3">

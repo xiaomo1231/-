@@ -20,7 +20,7 @@ import {
 } from '../lib/daily'
 import { hrefViewer } from '../lib/route'
 import { Link } from '../components/Link'
-import { Notice, PageBar, Seg, Staff } from '../components/ui'
+import { Notice, PageBar, Seg } from '../components/ui'
 
 const LANG_OPTIONS: ReadonlyArray<readonly ['zh' | 'en', string]> = [
   ['zh', '中文'],
@@ -50,7 +50,6 @@ export function DailyPage({ day }: { day: number | null }) {
     return (
       <>
         <PageBar title="每日一练" fallback="#/" back="← 目录" />
-        <Staff />
         <div className="max-w-[760px] py-6">
           {error ? <Notice tone="error">{error}</Notice> : <p className="text-sm text-muted-foreground">正在读取…</p>}
           {error && (
@@ -71,7 +70,6 @@ export function DailyPage({ day }: { day: number | null }) {
     return (
       <>
         <PageBar title="每日一练" fallback="#/" back="← 目录" />
-        <Staff />
         <div className="max-w-[760px] py-6">
           <Notice>谱库里没有找到「每日一练」文件夹。</Notice>
         </div>
@@ -99,7 +97,6 @@ export function DailyPage({ day }: { day: number | null }) {
             : `第 ${shown} 天`
         }
       />
-      <Staff />
 
       <div className="mono flex flex-wrap gap-x-5 gap-y-1 pt-3 text-xs text-muted-foreground">
         <span>已连续 {current} 天</span>

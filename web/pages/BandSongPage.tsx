@@ -30,7 +30,7 @@ import { INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { fillOf, planFill } from '@/songs/rehearsalFill'
 import { Link } from '../components/Link'
 import { RecordingsPanel } from '../components/RecordingsPanel'
-import { Notice, PageBar, Seg, Staff } from '../components/ui'
+import { Notice, PageBar, Seg } from '../components/ui'
 import { chooseEncoding, loadAlphaTab } from '../viewer/alphaTab'
 import { CommentsPanel } from '../viewer/CommentsPanel'
 import { FillPanel } from '../viewer/FillPanel'
@@ -253,7 +253,6 @@ export function BandSongPage({ id }: { id: string }) {
     return (
       <>
         <PageBar title="排练" fallback={HREF_BAND} back="← 乐队" />
-        <Staff />
         <div className="max-w-[640px] py-6">
           {error ? (
             <>
@@ -278,7 +277,6 @@ export function BandSongPage({ id }: { id: string }) {
     return (
       <>
         <PageBar title="排练" fallback={HREF_BAND} back="← 乐队" />
-        <Staff />
         <div className="max-w-[640px] py-6">
           <Notice>这首歌已经不在歌单里了。</Notice>
           <Link
@@ -418,7 +416,6 @@ export function BandSongPage({ id }: { id: string }) {
         fallback={HREF_BAND}
         back="← 乐队"
       />
-      <Staff />
 
       <div className="max-w-[640px] pt-6">
         <Link

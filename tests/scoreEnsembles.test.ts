@@ -10,6 +10,7 @@ import {
   classifyTrack,
   matchesNeed,
   parseNeed,
+  scoreFactsFromBytes,
   summarize,
   tracksFromBytes,
   type TrackFacts,
@@ -342,6 +343,115 @@ describe('EnsembleIndex start (background pass on a real folder)', () => {
     await waitFor(() => !again.status().indexing)
     const after = JSON.parse(fs.readFileSync(path.join(data, 'ensembles.json'), 'utf8'))
     expect(Object.keys(after.files)).toEqual(['a/junk.gp5'])
+  })
+})
+
+describe('EnsembleIndex.info and the tempo / bars of a file', () => {
+  const T = (kinds: Array<'drums' | 'bass' | 'guitar'>) => kinds.map((k, i) => ({ name: `t${i}`, kind: k }))
+  const idx = new EnsembleIndex(os.tmpdir(), os.tmpdir())
+  idx.seed([
+    { path: 'v/a.gp5', title: 'A', artist: 'X', size: 1, mtimeMs: 1, tracks: T(['guitar', 'bass']), tempo: 96, bars: 48 },
+    { path: 'v/old.gp5', title: 'Old', artist: 'X', size: 1, mtimeMs: 1, tracks: T(['drums']) },
+    { path: 'v/bad.gp5', title: 'Bad', artist: 'X', size: 1, mtimeMs: 1, tracks: null },
+  ])
+
+  it('returns tracks, tempo and bars for listed files, and marks unreadable ones', () => {
+    const got = idx.info(['v/a.gp5', 'v/old.gp5', 'v/bad.gp5', 'v/none.gp5'])
+    expect(Object.keys(got).sort()).toEqual(['v/a.gp5', 'v/bad.gp5', 'v/old.gp5'])
+    expect(got['v/bad.gp5']).toEqual({ tracks: [], tempo: null, bars: null, unreadable: true })
+    expect(got['v/a.gp5']).toEqual({ tracks: T(['guitar', 'bass']), tempo: 96, bars: 48 })
+  })
+
+  it('an entry cached before bars were kept has null tempo and bars', () => {
+    expect(idx.info(['v/old.gp5'])['v/old.gp5']).toEqual({ tracks: T(['drums']), tempo: null, bars: null })
+  })
+
+  it('reads tempo and bar count from a real GP file', () => {
+    const score = at.importer.ScoreLoader.loadAlphaTex(String.raw`\title "t" \tempo 120
+\track "Lead"
+3.3.4 5.3.4 | 3.3.4 | 5.3.4 |`)
+    const bytes = new at.exporter.Gp7Exporter().export(score)
+    const facts = scoreFactsFromBytes(bytes)
+    expect(facts).not.toBeNull()
+    expect(facts!.tempo).toBe(120)
+    expect(facts!.bars).toBe(score.masterBars.length)
+    expect(facts!.bars).toBeGreaterThan(0)
+    expect(facts!.tracks.map((t) => t.name)).toEqual(['Lead'])
+  })
+
+  it('scoreFactsFromBytes is null for bytes that are not a score', () => {
+    expect(scoreFactsFromBytes(new TextEncoder().encode('nope'))).toBeNull()
+  })
+})
+
+describe('EnsembleIndex cache compatibility (real folder)', () => {
+  let dir: string
+  beforeAll(() => {
+    dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ensembles-bars-'))
+  })
+  afterAll(() => {
+    fs.rmSync(dir, { recursive: true, force: true })
+  })
+
+  it('an old entry without bars still loads, and is read again once', async () => {
+    const root = path.join(dir, 'lib')
+    const data = path.join(dir, 'data')
+    fs.mkdirSync(path.join(root, 'a'), { recursive: true })
+    const gp = new at.exporter.Gp7Exporter().export(
+      at.importer.ScoreLoader.loadAlphaTex(String.raw`\title "x" \tempo 100
+\track "Lead"
+\tuning (E4 B3 G3 D3 A2 D2)
+3.3.4 |
+\track "Bass"
+\tuning (G2 D2 A1 E1)
+3.4.1 |`),
+    )
+    fs.writeFileSync(path.join(root, 'a', 'probe.gp'), gp)
+    const st = fs.statSync(path.join(root, 'a', 'probe.gp'))
+    // A cache written by the previous version: tracks but no tempo or bars.
+    fs.mkdirSync(data, { recursive: true })
+    fs.writeFileSync(
+      path.join(data, 'ensembles.json'),
+      JSON.stringify({
+        version: ENSEMBLE_VERSION,
+        files: {
+          'a/probe.gp': {
+            size: st.size,
+            mtimeMs: st.mtimeMs,
+            tracks: [
+              { name: 'Lead', kind: 'guitar' },
+              { name: 'Bass', kind: 'bass' },
+            ],
+          },
+        },
+      }),
+    )
+    const list = [{ path: 'a/probe.gp', title: 'probe', artist: 'A' }]
+
+    const idx = new EnsembleIndex(root, data)
+    await idx.start(list)
+    // The old entry is used at once, without tempo or bars.
+    expect(idx.info(['a/probe.gp'])['a/probe.gp']).toEqual({
+      tracks: [
+        { name: 'Lead', kind: 'guitar' },
+        { name: 'Bass', kind: 'bass' },
+      ],
+      tempo: null,
+      bars: null,
+    })
+    await waitFor(() => !idx.status().indexing)
+
+    const cache = JSON.parse(fs.readFileSync(path.join(data, 'ensembles.json'), 'utf8'))
+    expect(cache.files['a/probe.gp'].tempo).toBe(100)
+    expect(typeof cache.files['a/probe.gp'].bars).toBe('number')
+    expect(idx.info(['a/probe.gp'])['a/probe.gp']!.tempo).toBe(100)
+    expect(idx.info(['a/probe.gp'])['a/probe.gp']!.bars).toBe(cache.files['a/probe.gp'].bars)
+
+    // Read once: a later start finds bars and leaves the file alone.
+    const again = new EnsembleIndex(root, data)
+    await again.start(list)
+    await waitFor(() => !again.status().indexing)
+    expect(again.info(['a/probe.gp'])['a/probe.gp']!.tempo).toBe(100)
   })
 })
 

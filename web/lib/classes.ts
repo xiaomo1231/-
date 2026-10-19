@@ -7,7 +7,7 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
 
 /** Flat buttons: no shadows, the pen (primary) for the one main action. */
 const BUTTON_BASE =
-  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-colors active:opacity-80 disabled:cursor-not-allowed disabled:opacity-50'
+  'inline-flex min-h-11 items-center justify-center gap-2 rounded-lg px-4 text-sm font-medium transition-[color,background-color,border-color,transform] duration-150 ease-out active:scale-[0.97] disabled:cursor-not-allowed disabled:opacity-50 disabled:active:scale-100'
 
 const BUTTON_KIND = {
   primary: 'bg-primary text-primary-foreground hover:bg-primary-strong',

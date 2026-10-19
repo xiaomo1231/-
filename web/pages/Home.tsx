@@ -1,15 +1,18 @@
 import { useState } from 'react'
 import { useRestoreScroll } from '../lib/scrollMemory'
 import type { ScoreCategory } from '@/songs/scoreLibraryTypes'
+import { dailyStaffNotes } from '@/songs/dailyStaff'
 import { useFavorites } from '../lib/favorites'
-import { practiceLine, usePractice } from '../lib/practice'
-import type { PracticeRecord } from '../lib/api'
-import { isScoreFormat, libraryName } from '../lib/format'
-import { hrefCategory, hrefGroup, hrefViewer, HREF_FAVORITES } from '../lib/route'
+import { usePractice } from '../lib/practice'
+import { libraryName } from '../lib/format'
+import { hrefCategory, hrefGroup, hrefViewer, HREF_DAILY, HREF_FAVORITES } from '../lib/route'
 import { useLibrary } from '../lib/libraryContext'
 import { readRecent, type RecentItem } from '../lib/recent'
+import { buildContinueList } from '../lib/continueList'
+import { doneCount, todayNumber, useDaily } from '../lib/daily'
 import { Link } from '../components/Link'
-import { Notice, ScoreLine, Staff } from '../components/ui'
+import { Notice, Staff } from '../components/ui'
+import { DailyStaff } from '../viewer/DailyStaff'
 
 /** A category with one group opens that group directly; more than one shows the groups first. */
 function categoryHref(c: ScoreCategory): string {
@@ -17,18 +20,18 @@ function categoryHref(c: ScoreCategory): string {
   return only ? hrefGroup(only) : hrefCategory(c.id)
 }
 
-/** The number a folder carries in front: 「1-华语」 → 01. */
-function contentsNumber(id: string, index: number): string {
-  const m = /^(\d+)/.exec(id)
-  return (m ? m[1]! : String(index + 1)).padStart(2, '0')
+/** Unsorted or unidentified folders go to the appendix below the contents. */
+function isAppendix(c: ScoreCategory): boolean {
+  return /未识别|待整理/.test(c.name)
 }
 
-/** 目录: the library's name as a heavy title, the categories as contents rows, favourites and recent beside them. */
+/** 目录: the library's name as a heavy title, the categories as contents rows, 继续练 and 每日一练 beside them. */
 export function Home() {
   const { info, scanning } = useLibrary()
   const categories = info?.categories ?? []
-  const practice = usePractice()
   useRestoreScroll(info !== null && info !== undefined)
+  const main = categories.filter((c) => !isAppendix(c))
+  const appendix = categories.filter(isAppendix)
 
   return (
     <>
@@ -52,162 +55,201 @@ export function Home() {
               谱库里还没有找到谱子。请确认电脑上的谱库文件夹，然后点右上角「重新扫描」。
             </Notice>
           ) : (
-            <ol className="m-0 list-none p-0">
-              {categories.map((c, i) => (
-                <li key={c.id} className="border-t border-border last:border-b">
-                  <Link
-                    href={categoryHref(c)}
-                    className="group grid min-h-11 grid-cols-[44px_minmax(0,auto)_minmax(1rem,1fr)_auto] items-baseline gap-2.5 py-3.5"
-                  >
-                    <span className="mono text-[13px] text-muted-foreground">
-                      {contentsNumber(c.id, i)}
-                    </span>
-                    <span className="font-display text-[26px] font-black tracking-[0.01em] transition-colors group-hover:text-primary max-[860px]:text-[22px]">
-                      {c.name}
-                    </span>
-                    <span aria-hidden className="leader" />
-                    <span className="mono text-[15px]">{c.files.toLocaleString('zh-CN')}</span>
-                  </Link>
-                  {c.groups.length > 1 && (
-                    <div className="-mt-1.5 flex flex-wrap gap-x-[22px] gap-y-0.5 pb-3.5 pl-[54px]">
-                      {c.groups.map((g) => (
-                        <Link
-                          key={g.id}
-                          href={hrefGroup(g)}
-                          className="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-primary"
-                        >
-                          {g.name}
-                          <span className="mono ml-1 text-[11px]">
-                            {g.files.toLocaleString('zh-CN')}
-                          </span>
-                        </Link>
-                      ))}
-                    </div>
-                  )}
-                </li>
-              ))}
-            </ol>
+            <>
+              <ol className="m-0 list-none p-0">
+                {main.map((c, i) => (
+                  <CategoryRow key={c.id} c={c} label={String(i + 1).padStart(2, '0')} />
+                ))}
+              </ol>
+              {appendix.length > 0 && (
+                <>
+                  <p className="label mb-2.5 mt-10">附 录 · 待 整 理</p>
+                  <ol className="m-0 list-none p-0">
+                    {appendix.map((c, i) => (
+                      <CategoryRow key={c.id} c={c} label={`附${i + 1}`} appendix />
+                    ))}
+                  </ol>
+                </>
+              )}
+            </>
           )}
         </section>
 
         <aside className="min-w-0">
-          <Favorites />
-          <Practiced items={practice.items} />
-          <Recent practice={practice.items} />
+          <ContinueSection />
+          <DailySection />
         </aside>
       </div>
     </>
   )
 }
 
-/** ★ 我的收藏: the first five starred scores, then the link to all of them. */
-function Favorites() {
-  const { items, loaded } = useFavorites()
+/** One row of the 目录: number, name with leader dots, file count; sub-groups under it when there are several. */
+function CategoryRow({
+  c,
+  label,
+  appendix = false,
+}: {
+  c: ScoreCategory
+  label: string
+  appendix?: boolean
+}) {
+  const grouped = c.groups.length > 1
   return (
-    <section>
-      <p className="label mb-2.5">★ 我的收藏</p>
-      {items.length === 0 ? (
-        <p className="py-2.5 text-sm text-muted-foreground">
-          {loaded ? '还没有收藏。打开任意歌手，点谱子旁边的 ☆ 试试。' : '正在读取…'}
-        </p>
-      ) : (
-        <>
-          <ul className="m-0 list-none p-0">
-            {items.slice(0, 5).map((f) => (
-              <li key={f.path}>
-                <ScoreLine
-                  title={f.title}
-                  artist={f.artist}
-                  format={f.format}
-                  href={hrefViewer({
-                    path: f.path,
-                    format: f.format,
-                    pages: f.pages,
-                    title: f.title,
-                    artist: f.artist,
-                  })}
-                />
-              </li>
-            ))}
-          </ul>
-          {items.length > 5 && (
+    <li className="border-t border-border last:border-b">
+      <Link
+        href={categoryHref(c)}
+        className={`group grid min-h-11 grid-cols-[44px_minmax(0,auto)_minmax(1rem,1fr)_auto] items-baseline gap-2.5 pt-3.5 ${grouped ? '' : 'pb-3.5'}`}
+      >
+        <span className="mono text-[13px] text-muted-foreground">{label}</span>
+        <span
+          className={
+            appendix
+              ? 'font-display text-[19px] font-bold text-muted-foreground transition-colors group-hover:text-primary'
+              : 'font-display text-[26px] font-black tracking-[0.01em] transition-colors group-hover:text-primary max-[860px]:text-[22px]'
+          }
+        >
+          {c.name}
+        </span>
+        <span aria-hidden className="leader" />
+        <span className="mono text-[15px]">{c.files.toLocaleString('zh-CN')}</span>
+      </Link>
+      {grouped && (
+        <div className="-mt-1.5 flex flex-wrap gap-x-[22px] gap-y-0.5 pb-3.5 pl-[54px]">
+          {c.groups.map((g) => (
             <Link
-              href={HREF_FAVORITES}
-              className="mt-2.5 inline-flex min-h-11 items-center rounded-lg border border-border px-3 text-sm transition-colors hover:border-foreground"
+              key={g.id}
+              href={hrefGroup(g)}
+              className="inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-primary"
             >
-              全部 {items.length} 个 →
+              {g.name}
+              <span className="mono ml-1 text-[11px]">{g.files.toLocaleString('zh-CN')}</span>
             </Link>
-          )}
-        </>
+          ))}
+        </div>
       )}
-    </section>
+    </li>
   )
 }
 
-/** The viewer link for a practice record (always a score; its pages are not kept). */
-function practiceHref(r: PracticeRecord): string {
-  return hrefViewer({ path: r.path, format: 'score', pages: [], title: r.title, artist: r.artist })
-}
+/** 继续练: one row per song practised or opened on this device, latest first, with a link to the favourites. */
+function ContinueSection() {
+  const practice = usePractice()
+  const { items: favorites } = useFavorites()
+  const [recent] = useState<RecentItem[]>(() => readRecent())
+  const [now] = useState(() => Date.now())
+  const rows = buildContinueList({ practice: practice.items, recent, favorites, now })
 
-/** The practice line under a score row, muted and mono; nothing when there is no record. */
-function PracticeNote({ record }: { record: PracticeRecord | undefined }) {
-  if (!record) return null
   return (
-    <p className="mono -mt-1 truncate pb-1.5 text-[11px] text-muted-foreground">
-      {practiceLine(record)}
-    </p>
-  )
-}
-
-/** ★ 最近练过 (score-practice records, most recent first): the five latest, linked to the viewer. */
-function Practiced({ items }: { items: PracticeRecord[] }) {
-  if (items.length === 0) return null
-  return (
-    <section className="mt-10 scroll-mt-16">
-      <p className="label mb-2.5">最 近 练 过</p>
-      <ul className="m-0 list-none p-0">
-        {items.slice(0, 5).map((r) => (
-          <li key={r.path}>
-            <ScoreLine title={r.title} artist={r.artist} format="score" href={practiceHref(r)} />
-            <PracticeNote record={r} />
-          </li>
-        ))}
-      </ul>
-    </section>
-  )
-}
-
-/** 最 近 看 过: the scores opened on this device. */
-function Recent({ practice }: { practice: PracticeRecord[] }) {
-  const [items] = useState<RecentItem[]>(() => readRecent())
-  return (
-    <section id="recent" className="mt-10 scroll-mt-16">
-      <p className="label mb-2.5">最 近 看 过</p>
-      {items.length === 0 ? (
-        <p className="py-2.5 text-sm text-muted-foreground">还没有看过的谱。</p>
+    <section className="scroll-mt-16">
+      <p className="label mb-2.5">继 续 练</p>
+      {rows.length === 0 ? (
+        <p className="py-2.5 text-sm text-muted-foreground">打开或练习过的谱会出现在这里。</p>
       ) : (
         <ul className="m-0 list-none p-0">
-          {items.slice(0, 5).map((r) => {
-            const format = isScoreFormat(r.format) ? r.format : 'other'
-            return (
-              <li key={r.path}>
-                <ScoreLine
-                  title={r.title}
-                  artist={r.artist}
-                  format={format}
-                  href={hrefViewer({
-                    path: r.path,
-                    format,
-                    pages: r.pages,
-                    title: r.title,
-                    artist: r.artist,
-                  })}
-                />
-                <PracticeNote record={practice.find((p) => p.path === r.path)} />
-              </li>
-            )
-          })}
+          {rows.map((r) => (
+            <li key={r.key} className="border-t border-border last:border-b">
+              <Link
+                href={hrefViewer({
+                  path: r.path,
+                  format: r.format,
+                  pages: r.pages,
+                  title: r.title,
+                  artist: r.artist,
+                })}
+                className="group block py-2.5"
+              >
+                <span className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate font-bold transition-colors group-hover:text-primary">
+                    {r.title}
+                  </span>
+                  <span className="mono shrink-0 text-[11px] text-muted-foreground">{r.when}</span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">
+                  {r.artist ? `${r.artist} · ${r.line}` : r.line}
+                </span>
+              </Link>
+            </li>
+          ))}
         </ul>
+      )}
+      <Link
+        href={HREF_FAVORITES}
+        className="mt-2.5 inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-primary"
+      >
+        我的收藏 →
+      </Link>
+    </section>
+  )
+}
+
+/** 每日一练: this quarter's days as a small staff, and today's step. Hidden when the library has none or the read fails. */
+function DailySection() {
+  const daily = useDaily()
+  const [now] = useState(() => Date.now())
+  const s = daily.state
+  if (!s || !s.available || daily.error) return null
+
+  const started = s.startedAt !== null
+  const today = todayNumber(s.startedAt, now)
+  const staff = dailyStaffNotes({
+    today,
+    done: s.done,
+    bpm: s.bpm,
+    days: s.days.map((d) => ({ day: d.day, tempos: d.tempos })),
+  })
+  const todayDay = s.days.find((d) => d.day === today)
+  const doneToday = typeof s.done[String(today)] === 'number'
+
+  return (
+    <section className="mt-10 scroll-mt-16">
+      <p className="label mb-2.5">每 日 一 练</p>
+      {started ? (
+        <>
+          <DailyStaff
+            data={staff}
+            techniqueOf={(day) => s.days.find((d) => d.day === day)?.technique}
+          />
+          <div className="mt-1.5 flex items-center justify-between gap-3 text-sm">
+            <p className="min-w-0 truncate">
+              <span className="mono">第 {today} 天</span>
+              {todayDay && (
+                <>
+                  {' · '}
+                  <strong className="font-bold">{todayDay.technique}</strong>
+                </>
+              )}
+              <span className="ml-2.5">
+                {doneToday ? (
+                  <span className="text-primary">今天已练完</span>
+                ) : (
+                  <span className="text-muted-foreground">今天还没练</span>
+                )}
+              </span>
+            </p>
+            <Link
+              href={HREF_DAILY}
+              className="inline-flex min-h-11 shrink-0 items-center rounded-lg border border-border px-3 transition-colors hover:border-foreground"
+            >
+              {doneToday ? '看看 →' : '去练 →'}
+            </Link>
+          </div>
+          <p className="mono mt-1 text-[11px] text-muted-foreground">
+            已练 {doneCount(s.done)} 天 · 越高 = 那天练到的速度越快
+          </p>
+        </>
+      ) : (
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <p className="py-2.5 text-sm text-muted-foreground">
+            每天十几分钟的技巧练习，从第 1 天开始。
+          </p>
+          <Link
+            href={HREF_DAILY}
+            className="inline-flex min-h-11 items-center rounded-lg border border-border px-3 text-sm transition-colors hover:border-foreground"
+          >
+            开始 →
+          </Link>
+        </div>
       )}
     </section>
   )

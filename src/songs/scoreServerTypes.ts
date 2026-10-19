@@ -467,6 +467,20 @@ export interface EnsembleResult {
   indexing: boolean
 }
 
+/** One score file's facts for the version line: its tracks, tempo (BPM) and bar count, when read. */
+export interface VersionInfo {
+  tracks: EnsembleTrack[]
+  tempo: number | null
+  bars: number | null
+  /** The reader could not parse this file (it may still open in the viewer). */
+  unreadable?: boolean
+}
+
+/** POST /api/versions/info: the score files to describe (at most 400 paths). */
+export interface VersionInfoBody {
+  paths: string[]
+}
+
 // ---------------------------------------------------------------------------
 // songs: the versions of one song, and the song's key (歌曲标识)
 // ---------------------------------------------------------------------------

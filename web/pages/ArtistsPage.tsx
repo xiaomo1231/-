@@ -8,7 +8,7 @@ import { groupByInitial, initialOf, sortArtists, type ArtistSort } from '../lib/
 import { useLoad } from '../lib/useLoad'
 import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
 import { Link } from '../components/Link'
-import { LoadMore, Notice, PageBar, Seg, Staff } from '../components/ui'
+import { LoadMore, Notice, PageBar, Seg } from '../components/ui'
 
 export interface GroupRoute {
   id: string
@@ -103,7 +103,6 @@ export function ArtistsPage({ group }: { group: GroupRoute }) {
           ]}
         />
       </PageBar>
-      <Staff />
 
       {state.status === 'loading' && (
         <p className="py-10 text-center text-sm text-muted-foreground">正在读取…</p>

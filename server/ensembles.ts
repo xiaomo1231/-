@@ -13,7 +13,13 @@
 import fs from 'node:fs'
 import path from 'node:path'
 import * as alphaTab from '@coderline/alphatab'
-import type { EnsembleFile, EnsembleResult, EnsembleTrack, TrackKind } from '../src/songs/scoreServerTypes'
+import type {
+  EnsembleFile,
+  EnsembleResult,
+  EnsembleTrack,
+  TrackKind,
+  VersionInfo,
+} from '../src/songs/scoreServerTypes'
 import { writeFileAtomic } from './util'
 
 // alphaTab logs warnings for odd files; the server must stay quiet.
@@ -171,11 +177,18 @@ function loadReadable(bytes: Uint8Array): alphaTab.model.Score {
   return best
 }
 
-/** Track list of a Guitar Pro file's bytes, or null when alphaTab cannot read it. */
-export function tracksFromBytes(bytes: Uint8Array): EnsembleTrack[] | null {
+/** What the reader keeps from one file: its tracks, tempo (BPM, null when unknown) and bar count. */
+export interface EnsembleFacts {
+  tracks: EnsembleTrack[]
+  tempo: number | null
+  bars: number
+}
+
+/** Tracks, tempo and bar count of a Guitar Pro file's bytes, or null when alphaTab cannot read it. */
+export function scoreFactsFromBytes(bytes: Uint8Array): EnsembleFacts | null {
   try {
     const score = loadReadable(bytes)
-    return score.tracks.map((track) => {
+    const tracks = score.tracks.map((track) => {
       const tuning = track.staves[0]?.tuning ?? []
       const facts: TrackFacts = {
         name: track.name ?? '',
@@ -186,9 +199,16 @@ export function tracksFromBytes(bytes: Uint8Array): EnsembleTrack[] | null {
       }
       return { name: facts.name, kind: classifyTrack(facts) }
     })
+    const tempo = Math.round(score.tempo)
+    return { tracks, tempo: tempo > 0 ? tempo : null, bars: score.masterBars.length }
   } catch {
     return null
   }
+}
+
+/** Track list of a Guitar Pro file's bytes, or null when alphaTab cannot read it. */
+export function tracksFromBytes(bytes: Uint8Array): EnsembleTrack[] | null {
+  return scoreFactsFromBytes(bytes)?.tracks ?? null
 }
 
 const loggedErrors = new Set<string>()
@@ -198,8 +218,8 @@ function logOnce(kind: string, detail: string): void {
   console.warn(`[ensembles] ${kind}: ${detail} (further errors of this kind are not logged)`)
 }
 
-/** Reads one file's tracks; null when the file cannot be read or parsed. */
-export async function readEnsembleTracks(abs: string): Promise<EnsembleTrack[] | null> {
+/** Reads one file's tracks, tempo and bars; null when the file cannot be read or parsed. */
+export async function readEnsembleFacts(abs: string): Promise<EnsembleFacts | null> {
   let bytes: Uint8Array
   try {
     bytes = await fs.promises.readFile(abs)
@@ -207,9 +227,14 @@ export async function readEnsembleTracks(abs: string): Promise<EnsembleTrack[] |
     logOnce('read-failed', (e as NodeJS.ErrnoException).code ?? 'unknown error')
     return null
   }
-  const tracks = tracksFromBytes(bytes)
-  if (!tracks) logOnce('parse-failed', 'alphaTab could not read a file')
-  return tracks
+  const facts = scoreFactsFromBytes(bytes)
+  if (!facts) logOnce('parse-failed', 'alphaTab could not read a file')
+  return facts
+}
+
+/** Reads one file's tracks; null when the file cannot be read or parsed. */
+export async function readEnsembleTracks(abs: string): Promise<EnsembleTrack[] | null> {
+  return (await readEnsembleFacts(abs))?.tracks ?? null
 }
 
 // ---------------------------------------------------------------------------
@@ -221,7 +246,13 @@ export interface EnsembleCacheEntry {
   mtimeMs: number
   /** null = the file could not be read (retried when its size or mtime changes). */
   tracks: EnsembleTrack[] | null
+  /** Absent in entries cached before tempo and bars were kept (those are read again once). */
+  tempo?: number | null
+  bars?: number | null
 }
+
+/** A readable entry without a bar count was cached before bars were kept: read it again. */
+const needsBars = (e: EnsembleCacheEntry) => e.tracks !== null && typeof e.bars !== 'number'
 
 interface EnsembleCacheFile {
   version: number
@@ -323,11 +354,33 @@ export class EnsembleIndex {
     this.entries = new Map()
     for (const it of items) {
       this.meta.set(it.path, { title: it.title, artist: it.artist })
-      this.entries.set(it.path, { size: it.size, mtimeMs: it.mtimeMs, tracks: it.tracks })
+      this.entries.set(it.path, {
+        size: it.size,
+        mtimeMs: it.mtimeMs,
+        tracks: it.tracks,
+        tempo: it.tempo,
+        bars: it.bars,
+      })
     }
     this.queue = []
     this.total = items.length
     this.loaded = true
+  }
+
+  /**
+   * Track list, tempo and bar count of the listed files that have a readable entry
+   * (bars and tempo are null while the reader has not reached the file yet).
+   */
+  info(paths: string[]): Record<string, VersionInfo> {
+    const out: Record<string, VersionInfo> = {}
+    for (const p of paths) {
+      const e = this.entries.get(p)
+      if (!e) continue
+      out[p] = e.tracks
+        ? { tracks: e.tracks, tempo: e.tempo ?? null, bars: e.bars ?? null }
+        : { tracks: [], tempo: null, bars: null, unreadable: true }
+    }
+    return out
   }
 
   /** Band-first list of indexed files matching `need`, one page. */
@@ -433,10 +486,16 @@ export class EnsembleIndex {
     }
     if (!st.isFile()) return false
     const cached = this.entries.get(rel)
-    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs) return false
-    const tracks = await readEnsembleTracks(abs)
+    if (cached && cached.size === st.size && cached.mtimeMs === st.mtimeMs && !needsBars(cached)) return false
+    const facts = await readEnsembleFacts(abs)
     if (!this.meta.has(rel)) return false // the list changed while reading
-    this.entries.set(rel, { size: st.size, mtimeMs: st.mtimeMs, tracks })
+    this.entries.set(rel, {
+      size: st.size,
+      mtimeMs: st.mtimeMs,
+      tracks: facts?.tracks ?? null,
+      tempo: facts?.tempo ?? null,
+      bars: facts?.bars ?? null,
+    })
     return true
   }
 

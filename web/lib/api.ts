@@ -38,6 +38,7 @@ import type {
   UpdateBandSongBody,
   UpdateMeBody,
   UpdateUserBody,
+  VersionInfo,
   UserInfo,
 } from '@/songs/scoreServerTypes'
 
@@ -227,6 +228,9 @@ export const api = {
       `/api/ensembles?q=${enc(o.q ?? '')}&need=${enc(o.need ?? '')}&offset=${o.offset ?? 0}&limit=${o.limit ?? 50}${o.untitled ? '&untitled=1' : ''}`,
       { signal },
     ),
+  // 版本信息（找乐队谱读取的音轨、速度、小节数）
+  versionInfo: (paths: string[]) =>
+    call<Record<string, VersionInfo>>('/api/versions/info', { body: { paths } }),
   // 鼓谱
   drums: (path: string, signal?: AbortSignal) =>
     call<DrumPart | null>(`/api/drums?path=${enc(path)}`, { signal }),

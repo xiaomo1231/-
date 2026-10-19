@@ -1,8 +1,11 @@
 import type { ScoreSong, ScoreVersion } from '@/songs/scoreLibraryTypes'
+import type { VersionInfo } from '@/songs/scoreServerTypes'
 import { cx } from '../lib/classes'
-import { formatSize } from '../lib/format'
+import { versionLine } from '@/songs/versionLine'
+import { FORMAT_BADGE, formatSize } from '../lib/format'
 import { hrefViewer } from '../lib/route'
 import { markSeen, openPreview, useSeen, usePreview, type PreviewItem } from '../lib/preview'
+import { useVersionInfo } from '../lib/versionInfo'
 import { Link } from './Link'
 import { FormatBadge, JianpuBadge } from './ui'
 
@@ -30,6 +33,7 @@ export function SongCard({
   isStarred,
   busyPath,
   onStar,
+  index,
 }: {
   song: ScoreSong
   artistName: string
@@ -39,6 +43,8 @@ export function SongCard({
   /** The version whose favourite is being saved, if any. */
   busyPath: string | null
   onStar: (song: ScoreSong, version: ScoreVersion) => void
+  /** Position in a contents list (shown as 01, 02…). */
+  index?: number
 }) {
   const title = song.unknownTitle ? '未识别的曲名' : song.title
   return (
@@ -47,13 +53,23 @@ export function SongCard({
         type="button"
         aria-expanded={open}
         onClick={onToggle}
-        className="grid min-h-11 w-full grid-cols-[minmax(0,1fr)_auto_auto] items-baseline gap-3.5 py-3.5 text-left"
+        className="flex min-h-11 w-full items-baseline gap-3.5 py-3.5 text-left"
       >
-        <span className="min-w-0 break-words font-display text-[21px] font-black leading-snug">
-          {title}
-          {(song.jianpu ?? 0) > 0 && <JianpuBadge />}
+        {index !== undefined && (
+          <span className="mono text-xs text-muted-foreground">
+            {String(index).padStart(2, '0')}
+          </span>
+        )}
+        <span className="flex min-w-0 flex-1 items-baseline gap-3">
+          <span className="min-w-0 break-words font-display text-[21px] font-black leading-snug">
+            {title}
+            {(song.jianpu ?? 0) > 0 && <JianpuBadge />}
+          </span>
+          <span aria-hidden className="leader" />
         </span>
-        <span className="mono text-xs text-muted-foreground">{song.versions.length} 个版本</span>
+        {song.versions.length > 1 && (
+          <span className="mono text-xs text-muted-foreground">{song.versions.length} 个谱</span>
+        )}
         <span
           aria-hidden
           className={cx(
@@ -92,6 +108,10 @@ export function VersionList({
   busyPath: string | null
   onStar: (song: ScoreSong, version: ScoreVersion) => void
 }) {
+  // Only the GP files have a track list; asked once for the whole song, when the list is open.
+  const info = useVersionInfo(
+    song.versions.filter((v) => v.file.format === 'score').map((v) => v.file.path),
+  )
   return (
     <ul className="mb-3.5 list-none border-l-2 border-primary pl-[18px]">
       {song.versions.map((v) => (
@@ -100,6 +120,7 @@ export function VersionList({
           song={song}
           version={v}
           artistName={artistName}
+          info={info[v.file.path] ?? null}
           starred={isStarred(v.file.path)}
           busy={busyPath === v.file.path}
           onStar={onStar}
@@ -113,6 +134,7 @@ function VersionRow({
   song,
   version,
   artistName,
+  info,
   starred,
   busy,
   onStar,
@@ -120,10 +142,17 @@ function VersionRow({
   song: ScoreSong
   version: ScoreVersion
   artistName: string
+  /** Track list and tempo of a GP file, once the reader has them. */
+  info: VersionInfo | null
   starred: boolean
   busy: boolean
   onStar: (song: ScoreSong, version: ScoreVersion) => void
 }) {
+  const line = versionLine({
+    format: version.file.format,
+    info,
+    pages: version.pages?.length ?? 1,
+  })
   const href = hrefViewer({
     path: version.file.path,
     format: version.file.format,
@@ -136,26 +165,39 @@ function VersionRow({
   return (
     <li
       className={cx(
-        'grid grid-cols-[52px_minmax(0,1fr)_auto] items-center gap-3 py-1.5 min-[861px]:grid-cols-[56px_minmax(0,1fr)_auto_auto]',
+        'grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-2.5 py-1.5 min-[861px]:grid-cols-[52px_minmax(0,1fr)_auto] min-[861px]:gap-3',
         previewing && 'rounded-lg bg-card px-2',
       )}
     >
-      <FormatBadge format={version.file.format} className="w-[52px]" />
-      <span className="min-w-0 truncate text-sm">
-        {version.label}
-        {seen && (
-          <span className="ml-2 text-xs text-muted-foreground" title="看过">
-            看过
-          </span>
-        )}
-        {version.tags.length > 0 && (
-          <em className="ml-2 text-xs not-italic text-muted-foreground">
-            {version.tags.join(' · ')}
-          </em>
-        )}
+      <span
+        className="inline-flex"
+        title={`${FORMAT_BADGE[version.file.format].label} · ${formatSize(version.size)}`}
+      >
+        <FormatBadge format={version.file.format} className="w-10 min-[861px]:w-[52px]" />
       </span>
-      <span className="mono hidden text-[11px] text-muted-foreground min-[861px]:block">
-        {formatSize(version.size)}
+      <span className="min-w-0">
+        <span className="flex min-w-0 flex-wrap items-baseline gap-x-2 gap-y-0.5 text-sm">
+          <span className="font-medium">{line.main}</span>
+          {line.detail && (
+            <span className="text-xs text-muted-foreground">{` · ${line.detail}`}</span>
+          )}
+          {seen && (
+            <span className="text-xs text-muted-foreground" title="看过">
+              看过
+            </span>
+          )}
+          {version.tags.map((tag) => (
+            <span
+              key={tag}
+              className="rounded-[3px] border border-border px-1.5 text-[11px] leading-5 text-muted-foreground"
+            >
+              {tag}
+            </span>
+          ))}
+        </span>
+        <span className="mono mt-0.5 block truncate text-[11px] text-muted-foreground" title={version.label}>
+          {version.label}
+        </span>
       </span>
       <span className="flex items-center gap-1">
         <button

@@ -81,7 +81,7 @@ export function SearchPage({ q }: { q: string }) {
   return (
     <>
       <div className="grid grid-cols-1 items-center gap-3.5 pb-2 pt-[22px] min-[861px]:grid-cols-[auto_minmax(0,1fr)] min-[861px]:gap-7 min-[861px]:pt-9">
-        <h1 className="m-0 whitespace-nowrap font-display text-[clamp(30px,5vw,44px)] font-black tracking-[0.02em]">
+        <h1 className="m-0 whitespace-nowrap font-display text-[26px] font-black leading-tight min-[861px]:text-[30px]">
           搜索谱
         </h1>
         <label className="relative block">
@@ -203,7 +203,9 @@ function Pill({
         aria-hidden
         className="pointer-events-none absolute inset-y-0 right-3 grid place-items-center text-muted-foreground"
       >
-        ⌄
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round">
+          <path d="m6 9 6 6 6-6" />
+        </svg>
       </span>
     </label>
   )
