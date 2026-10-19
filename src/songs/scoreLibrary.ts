@@ -349,6 +349,9 @@ export function parseName(
     !key ||
     NOT_A_SONG.test(s) ||
     s.trim() === NO_TITLE_FOLDER ||
+    // Only a short number is left once the artist / folder name is taken off ("足球小将1",
+    // "Rize - 02"): a part or track number, not the song's title.
+    (/^\d{1,3}$/.test(key) && /[^\d\s._()\-[\]]/u.test(base)) ||
     /^\d{5,}$/.test(key) ||
     /^(img|dsc|scan|image|微信图片|截图|屏幕截图)\d*/.test(key) ||
     /^\d{4}\d{2}\d{2}/.test(key) ||

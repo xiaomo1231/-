@@ -299,6 +299,22 @@ describe('scoreLibrary search', () => {
   })
 })
 
+describe('a bare number is not a title', () => {
+  const lib = buildLibrary(
+    [
+      ['6-动漫音乐/足球小将/未识别歌名/足球小将1.gp4', 100],
+      ['2-欧美/新金属与另类/Rize/未识别歌名/Rize - 02.gp4', 100],
+      ['8-网友原创/某人/1/1.gp5', 100],
+    ],
+    tools,
+  )
+  const titles = [...lib.songs.values()].flat().map((s) => s.title)
+  it('drops a number left after taking off the artist, keeps a song called “1”', () => {
+    expect(titles).not.toContain('02')
+    expect(titles.filter((t) => t === '1')).toHaveLength(1)
+  })
+})
+
 describe('untitled files (未识别歌名)', () => {
   const lib = buildLibrary(
     [

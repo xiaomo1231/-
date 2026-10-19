@@ -1198,6 +1198,7 @@ function queryEnsembles(url: URL): unknown {
     need: url.searchParams.get('need') ?? '',
     offset: num('offset', 0),
     limit: num('limit', 50),
+    untitled: url.searchParams.get('untitled') === '1',
   })
 }
 

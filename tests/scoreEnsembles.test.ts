@@ -207,6 +207,21 @@ describe('EnsembleIndex.query', () => {
     expect(r.total).toBe(4)
   })
 
+  it('hides files without a title unless asked, and lists them last', () => {
+    const u = new EnsembleIndex(os.tmpdir(), os.tmpdir())
+    u.seed([
+      e('c/1129121537.gp4', '', T(['drums', 'bass', 'guitar', 'guitar', 'vocal'])),
+      e('c/晴天.gp5', '晴天', T(['drums', 'bass', 'guitar'])),
+    ])
+    const r = u.query({ need: '', offset: 0, limit: 20 })
+    expect(r.items.map((i) => i.path)).toEqual(['c/晴天.gp5'])
+    expect(r.total).toBe(1)
+    expect(r.hiddenUntitled).toBe(1)
+    const all = u.query({ need: '', offset: 0, limit: 20, untitled: true })
+    expect(all.items.map((i) => i.path)).toEqual(['c/晴天.gp5', 'c/1129121537.gp4'])
+    expect(all.hiddenUntitled).toBe(0)
+  })
+
   it('restricts to a set of paths', () => {
     const r = idx.query({ paths: new Set(['b/full-1g.gp5', 'b/solo.gp5', 'b/nope.gp5']), need: 'guitar', offset: 0, limit: 20 })
     expect(r.items.map((i) => i.path)).toEqual(['b/full-1g.gp5', 'b/solo.gp5'])

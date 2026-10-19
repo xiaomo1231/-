@@ -90,6 +90,9 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
 
   const [items, setItems] = useState<EnsembleFile[]>([])
   const [total, setTotal] = useState(0)
+  /** Files whose title could not be read: hidden unless asked for. */
+  const [untitled, setUntitled] = useState(false)
+  const [hidden, setHidden] = useState(0)
   const [progress, setProgress] = useState<Progress>({ indexed: 0, toIndex: 0, indexing: false })
   const [phase, setPhase] = useState<'loading' | 'ready' | 'error'>('loading')
   const [errorMsg, setErrorMsg] = useState('')
@@ -102,16 +105,17 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
   // A new search or filter starts again from the first page.
   useEffect(() => {
     const ac = new AbortController()
-    requestKey.current = `${query}\n${needKey}`
+    requestKey.current = `${query}\n${needKey}\n${untitled}`
     setPhase('loading')
     setItems([])
     setTotal(0)
     setMoreError('')
-    api.ensembles({ q: query, need: needKey, offset: 0, limit: PAGE }, ac.signal).then(
+    api.ensembles({ q: query, need: needKey, offset: 0, limit: PAGE, untitled }, ac.signal).then(
       (r) => {
         if (ac.signal.aborted) return
         setItems(r.items)
         setTotal(r.total)
+        setHidden(r.hiddenUntitled)
         setProgress({ indexed: r.indexed, toIndex: r.toIndex, indexing: r.indexing })
         setPhase('ready')
       },
@@ -122,7 +126,7 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
       },
     )
     return () => ac.abort()
-  }, [query, needKey])
+  }, [query, needKey, untitled])
 
   // While the background reader works, refresh the shown rows every 5 s.
   const indexing = progress.indexing
@@ -136,12 +140,14 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
           need: needKey,
           offset: 0,
           limit: Math.max(PAGE, shown.current),
+          untitled,
         })
         .then(
           (r) => {
             if (!live) return
             setItems(r.items)
             setTotal(r.total)
+            setHidden(r.hiddenUntitled)
             setProgress({ indexed: r.indexed, toIndex: r.toIndex, indexing: r.indexing })
           },
           () => {
@@ -153,14 +159,20 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
       live = false
       window.clearInterval(t)
     }
-  }, [phase, indexing, query, needKey])
+  }, [phase, indexing, query, needKey, untitled])
 
   const loadMore = async () => {
     const key = requestKey.current
     setLoadingMore(true)
     setMoreError('')
     try {
-      const r = await api.ensembles({ q: query, need: needKey, offset: items.length, limit: PAGE })
+      const r = await api.ensembles({
+        q: query,
+        need: needKey,
+        offset: items.length,
+        limit: PAGE,
+        untitled,
+      })
       if (requestKey.current !== key) return
       setItems((prev) => {
         const seen = new Set(prev.map((f) => f.path))
@@ -278,6 +290,9 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
         <Results
           items={items}
           total={total}
+          hidden={hidden}
+          untitled={untitled}
+          onUntitled={setUntitled}
           progress={progress}
           loadingMore={loadingMore}
           moreError={moreError}
@@ -318,6 +333,9 @@ function IndexingBar({ progress }: { progress: Progress }) {
 function Results({
   items,
   total,
+  hidden,
+  untitled,
+  onUntitled,
   progress,
   loadingMore,
   moreError,
@@ -325,6 +343,9 @@ function Results({
 }: {
   items: EnsembleFile[]
   total: number
+  hidden: number
+  untitled: boolean
+  onUntitled: (on: boolean) => void
   progress: Progress
   loadingMore: boolean
   moreError: string
@@ -345,8 +366,22 @@ function Results({
 
   return (
     <>
-      <p className="px-1 pb-1 pt-3 text-xs text-muted-foreground">
-        共 <span className="mono">{total.toLocaleString('zh-CN')}</span> 首
+      <p className="flex flex-wrap items-center gap-x-3 px-1 pb-1 pt-3 text-xs text-muted-foreground">
+        <span>
+          共 <span className="mono">{total.toLocaleString('zh-CN')}</span> 首
+        </span>
+        {(hidden > 0 || untitled) && (
+          <label className="inline-flex items-center gap-1.5">
+            <input
+              type="checkbox"
+              checked={untitled}
+              onChange={(e) => onUntitled(e.target.checked)}
+            />
+            {untitled
+              ? '也显示读不出曲名的谱（排在最后）'
+              : `也显示读不出曲名的谱（${hidden.toLocaleString('zh-CN')} 份，文件名只是数字或“未识别歌名”）`}
+          </label>
+        )}
       </p>
       <ol className="m-0 list-none p-0 pt-1">
         {items.map((f, i) => (
@@ -405,7 +440,10 @@ function EnsembleRow({ file: f, index }: { file: EnsembleFile; index: number }) 
         </span>
         <div className="min-w-0">
           <p className="m-0 flex flex-wrap items-baseline gap-x-2 break-words text-lg font-bold leading-snug">
-            {title}
+            {f.title ? title : '曲名未识别'}
+            {!f.title && (
+              <span className="text-sm font-normal text-muted-foreground">{title}</span>
+            )}
             {f.band && (
               <span className="inline-flex shrink-0 items-center rounded-full border border-primary px-1.5 text-[11px] leading-5 text-primary">
                 完整乐队

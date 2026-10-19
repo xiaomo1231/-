@@ -404,10 +404,12 @@ export interface EnsembleFile {
   band: boolean
 }
 
-/** GET /api/ensembles?q=&need=guitar2,keys&offset=&limit= */
+/** GET /api/ensembles?q=&need=guitar2,keys&offset=&limit=&untitled=1 */
 export interface EnsembleResult {
   items: EnsembleFile[]
   total: number
+  /** Matching files whose song title could not be read (file names like 1129121537.gp4), left out unless asked for. */
+  hiddenUntitled: number
   /** Background reading progress. */
   indexed: number
   toIndex: number

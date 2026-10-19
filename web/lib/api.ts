@@ -213,11 +213,11 @@ export const api = {
   renameBand: (name: string) => call<BandState>('/api/band/rename', { body: { name } }),
   // 找乐队谱
   ensembles: (
-    o: { q?: string; need?: string; offset?: number; limit?: number },
+    o: { q?: string; need?: string; offset?: number; limit?: number; untitled?: boolean },
     signal?: AbortSignal,
   ) =>
     call<EnsembleResult>(
-      `/api/ensembles?q=${enc(o.q ?? '')}&need=${enc(o.need ?? '')}&offset=${o.offset ?? 0}&limit=${o.limit ?? 50}`,
+      `/api/ensembles?q=${enc(o.q ?? '')}&need=${enc(o.need ?? '')}&offset=${o.offset ?? 0}&limit=${o.limit ?? 50}${o.untitled ? '&untitled=1' : ''}`,
       { signal },
     ),
   // 鼓谱

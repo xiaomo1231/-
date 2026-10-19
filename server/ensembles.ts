@@ -255,6 +255,9 @@ const collator = new Intl.Collator('zh')
 /** Track count of a typical band arrangement (guitars, bass, drums, keys or vocal). */
 const TYPICAL_TRACKS = 5
 
+/** Title for sorting: leading brackets, quotes and marks (“(地下城与勇士)…”, “!!!…”) do not count. */
+const sortKey = (title: string) => title.replace(/^[\p{P}\p{S}\s]+/u, '') || title
+
 export class EnsembleIndex {
   private readonly root: string
   private readonly cacheFile: string
@@ -327,23 +330,37 @@ export class EnsembleIndex {
   }
 
   /** Band-first list of indexed files matching `need`, one page. */
-  query(o: { paths?: Set<string>; need: string; offset: number; limit: number }): EnsembleResult {
+  query(o: {
+    paths?: Set<string>
+    need: string
+    offset: number
+    limit: number
+    /** Also list files whose title could not be read (otherwise only counted). */
+    untitled?: boolean
+  }): EnsembleResult {
     const tokens = parseNeed(o.need)
     const matched: EnsembleFile[] = []
+    let hiddenUntitled = 0
     for (const [p, entry] of this.entries) {
       if (o.paths && !o.paths.has(p)) continue
       const m = this.meta.get(p)
       if (!m || !entry.tracks) continue
       const { counts, band } = summarize(entry.tracks)
       if (!matchesTokens({ counts, band }, tokens)) continue
+      if (!m.title && !o.untitled) {
+        hiddenUntitled++
+        continue
+      }
       matched.push({ path: p, title: m.title, artist: m.artist, tracks: entry.tracks, counts, band })
     }
     matched.sort(
       (a, b) =>
+        // Songs with a title first: a file called 1129121537.gp4 says nothing about the song.
+        Number(!a.title) - Number(!b.title) ||
         Number(b.band) - Number(a.band) ||
         // A rock band's 4–6 tracks first; huge MIDI-style arrangements (20+ tracks) last.
         Math.abs(a.tracks.length - TYPICAL_TRACKS) - Math.abs(b.tracks.length - TYPICAL_TRACKS) ||
-        collator.compare(a.title, b.title) ||
+        collator.compare(sortKey(a.title), sortKey(b.title)) ||
         collator.compare(a.path, b.path),
     )
     const limit = Number.isFinite(o.limit) ? Math.min(MAX_LIMIT, Math.max(1, Math.floor(o.limit))) : DEFAULT_LIMIT
@@ -352,6 +369,7 @@ export class EnsembleIndex {
     return {
       items: matched.slice(offset, offset + limit),
       total: matched.length,
+      hiddenUntitled,
       indexed: st.indexed,
       toIndex: st.toIndex,
       indexing: st.indexing,
