@@ -7,6 +7,7 @@ import { hrefViewer } from '../lib/route'
 import { markSeen, openPreview, useSeen, usePreview, type PreviewItem } from '../lib/preview'
 import { useVersionInfo } from '../lib/versionInfo'
 import { Link } from './Link'
+import { MiddleText } from './MiddleText'
 import { FormatBadge, JianpuBadge } from './ui'
 
 /** A version as a preview item (the song's title, or the file name when the title is unknown). */
@@ -165,12 +166,12 @@ function VersionRow({
   return (
     <li
       className={cx(
-        'grid grid-cols-[40px_minmax(0,1fr)_auto] items-center gap-2.5 py-1.5 min-[861px]:grid-cols-[52px_minmax(0,1fr)_auto] min-[861px]:gap-3',
+        'grid grid-cols-[40px_minmax(0,1fr)] items-start gap-x-2.5 pt-2 min-[861px]:grid-cols-[52px_minmax(0,1fr)_auto] min-[861px]:items-center min-[861px]:gap-x-3 min-[861px]:py-1.5',
         previewing && 'rounded-lg bg-card px-2',
       )}
     >
       <span
-        className="inline-flex"
+        className="mt-0.5 inline-flex min-[861px]:mt-0"
         title={`${FORMAT_BADGE[version.file.format].label} · ${formatSize(version.size)}`}
       >
         <FormatBadge format={version.file.format} className="w-10 min-[861px]:w-[52px]" />
@@ -189,17 +190,16 @@ function VersionRow({
           {version.tags.map((tag) => (
             <span
               key={tag}
-              className="rounded-[3px] border border-border px-1.5 text-[11px] leading-5 text-muted-foreground"
+              title={tag}
+              className="max-w-[14em] truncate whitespace-nowrap rounded-[3px] border border-border px-1.5 text-[11px] leading-5 text-muted-foreground"
             >
               {tag}
             </span>
           ))}
         </span>
-        <span className="mono mt-0.5 block truncate text-[11px] text-muted-foreground" title={version.label}>
-          {version.label}
-        </span>
+        <MiddleText text={version.label} className="mono mt-0.5 text-[11px] text-muted-foreground" />
       </span>
-      <span className="flex items-center gap-1">
+      <span className="col-start-2 -ml-2 flex items-center gap-1 min-[861px]:col-start-auto min-[861px]:ml-0">
         <button
           type="button"
           aria-pressed={starred}

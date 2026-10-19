@@ -330,3 +330,10 @@ describe('untitled files (未识别歌名)', () => {
     expect([...lib.songs.values()].flat().some((s) => s.title === '未识别歌名')).toBe(false)
   })
 })
+
+describe('分谱 stays in a title', () => {
+  it('does not strip the 谱 of 分谱, still strips 吉他谱', () => {
+    expect(parseName('我们的歌（2021 年巡回演唱会北京站现场版，附完整吉他独奏与贝斯分谱）', 'score', [], null, tools).title).toContain('分谱')
+    expect(parseName('七里香吉他谱', 'score', [], null, tools).title).toBe('七里香')
+  })
+})

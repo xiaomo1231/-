@@ -5,7 +5,8 @@ import { api } from './api'
 /** A path whose info came back without bars (or not at all) may be asked again after this long. */
 const RECHECK_MS = 30_000
 /** Paths per request (the server accepts at most 400). */
-const BATCH_MAX = 400
+/** Paths per request: long folder names add up, and the server reads unread files on the spot. */
+const BATCH_MAX = 40
 
 interface Known {
   info: VersionInfo | null

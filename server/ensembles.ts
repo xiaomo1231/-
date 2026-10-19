@@ -474,6 +474,23 @@ export class EnsembleIndex {
     }
   }
 
+  /**
+   * Like info(), but first reads (at most `maxReads`) listed files the background pass has
+   * not reached yet, so a song opened right after an install or a big import shows its
+   * instruments at once.
+   */
+  async infoNow(paths: string[], maxReads = 20): Promise<Record<string, VersionInfo>> {
+    let reads = 0
+    for (const p of paths) {
+      if (reads >= maxReads) break
+      const e = this.entries.get(p)
+      if (!this.meta.has(p) || (e && !needsBars(e))) continue
+      reads++
+      if (await this.checkOne(p)) this.unsaved += 1
+    }
+    return this.info(paths)
+  }
+
   /** Re-reads the file when it is new or changed; true when the entry changed. */
   private async checkOne(rel: string): Promise<boolean> {
     const abs = path.join(this.root, rel)

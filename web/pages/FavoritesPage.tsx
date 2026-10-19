@@ -13,6 +13,7 @@ import {
 } from '../lib/favoriteGroups'
 import { FormatBadge, Notice, PageBar, Seg } from '../components/ui'
 import { Link } from '../components/Link'
+import { MiddleText } from '../components/MiddleText'
 import { useHistoryState, useRestoreScroll } from '../lib/scrollMemory'
 
 type Order = 'time' | 'artist' | 'practice'
@@ -174,9 +175,10 @@ export function FavoritesPage() {
               <span aria-hidden className="mono shrink-0 text-muted-foreground">
                 ──
               </span>
-              <span className="min-w-0 flex-1 truncate text-[15px] font-medium transition-colors group-hover:text-primary">
-                {shown}
-              </span>
+              <MiddleText
+                text={shown}
+                className="flex-1 text-[15px] font-medium transition-colors group-hover:text-primary"
+              />
               <FormatBadge format={f.format} />
             </Link>
           )}
@@ -204,7 +206,7 @@ export function FavoritesPage() {
         </div>
         {f.alias && !isEditing && (
           <div className="-mt-1 flex flex-wrap items-center gap-x-3 pb-1 pl-4 text-[11px] text-muted-foreground">
-            <span className="mono min-w-0 truncate">原名：{label}</span>
+            <MiddleText text={`原名：${label}`} className="mono" />
             <button
               type="button"
               onClick={() => void renameFile(f, null)}

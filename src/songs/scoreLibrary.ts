@@ -163,9 +163,9 @@ const INLINE_TAGS: Array<[RegExp, string]> = [
   [/(?:^|[\s-])([A-G][b#]?调|原调|[男女](?:生|声)?(?:调|版)?)(?=$|[\s-])/, ''],
 ]
 
-/** Decorations that sites add around a title. */
+/** Decorations that sites add around a title (分谱 — a part of the score — is not one). */
 const DECORATION =
-  /(吉他)?(六线|和弦|简|曲|乐)?谱(六线谱)?|六线谱|五线谱|GTP谱?|_?音乐路|_?解压|下载|国内男歌手|国内女歌手|男歌手|女歌手|吉他中国|你我吉他网?|niwojita\.?cn|www\.\S+|\S+\.(com|cn|net)\b|^\s*第[一二三四五六七八九十\d]+季\s*第[一二三四五六七八九十\d]+[集期]/gi
+  /(吉他)?(六线|和弦|简|曲|乐)?(?<!分)谱(六线谱)?|六线谱|五线谱|GTP谱?|_?音乐路|_?解压|下载|国内男歌手|国内女歌手|男歌手|女歌手|吉他中国|你我吉他网?|niwojita\.?cn|www\.\S+|\S+\.(com|cn|net)\b|^\s*第[一二三四五六七八九十\d]+季\s*第[一二三四五六七八九十\d]+[集期]/gi
 
 /** File names that are not songs at all. */
 const NOT_A_SONG = /安装|说明|readme|使用方法|教程目录|^目录$/i

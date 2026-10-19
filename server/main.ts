@@ -97,7 +97,7 @@ import {
   serveRecording,
 } from './recordings'
 import { songBars } from '../src/songs/drumScore'
-import { EnsembleIndex } from './ensembles'
+import { EnsembleIndex, readEnsembleFacts } from './ensembles'
 import {
   DrumStore,
   generateDrums,
@@ -143,6 +143,7 @@ import type {
   InviteCheck,
   SongInfo,
   UploadSong,
+  VersionInfo,
 } from '../src/songs/scoreServerTypes'
 import type { GenerateDrumsResult } from '../src/songs/drumTypes'
 import type { ScoreSong } from '../src/songs/scoreLibraryTypes'
@@ -1416,17 +1417,37 @@ async function handleVersionInfo(
   me: StoredUser,
 ): Promise<void> {
   if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
-  const raw = (await readJsonBody(req)).paths
+  // A song with dozens of versions and long folder names: the paths alone pass 16 KB.
+  const raw = (await readJsonBody(req, MAX_VERSION_INFO_BODY)).paths
   if (!Array.isArray(raw) || raw.length > MAX_VERSION_INFO_PATHS)
     throw new HttpError(400, '请求格式不对。')
   // Paths outside the library, or the member may not open, are left out.
   const paths = raw.filter(
     (p): p is string => typeof p === 'string' && inRoot(p) && (canBrowse(me) || bandCanOpen(p)),
   )
-  sendJson(res, 200, ensembles.info(paths))
+  const out = await ensembles.infoNow(paths.filter((p) => !isUploadPath(p)))
+  // Uploaded files are not in the library's reader: read them here (once each).
+  for (const p of paths.filter(isUploadPath)) {
+    let info = uploadInfo.get(p)
+    if (!info) {
+      const real = await uploads.resolve(p)
+      if (!real) continue
+      const facts = await readEnsembleFacts(real)
+      info = facts
+        ? { tracks: facts.tracks, tempo: facts.tempo, bars: facts.bars }
+        : { tracks: [], tempo: null, bars: null, unreadable: true }
+      if (uploadInfo.size > 2000) uploadInfo.clear()
+      uploadInfo.set(p, info)
+    }
+    out[p] = info
+  }
+  sendJson(res, 200, out)
 }
 
 const MAX_VERSION_INFO_PATHS = 400
+const MAX_VERSION_INFO_BODY = 256 * 1024
+/** Track facts of uploaded files (they never change: a re-upload gets a new path). */
+const uploadInfo = new Map<string, VersionInfo>()
 
 /** GET /api/ensembles: a search narrows to the matching songs' files first. */
 function queryEnsembles(url: URL): unknown {
