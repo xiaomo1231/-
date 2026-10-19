@@ -37,6 +37,8 @@ export type Route =
   | { kind: 'combine'; path: string; id: string }
   | { kind: 'daily'; day: number | null }
   | { kind: 'invite'; token: string }
+  /** 新建歌曲 / 自己上传的谱: an uploaded song ('' = a new one; band = attach to that band song). */
+  | { kind: 'upload'; id: string; band: string }
   | ViewerRoute
 
 const ROUTE_EVENT = 'scores:route'
@@ -68,6 +70,7 @@ export function parseHash(hash: string): Route {
   if (path === '/s') return { kind: 'search', q: qs.get('q') ?? '' }
   if (path === '/f') return { kind: 'favorites' }
   if (path === '/b') return { kind: 'band' }
+  if (path === '/b/up') return { kind: 'upload', id: qs.get('id') ?? '', band: qs.get('b') ?? '' }
   const bs = /^\/b\/s\/(.+)$/.exec(path)
   if (bs) return { kind: 'bandSong', id: decode(bs[1] ?? '') }
   if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
@@ -120,6 +123,12 @@ export const HREF_USERS = '#/users'
 /** An invite link (full URL, to copy and send). */
 export function inviteUrl(token: string): string {
   return `${window.location.origin}${window.location.pathname}#/invite/${token}`
+}
+
+/** 新建歌曲 (no id), or an uploaded song; `band` attaches a new one to that band song. */
+export function hrefUpload(o: { id?: string; band?: string } = {}): string {
+  const parts = [o.id && `id=${enc(o.id)}`, o.band && `b=${enc(o.band)}`].filter(Boolean)
+  return parts.length ? `#/b/up?${parts.join('&')}` : '#/b/up'
 }
 
 export function hrefBandSong(id: string): string {

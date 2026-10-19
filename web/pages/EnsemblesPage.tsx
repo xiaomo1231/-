@@ -10,7 +10,6 @@ import { Notice } from '../components/ui'
 
 const PAGE = 50
 const POLL_MS = 5000
-const DEFAULT_NEED = 'band'
 
 /** The filter chips, in the order they are written into the address. */
 const NEEDS: ReadonlyArray<readonly [string, string]> = [
@@ -30,15 +29,14 @@ const KIND_LABEL: Record<TrackKind, string> = {
   other: '其他',
 }
 
-/** need "guitar2,keys" → the chips on; nothing listed means the 完整乐队 default. */
+/** need "guitar2,keys" → the chips on; nothing listed means no filter. */
 function parseNeed(need: string): Set<string> {
-  const set = new Set(
+  return new Set(
     need
       .split(',')
       .map((s) => s.trim())
       .filter(Boolean),
   )
-  return set.size > 0 ? set : new Set([DEFAULT_NEED])
 }
 
 /** "吉他×2 · 贝斯 · 鼓 · 键盘" */
@@ -202,7 +200,7 @@ export function EnsemblesPage({ q, need }: { q: string; need: string }) {
           找乐队谱
         </h1>
         <p className="pt-1.5 text-sm leading-relaxed text-muted-foreground">
-          从谱库里挑出同时有鼓、贝斯和吉他或键盘的 GP 谱。
+          从谱库里找有多个乐器声部的 GP 谱。用下面的选项筛选，比如「完整乐队」= 同时有鼓、贝斯和吉他或键盘。
         </p>
       </header>
 

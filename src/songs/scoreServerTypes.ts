@@ -85,6 +85,8 @@ export interface BandSong {
   fill?: FillConfig
   /** 小节留言, oldest first. Missing on older rows = none. */
   comments?: BarComment[]
+  /** 自己上传的谱 of this song (an UploadSong id), or null. Missing on older rows = none. */
+  uploadId?: string | null
   addedBy: string
   addedAt: number
   updatedAt: number
@@ -126,6 +128,55 @@ export interface UpdateBandSongBody {
   note?: string
   rehearsalSpeedPct?: number | null
   fill?: FillConfig
+  uploadId?: string | null
+}
+
+// ---------------------------------------------------------------------------
+// 自己上传的谱 (members' own score files, kept in SCORES_DATA/uploads/, never in the library)
+// ---------------------------------------------------------------------------
+
+export type UploadKind = 'score' | 'pdf' | 'image'
+
+export interface UploadFile {
+  id: string
+  /** Original file name. */
+  name: string
+  /** Which instrument / part it is, e.g. 贝斯, 主音吉他, 鼓 (1–20 chars). */
+  label: string
+  kind: UploadKind
+  /** gp, gp3, gp4, gp5, gpx, musicxml, mxl, pdf, png, jpg, webp. */
+  ext: string
+  size: number
+  /** The path to open it with (`~uploads/…`). */
+  path: string
+  uploadedBy: string
+  uploadedAt: number
+}
+
+/** A song made from uploaded files: a new song, or the own files of a band song from the library. */
+export interface UploadSong {
+  id: string
+  title: string
+  artist: string
+  files: UploadFile[]
+  createdBy: string
+  createdAt: number
+  updatedAt: number
+}
+
+/** POST /api/uploads/create */
+export interface NewUploadSongBody {
+  title: string
+  artist: string
+  /** Attach to this band song (its own files) instead of making a new song. */
+  bandSongId: string | null
+}
+
+/** POST /api/uploads/file?id=&label=&name= with the raw file as body. */
+export interface UploadFileQuery {
+  id: string
+  label: string
+  name: string
 }
 
 // ---------------------------------------------------------------------------

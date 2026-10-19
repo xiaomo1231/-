@@ -8,6 +8,9 @@ import type {
 
 import type {
   AcceptInviteBody,
+  NewUploadSongBody,
+  UploadFileQuery,
+  UploadSong,
   AddCommentBody,
   InviteCheck,
   InviteInfo,
@@ -320,6 +323,36 @@ export const api = {
   },
   removeRecording: (id: string) =>
     call<RecordingInfo[]>('/api/recordings/remove', { body: { id } }),
+  // 自己上传的谱 / 新建歌曲
+  uploads: (signal?: AbortSignal) => call<UploadSong[]>('/api/uploads', { signal }),
+  upload: (id: string, signal?: AbortSignal) =>
+    call<UploadSong>(`/api/uploads/get?id=${enc(id)}`, { signal }),
+  createUpload: (b: NewUploadSongBody) => call<UploadSong>('/api/uploads/create', { body: b }),
+  updateUpload: (id: string, title: string, artist: string) =>
+    call<UploadSong>('/api/uploads/update', { body: { id, title, artist } }),
+  /** Raw upload (no multipart): the score / PDF / image file is the body. */
+  async uploadFile(q: UploadFileQuery, file: Blob): Promise<UploadSong> {
+    const res = await fetch(
+      `/api/uploads/file?id=${enc(q.id)}&label=${enc(q.label)}&name=${enc(q.name)}`,
+      {
+        method: 'POST',
+        credentials: 'same-origin',
+        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        body: file,
+      },
+    )
+    if (res.status === 401) throw unauthorized()
+    if (!res.ok) throw await failure(res)
+    return (await res.json()) as UploadSong
+  },
+  relabelUploadFile: (id: string, fileId: string, label: string) =>
+    call<UploadSong>('/api/uploads/file/update', { body: { id, fileId, label } }),
+  removeUploadFile: (id: string, fileId: string) =>
+    call<UploadSong>('/api/uploads/file/remove', { body: { id, fileId } }),
+  removeUpload: (id: string) => call<{ ok: boolean }>('/api/uploads/remove', { body: { id } }),
+  /** Puts an uploaded song on the setlist (several score files become one 组合乐队谱). */
+  addUploadToBand: (uploadId: string) =>
+    call<BandState>('/api/band/songs/addUpload', { body: { uploadId } }),
   // 邀请链接
   invites: (signal?: AbortSignal) => call<InviteInfo[]>('/api/invites', { signal }),
   createInvite: (b: NewInviteBody) => call<NewInviteResult>('/api/invites', { body: b }),

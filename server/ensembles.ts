@@ -105,7 +105,8 @@ export function parseNeed(need: string): NeedToken[] {
     const token = raw.trim().toLowerCase() as NeedToken
     if ((NEED_TOKENS as readonly string[]).includes(token) && !out.includes(token)) out.push(token)
   }
-  return out.length ? out : ['band']
+  // Nothing chosen: every file whose tracks were read (the page leaves filtering to the user).
+  return out
 }
 
 function matchesTokens(file: Pick<EnsembleFile, 'counts' | 'band'>, tokens: NeedToken[]): boolean {

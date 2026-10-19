@@ -75,6 +75,15 @@ import {
   parseUpdateSong,
 } from './band'
 import { RehearsalHub, parseRehearsalBody } from './rehearsal'
+import {
+  MAX_UPLOAD_BYTES,
+  UploadError,
+  UploadStore,
+  parseNewUploadSong,
+  parseUploadQuery as parseUploadFileQuery,
+  readUploadBody as readUploadFileBody,
+} from './uploads'
+import { isUploadPath } from '../src/songs/uploadPaths'
 import { InviteError, InviteStore, newUserFromInvite, parseAccept, parseNewInvite } from './invites'
 import {
   MAX_RECORDING_BYTES,
@@ -107,7 +116,7 @@ import {
   loadDailyProgram,
   type DailyProgram,
 } from './daily'
-import { ComboError, ComboStore, canEditCombo, parseSaveCombo } from './combos'
+import { ComboError, ComboStore, MAX_COMBO_PARTS, canEditCombo, parseSaveCombo } from './combos'
 import {
   ConversionError,
   ConversionQueue,
@@ -125,7 +134,13 @@ import {
   readUploadBody,
   sheetContentType,
 } from './sheets'
-import type { BandState, InviteCheck } from '../src/songs/scoreServerTypes'
+import type {
+  BandState,
+  ComboPart,
+  InviteCheck,
+  SongInfo,
+  UploadSong,
+} from '../src/songs/scoreServerTypes'
 import type { GenerateDrumsResult } from '../src/songs/drumTypes'
 import type { ScoreSong } from '../src/songs/scoreLibraryTypes'
 import {
@@ -267,6 +282,7 @@ let drums: DrumStore
 let sheets: SheetStore
 let invites: InviteStore
 let recordings: RecordingStore
+let uploads: UploadStore
 let combos: ComboStore
 let conversions: ConversionStore
 let daily: DailyProgressStore
@@ -540,6 +556,11 @@ async function handleUsers(
   return sendJson(res, 200, users.list())
 }
 
+/** A library file, or an uploaded one (`~uploads/…`, kept in SCORES_DATA/uploads/). */
+function resolveAnyFile(rel: string): Promise<string | null> {
+  return isUploadPath(rel) ? uploads.resolve(rel) : resolveRealFile(cfg.root, realRoot, rel)
+}
+
 /** Tells every open band page and rehearsal screen to read the band again. */
 function bandChanged(): void {
   rehearsal.notifyBand()
@@ -584,6 +605,10 @@ async function handleBand(
     await band.reorder(ids).catch(asHttp)
   } else if (p === '/api/band/rename') {
     await band.rename(orBadRequest(parseRename(body))).catch(asHttp)
+  } else if (p === '/api/band/songs/addUpload') {
+    const u = uploads.get(typeof body.uploadId === 'string' ? body.uploadId : '')
+    if (!u) throw new HttpError(404, '找不到这首上传的歌。')
+    await addUploadToBand(u, me, now)
   } else if (p === '/api/band/comments/add') {
     await band.addComment(orBadRequest(parseAddComment(body)), me.id, now).catch(asHttp)
   } else if (p === '/api/band/comments/remove') {
@@ -601,6 +626,150 @@ async function handleBand(
   } else return sendJson(res, 404, { error: '找不到这个接口。' })
   bandChanged()
   return sendJson(res, 200, currentBand())
+}
+
+/**
+ * An uploaded song on the setlist: the band song plays its first score file; with
+ * several score files every track of every file is put together as one 组合乐队谱
+ * (aligned by bar; the 组合 page adjusts offsets). Called again, it re-makes the combo.
+ */
+async function addUploadToBand(u: UploadSong, me: StoredUser, now: number): Promise<void> {
+  const scores = u.files.filter((f) => f.kind === 'score')
+  if (scores.length === 0)
+    throw new HttpError(400, '至少要上传一个 GP 或 MusicXML 文件才能加入歌单（PDF 可以先转换成 GP）。')
+  let song = band.songs().find((b) => b.uploadId === u.id && isUploadPath(b.path))
+  if (!song) {
+    const added = await band
+      .add({ path: scores[0]!.path, title: u.title, artist: u.artist }, me.id, now)
+      .catch(asHttp)
+    song = await band.update({ id: added.id, uploadId: u.id }, now).catch(asHttp)
+  }
+  if (scores.length < 2) return
+  const parts: ComboPart[] = []
+  for (const f of scores) {
+    const real = await uploads.resolve(f.path)
+    if (!real) continue
+    let names: string[]
+    try {
+      names = (await readScoreFile(real)).tracks.map((t) => t.name.trim())
+    } catch {
+      throw new HttpError(422, `读不出「${f.name}」，请确认它是能用 Guitar Pro 打开的文件。`)
+    }
+    names.forEach((n, i) =>
+      parts.push({
+        path: f.path,
+        track: i,
+        name: names.length > 1 ? `${f.label} · ${n || `音轨 ${i + 1}`}` : f.label,
+        offsetBars: 0,
+        transpose: 0,
+        unrollRepeats: false,
+      }),
+    )
+  }
+  if (parts.length > MAX_COMBO_PARTS)
+    throw new HttpError(
+      400,
+      `这些文件一共有 ${parts.length} 个声部，组合乐队谱最多 ${MAX_COMBO_PARTS} 个。请删掉一些文件，或到「组合乐队谱」里自己挑。`,
+    )
+  const recipe = await combos
+    .save(
+      {
+        id: song.comboId && combos.get(song.comboId) ? song.comboId : null,
+        songKey: `upload#${u.id}`,
+        title: u.title,
+        artist: u.artist,
+        base: scores[0]!.path,
+        baseUnrollRepeats: false,
+        parts,
+      },
+      me.id,
+      now,
+    )
+    .catch((err: unknown) => {
+      if (err instanceof ComboError) throw new HttpError(err.status, err.message)
+      throw err
+    })
+  await band.update({ id: song.id, comboId: recipe.id, parts: {} }, now).catch(asHttp)
+}
+
+/** 自己上传的谱 / 新建歌曲: any member can upload; the files stay in SCORES_DATA/uploads/. */
+async function handleUploads(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  const p = url.pathname
+  const now = Date.now()
+  const find = (id: unknown) => {
+    const u = uploads.get(typeof id === 'string' ? id : '')
+    if (!u) throw new HttpError(404, '找不到这首上传的歌。')
+    return u
+  }
+  try {
+    if (p === '/api/uploads') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      return sendJson(res, 200, uploads.list())
+    }
+    if (p === '/api/uploads/get') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      return sendJson(res, 200, find(url.searchParams.get('id')))
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    if (p === '/api/uploads/file') {
+      const q = orBadRequest(parseUploadFileQuery(url))
+      find(q.id)
+      const bytes = await readUploadFileBody(req, MAX_UPLOAD_BYTES)
+      const song = await uploads.addFile(q.id, { label: q.label, name: q.name }, bytes, me.id, now)
+      log(`上传自己的谱：${song.title}（${q.label}）`)
+      bandChanged()
+      return sendJson(res, 200, song)
+    }
+    const body = await readJsonBody(req)
+    if (p === '/api/uploads/create') {
+      const b = orBadRequest(parseNewUploadSong(body))
+      const owner = b.bandSongId ? band.get(b.bandSongId) : null
+      if (b.bandSongId && !owner) throw new HttpError(404, '这首歌不在乐队歌单里。')
+      if (owner?.uploadId && uploads.get(owner.uploadId))
+        return sendJson(res, 200, uploads.get(owner.uploadId))
+      const song = await uploads.create({ title: b.title, artist: b.artist }, me.id, now)
+      if (owner) await band.update({ id: owner.id, uploadId: song.id }, now).catch(asHttp)
+      bandChanged()
+      return sendJson(res, 200, song)
+    }
+    const u = find(body.id)
+    let out: UploadSong | null = null
+    if (p === '/api/uploads/update') {
+      const title = typeof body.title === 'string' ? body.title.trim() : ''
+      const artist = typeof body.artist === 'string' ? body.artist.trim() : ''
+      if ([...title].length < 1 || [...title].length > 80)
+        throw new HttpError(400, '歌名要在 1–80 个字之间。')
+      if ([...artist].length > 80) throw new HttpError(400, '歌手名最多 80 个字。')
+      out = await uploads.update(u.id, { title, artist }, now)
+    } else if (p === '/api/uploads/file/update') {
+      const label = typeof body.label === 'string' ? body.label.trim() : ''
+      if ([...label].length < 1 || [...label].length > 20)
+        throw new HttpError(400, '声部名要在 1–20 个字之间。')
+      out = await uploads.relabel(u.id, typeof body.fileId === 'string' ? body.fileId : '', label, now)
+    } else if (p === '/api/uploads/file/remove') {
+      const fileId = typeof body.fileId === 'string' ? body.fileId : ''
+      const file = u.files.find((f) => f.id === fileId)
+      if (file && band.songs().some((b) => b.path === file.path))
+        throw new HttpError(409, '这个文件是乐队歌单里这首歌的主谱，不能删除。')
+      out = await uploads.removeFile(u.id, fileId, now)
+    } else if (p === '/api/uploads/remove') {
+      if (band.songs().some((b) => b.uploadId === u.id))
+        throw new HttpError(409, '乐队歌单里还有歌在用这些文件，请先从歌单里删除那首歌。')
+      await uploads.remove(u.id)
+      bandChanged()
+      return sendJson(res, 200, { ok: true })
+    } else return sendJson(res, 404, { error: '找不到这个接口。' })
+    bandChanged()
+    return sendJson(res, 200, out)
+  } catch (err) {
+    if (err instanceof UploadError) throw new HttpError(err.status, err.message)
+    throw err
+  }
 }
 
 /** 排练录音: audio files members upload to a band song (kept in SCORES_DATA/recordings/). */
@@ -775,7 +944,7 @@ async function handleRehearsal(
     const key = `${rel}|${style ?? ''}`
     let out = rehearsalDrums.get(key)
     if (!out) {
-      const real = await resolveRealFile(cfg.root, realRoot, rel)
+      const real = await resolveAnyFile(rel)
       if (!real) return sendJson(res, 404, { error: '找不到文件。' })
       let bars
       try {
@@ -842,7 +1011,7 @@ async function handleDrums(
   if (p === '/api/drums/generate') {
     const body = orBadRequest(parseGenerateBody(await readJsonBody(req), inRoot))
     allowed(body.path)
-    const real = await resolveRealFile(cfg.root, realRoot, body.path)
+    const real = await resolveAnyFile(body.path)
     if (!real) return sendJson(res, 404, { error: '找不到文件。' })
     try {
       return sendJson(res, 200, await generateDrums(body, real, drumEngines, drumLib))
@@ -875,10 +1044,48 @@ function withJianpu(songs: ScoreSong[]): ScoreSong[] {
 }
 
 /** The song a score file belongs to (its key and versions); 404 when the library has no such file. */
-function songOfPath(rel: string) {
-  const info = songInfo(buildSongIndex(requireLibrary()), rel)
+function songOfPath(rel: string): SongInfo {
+  const info = findSong(rel)
   if (!info) throw new HttpError(404, '在谱库里找不到这首歌。')
   return info
+}
+
+/** The score files of an uploaded song as versions of a song. */
+function uploadVersions(u: UploadSong): SongInfo['versions'] {
+  return u.files
+    .filter((f) => f.kind === 'score')
+    .map((f) => ({ path: f.path, label: `自己上传 · ${f.label}`, tags: ['自己上传'], size: f.size }))
+}
+
+/**
+ * The song a file belongs to. An uploaded file belongs to its uploaded song, or, when
+ * those are the own files of a band song from the library, to that library song; a
+ * library song's versions include such own files (so 组合乐队谱 can mix them).
+ */
+function findSong(rel: string): SongInfo | null {
+  if (isUploadPath(rel)) {
+    const hit = uploads.fileOf(rel)
+    if (!hit) return null
+    const owner = band.songs().find((b) => b.uploadId === hit.song.id && !isUploadPath(b.path))
+    if (owner) return findSong(owner.path)
+    return {
+      songKey: `upload#${hit.song.id}`,
+      title: hit.song.title,
+      artist: hit.song.artist,
+      versions: uploadVersions(hit.song),
+    }
+  }
+  const info = songInfo(buildSongIndex(requireLibrary()), rel)
+  if (!info) return null
+  const index = buildSongIndex(requireLibrary())
+  const extra = band
+    .songs()
+    .filter((b) => b.uploadId && !isUploadPath(b.path) && songInfo(index, b.path)?.songKey === info.songKey)
+    .flatMap((b) => {
+      const u = uploads.get(b.uploadId!)
+      return u ? uploadVersions(u) : []
+    })
+  return extra.length ? { ...info, versions: [...info.versions, ...extra] } : info
 }
 
 /** GET /api/song and 上传的简谱 (/api/sheets…). */
@@ -993,15 +1200,15 @@ async function handleCombos(
     }
     if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
     if (p === '/api/combos/save') {
-      requireBrowse(me)
-      const index = buildSongIndex(requireLibrary())
       const recipe = orBadRequest(
         parseSaveCombo(
           await readJsonBody(req, MAX_FAVORITE_BODY),
           inRoot,
-          (rel, key) => songInfo(index, rel)?.songKey === key,
+          (rel, key) => findSong(rel)?.songKey === key,
         ),
       )
+      if (!canBrowse(me) && !band.hasPath(recipe.base) && !isUploadPath(recipe.base))
+        throw new HttpError(403, '你的账号只能处理乐队歌单里的谱子。')
       if (recipe.id) {
         const old = combos.get(recipe.id)
         if (old && !canEditCombo(old, me))
@@ -1027,7 +1234,8 @@ async function handleCombos(
 
 /** A file every member may open: the setlist's files, a setlist 组合乐队谱's versions, and 每日一练. */
 function bandCanOpen(rel: string): boolean {
-  if (band.hasPath(rel) || isDailyPath(dailyProgram.category, rel)) return true
+  // Uploaded files belong to the band: every member may open them.
+  if (isUploadPath(rel) || band.hasPath(rel) || isDailyPath(dailyProgram.category, rel)) return true
   return band.songs().some((x) => {
     const c = x.comboId ? combos.get(x.comboId) : undefined
     return c !== undefined && (c.base === rel || c.parts.some((pt) => pt.path === rel))
@@ -1088,7 +1296,7 @@ async function handleConversions(
       const tool = pdf2gpTool()
       if (!tool)
         throw new HttpError(503, conversionStatus(null).reason ?? '服务器还没装 PDF 转换组件。')
-      const real = await resolveRealFile(cfg.root, realRoot, rel)
+      const real = await resolveAnyFile(rel)
       if (!real) return sendJson(res, 404, { error: '找不到文件。' })
       const info = songOfPath(rel)
       log(`转换 PDF：${rel}`)
@@ -1246,6 +1454,7 @@ async function handleApi(
     return handleUsers(req, res, p, me)
   if (p === '/api/band' || p.startsWith('/api/band/')) return handleBand(req, res, p, me)
   if (p === '/api/invites' || p.startsWith('/api/invites/')) return handleInvites(req, res, p, me)
+  if (p === '/api/uploads' || p.startsWith('/api/uploads/')) return handleUploads(req, res, url, me)
   if (p === '/api/recordings' || p.startsWith('/api/recordings/'))
     return handleRecordings(req, res, url, me)
   if (p === '/api/rehearsal' || p.startsWith('/api/rehearsal/'))
@@ -1377,7 +1586,7 @@ async function handleText(res: http.ServerResponse, rel: string): Promise<void> 
   const ext = rel.slice(rel.lastIndexOf('.') + 1).toLowerCase()
   if (rel.lastIndexOf('.') < 0 || (ext !== 'txt' && ext !== 'tab'))
     throw new HttpError(400, '只能读取 .txt 或 .tab 文件。')
-  const real = await resolveRealFile(cfg.root, realRoot, rel)
+  const real = await resolveAnyFile(rel)
   if (!real) return sendJson(res, 404, { error: '找不到文件。' })
   const st = await fs.promises.stat(real)
   if (st.size > MAX_TEXT_BYTES)
@@ -1401,7 +1610,7 @@ async function handleFile(
     return sendJson(res, 405, { error: '不支持这种请求方式。' })
 
   const rel = decodeUrlPath(url.pathname.slice('/files/'.length))
-  const real = rel === null ? null : await resolveRealFile(cfg.root, realRoot, rel)
+  const real = rel === null ? null : await resolveAnyFile(rel)
   if (!real || rel === null) return sendJson(res, 404, { error: '找不到文件。' })
   // Members without library access open only the band's setlist.
   if (!canBrowse(me) && !bandCanOpen(rel))
@@ -1562,6 +1771,7 @@ async function main(): Promise<void> {
   sheets = await SheetStore.load(cfg.dataDir)
   invites = await InviteStore.load(cfg.dataDir)
   recordings = await RecordingStore.load(cfg.dataDir)
+  uploads = await UploadStore.load(cfg.dataDir)
   combos = await ComboStore.load(cfg.dataDir, inRoot)
   conversions = await ConversionStore.load(cfg.dataDir)
   daily = await DailyProgressStore.load(cfg.dataDir)

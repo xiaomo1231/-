@@ -25,6 +25,7 @@ import { SearchPage } from '../pages/SearchPage'
 import { FavoritesPage } from '../pages/FavoritesPage'
 import { BandPage } from '../pages/BandPage'
 import { BandSongPage } from '../pages/BandSongPage'
+import { UploadSongPage } from '../pages/UploadSongPage'
 import { EnsemblesPage } from '../pages/EnsemblesPage'
 import { AccountPage } from '../pages/AccountPage'
 import { UsersPage } from '../pages/UsersPage'
@@ -332,7 +333,10 @@ function AccountLinks({ me }: { me: UserInfo }) {
 /** The phone's bottom navigation: 目录 / 搜索 / 乐队 / 每日 / 收藏, or 乐队 / 每日 / 我的 without library access (最近看过 is on 目录). */
 function TabBar({ route, libraryHidden }: { route: Route; libraryHidden: boolean }) {
   const current =
-    route.kind === 'band' || route.kind === 'bandSong' || route.kind === 'ensembles'
+    route.kind === 'band' ||
+    route.kind === 'bandSong' ||
+    route.kind === 'upload' ||
+    route.kind === 'ensembles'
       ? 'band'
       : route.kind === 'daily'
         ? 'daily'
@@ -412,6 +416,8 @@ function renderRoute(route: Route, libraryHidden: boolean) {
       return <BandPage />
     case 'bandSong':
       return <BandSongPage key={route.id} id={route.id} />
+    case 'upload':
+      return <UploadSongPage id={route.id} band={route.band} />
     case 'ensembles':
       return <EnsemblesPage q={route.q} need={route.need} />
     case 'account':

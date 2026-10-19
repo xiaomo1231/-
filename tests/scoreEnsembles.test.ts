@@ -125,12 +125,12 @@ describe('summarize', () => {
 })
 
 describe('parseNeed / matchesNeed', () => {
-  it('parses comma lists, ignores unknown tokens, defaults to band', () => {
+  it('parses comma lists, ignores unknown tokens, nothing means no filter', () => {
     expect(parseNeed('guitar2,keys')).toEqual(['guitar2', 'keys'])
     expect(parseNeed(' Guitar2 ， vocal ')).toEqual(['guitar2', 'vocal'])
     expect(parseNeed('guitar,guitar')).toEqual(['guitar'])
-    expect(parseNeed('')).toEqual(['band'])
-    expect(parseNeed('nonsense')).toEqual(['band'])
+    expect(parseNeed('')).toEqual([])
+    expect(parseNeed('nonsense')).toEqual([])
     expect(parseNeed('nonsense,drums')).toEqual(['drums'])
   })
 
@@ -180,7 +180,7 @@ describe('EnsembleIndex.query', () => {
   ])
 
   it('lists band files first, then the ones closest to a 5-track band, then title', () => {
-    const r = idx.query({ need: '', offset: 0, limit: 20 })
+    const r = idx.query({ need: 'band', offset: 0, limit: 20 })
     // 6, 4 and 4 tracks are one away from 5 and sort by title (钢琴版, Big, Zebra); 3 tracks is two away
     expect(r.items.map((i) => i.path)).toEqual([
       'b/full-keys.gp5',
@@ -227,18 +227,25 @@ describe('EnsembleIndex.query', () => {
     expect(r.items.map((i) => i.path)).toEqual(['b/full-1g.gp5', 'b/solo.gp5'])
   })
 
+  it('lists every read file when nothing is chosen, band files first', () => {
+    const r = idx.query({ need: '', offset: 0, limit: 20 })
+    expect(r.total).toBe(6)
+    expect(r.items[0]!.band).toBe(true)
+    expect(r.items.at(-1)!.band).toBe(false)
+  })
+
   it('pages and clamps the limit', () => {
-    const page = idx.query({ need: '', offset: 1, limit: 2 })
+    const page = idx.query({ need: 'band', offset: 1, limit: 2 })
     expect(page.items.map((i) => i.path)).toEqual(['b/bigband.gp5', 'b/full-2g.gp5'])
     expect(page.total).toBe(4)
-    expect(idx.query({ need: '', offset: 0, limit: 0 }).items.length).toBe(1)
-    expect(idx.query({ need: '', offset: 0, limit: 9999 }).items.length).toBe(4)
-    expect(idx.query({ need: '', offset: 99, limit: 5 }).items.length).toBe(0)
-    expect(idx.query({ need: '', offset: -3, limit: 1 }).items[0]!.path).toBe('b/full-keys.gp5')
+    expect(idx.query({ need: 'band', offset: 0, limit: 0 }).items.length).toBe(1)
+    expect(idx.query({ need: 'band', offset: 0, limit: 9999 }).items.length).toBe(4)
+    expect(idx.query({ need: 'band', offset: 99, limit: 5 }).items.length).toBe(0)
+    expect(idx.query({ need: 'band', offset: -3, limit: 1 }).items[0]!.path).toBe('b/full-keys.gp5')
   })
 
   it('reports progress from the status', () => {
-    const r = idx.query({ need: '', offset: 0, limit: 1 })
+    const r = idx.query({ need: 'band', offset: 0, limit: 1 })
     // seeded entries count as indexed; nothing is queued
     expect(r.indexing).toBe(false)
     expect(r.indexed).toBe(7)

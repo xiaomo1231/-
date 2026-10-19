@@ -46,6 +46,8 @@ const DRUM_SOURCES: readonly FillDrumSource[] = ['auto', 'file', 'saved', 'gener
 const TRACK_KEY = /^(?:0|[1-9]|[1-5]\d|6[0-3])$/
 /** A 组合乐队谱 recipe id (see server/combos.ts). */
 const COMBO_ID = /^[0-9a-f]{12}$/
+/** An uploaded song id (see server/uploads.ts). */
+const UPLOAD_ID = /^[0-9a-f]{12}$/
 /** A 鼓的风格 template id. */
 const DRUM_STYLE = /^[A-Za-z0-9_-]{1,40}$/
 
@@ -151,6 +153,13 @@ export function parseUpdateSong(
     const c = body.comboId
     if (c !== null && (typeof c !== 'string' || !COMBO_ID.test(c))) return { ok: false, error: '组合乐队谱编号不对。' }
     out.comboId = c as string | null
+  }
+
+  if (body.uploadId !== undefined) {
+    const u = body.uploadId
+    if (u !== null && (typeof u !== 'string' || !UPLOAD_ID.test(u)))
+      return { ok: false, error: '上传的谱的编号不对。' }
+    out.uploadId = u as string | null
   }
 
   if (body.status !== undefined) {
@@ -301,6 +310,7 @@ function sanitizeSongs(raw: unknown, inRoot: InRoot): BandSong[] {
     out.push({
       // Rows saved before combos have no comboId: treat as null.
       comboId: typeof rec.comboId === 'string' && COMBO_ID.test(rec.comboId) ? rec.comboId : null,
+      uploadId: typeof rec.uploadId === 'string' && UPLOAD_ID.test(rec.uploadId) ? rec.uploadId : null,
       id: rec.id,
       path: p,
       title: typeof rec.title === 'string' ? rec.title : '',
@@ -438,6 +448,7 @@ export class BandStore {
         note: '',
         rehearsalSpeedPct: null,
         comboId: null,
+        uploadId: null,
         comments: [],
         addedBy: userId,
         addedAt: now,
@@ -460,6 +471,7 @@ export class BandStore {
         note: body.note ?? old.note,
         rehearsalSpeedPct: body.rehearsalSpeedPct !== undefined ? body.rehearsalSpeedPct : old.rehearsalSpeedPct,
         comboId: body.comboId !== undefined ? body.comboId : (old.comboId ?? null),
+        uploadId: body.uploadId !== undefined ? body.uploadId : (old.uploadId ?? null),
         fill: body.fill ?? old.fill,
         updatedAt: now,
       }

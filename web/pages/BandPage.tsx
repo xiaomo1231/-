@@ -8,6 +8,7 @@ import {
   type DailyMemberProgress,
   type MemberProgress,
   type SongStatus,
+  type UploadSong,
   type UserInfo,
 } from '../lib/api'
 import {
@@ -19,13 +20,13 @@ import {
   updateSong,
   useBand,
 } from '../lib/band'
-import { cx } from '../lib/classes'
+import { buttonClass, cx } from '../lib/classes'
 import { todayNumber } from '../lib/daily'
 import { useRehearsal } from '../lib/rehearsal'
 import { openInRehearsal } from '../lib/rehearsalNav'
 import { canBrowseLibrary, INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { fmtDuration } from '../lib/practice'
-import { hrefBandSong, hrefEnsembles } from '../lib/route'
+import { hrefBandSong, hrefEnsembles, hrefUpload } from '../lib/route'
 import { FormatBadge, Notice, PageBar, Seg, Staff } from '../components/ui'
 import { Link } from '../components/Link'
 
@@ -281,6 +282,24 @@ export function BandPage() {
             })}
           </ol>
         )}
+      </section>
+
+      {/* 自己上传的谱: a new uploaded song, and uploads not on the setlist yet. */}
+      <section aria-labelledby="band-upload" className="max-w-[640px] pt-10">
+        <h2 id="band-upload" className="label m-0">
+          自己的谱
+        </h2>
+        <div className="pt-3">
+          <Link href={hrefUpload()} className={buttonClass()}>
+            新建歌曲（上传自己的谱）
+          </Link>
+        </div>
+        <p className="m-0 pt-2 text-xs text-muted-foreground">
+          谱库里的谱都不合适时，自己上传吉他、贝斯、鼓等各个声部的谱
+        </p>
+        <UnlistedUploads
+          used={new Set(state.songs.flatMap((s) => (s.uploadId ? [s.uploadId] : [])))}
+        />
       </section>
 
       {/* Picking songs needs the library; members who only see the band cannot search it. */}
@@ -706,6 +725,50 @@ function SetlistRow({
         </div>
       </div>
     </li>
+  )
+}
+
+/** Uploaded songs that no band song uses yet (hidden when there are none). */
+function UnlistedUploads({ used }: { used: Set<string> }) {
+  const [list, setList] = useState<UploadSong[]>([])
+
+  useEffect(() => {
+    let alive = true
+    api.uploads().then(
+      (all) => {
+        if (alive) setList(all)
+      },
+      () => undefined,
+    )
+    return () => {
+      alive = false
+    }
+  }, [])
+
+  const unlisted = list.filter((u) => !used.has(u.id))
+  if (unlisted.length === 0) return null
+  return (
+    <div className="pt-6">
+      <h3 className="label m-0">自己上传、还没加入歌单的歌</h3>
+      <ul className="m-0 mt-2.5 list-none divide-y divide-border border-y border-border p-0">
+        {unlisted.map((u) => (
+          <li key={u.id}>
+            <Link
+              href={hrefUpload({ id: u.id })}
+              className="flex min-h-11 items-center gap-3 py-2 text-sm hover:text-primary"
+            >
+              <span className="min-w-0 flex-1 truncate font-medium">{u.title || '未命名的歌'}</span>
+              {u.artist && (
+                <span className="shrink-0 text-xs text-muted-foreground">{u.artist}</span>
+              )}
+              <span className="mono shrink-0 text-xs text-muted-foreground">
+                {u.files.length} 个文件
+              </span>
+            </Link>
+          </li>
+        ))}
+      </ul>
+    </div>
   )
 }
 
