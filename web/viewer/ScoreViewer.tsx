@@ -64,6 +64,7 @@ import {
   type TrainerConfig,
 } from './practiceEngine'
 import { availableSoundFonts, soundFontUrl, type SoundFontId } from './soundFonts'
+import { fontGain, playedProgram } from './fontGain'
 import { hasFretboard, notesFromBeats, tuningLabels, type FretNote } from './fretboardNotes'
 import { Fretboard } from './Fretboard'
 import { Remote, useStar, type PopKind } from './Remote'
@@ -120,7 +121,12 @@ function syncLoop(a: AlphaTabApi, loop: boolean, hasSelection: boolean, manual: 
 }
 
 /** Highlights bars [first, last] (1-based) of the shown track, as if the student had dragged them. */
-function highlightBars(a: AlphaTabApi, s: model.Score, track: number, bars: [number, number]): void {
+function highlightBars(
+  a: AlphaTabApi,
+  s: model.Score,
+  track: number,
+  bars: [number, number],
+): void {
   const staff = s.tracks[track]?.staves[0]
   const first = staff?.bars[bars[0] - 1]?.voices[0]?.beats[0]
   const lastVoice = staff?.bars[bars[1] - 1]?.voices[0]
@@ -145,6 +151,8 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
   const [ready, setReady] = useState(false)
   const [soundFailed, setSoundFailed] = useState(false)
   const [soundPct, setSoundPct] = useState(0)
+  /** The sound font the player was built with (its loudness is balanced per track). */
+  const [activeFont, setActiveFont] = useState<SoundFontId>('basic')
   const [playing, setPlaying] = useState(false)
   const [rendering, setRendering] = useState(false)
   const [speedPct, setSpeedPct] = useState(100)
@@ -378,6 +386,7 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
         setSoundFonts(fonts)
         const cur = live.current
         const font: SoundFontId = fonts.has(cur.prefs.soundFont) ? cur.prefs.soundFont : 'basic'
+        setActiveFont(font)
         // A saved drum part: the file plus a drum track built from it, written out as a GP
         // file and loaded like any other (alphaTab lays the sheet out in a worker, which needs
         // a score that went through its importer). The file in the library is never changed.
@@ -396,7 +405,8 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           }
           const base = await load(recipe.base, recipe.baseUnrollRepeats)
           const parts = []
-          for (const pt of recipe.parts) parts.push({ ...pt, score: await load(pt.path, pt.unrollRepeats) })
+          for (const pt of recipe.parts)
+            parts.push({ ...pt, score: await load(pt.path, pt.unrollRepeats) })
           if (disposed) return
           const out = combine(at, base, parts, { keepBaseTracks: [] })
           fileBytes = exportCombined(at, out.score)
@@ -473,6 +483,17 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
           const std = stdTrack !== null && stdTrack < s.tracks.length ? stdTrack : null
           setDrums({ part: added !== null ? savedDrums : null, added, original, std })
           if (showDrumsRef.current && (added ?? original) !== null) setTrack((added ?? original)!)
+          // Instruments the font cannot play are swapped before the player reads the score.
+          for (const t of s.tracks) {
+            t.playbackInfo.program = playedProgram(font, t.playbackInfo.program)
+            for (const st of t.staves)
+              for (const b of st.bars)
+                for (const v of b.voices)
+                  for (const bt of v.beats)
+                    for (const au of bt.automations)
+                      if (au.type === at.model.AutomationType.Instrument)
+                        au.value = playedProgram(font, au.value)
+          }
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
           setVolumes((v) => (again && v.length === s.tracks.length ? v : s.tracks.map(() => 100)))
@@ -500,12 +521,14 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
             if (r) {
               if (bandSpeedRef.current === null) setSpeedPct(r.speedPct)
               setMute(new Set(r.muted.filter((i) => i < s.tracks.length)))
-              const bars =
-                r.loopBars && r.loopBars[1] <= s.masterBars.length ? r.loopBars : null
+              const bars = r.loopBars && r.loopBars[1] <= s.masterBars.length ? r.loopBars : null
               if (bars && rendered) highlightBars(a, s, live.current.track, bars)
               else pendingBars.current = bars
               const parts = [`${r.speedPct}%`]
-              if (bars) parts.push(bars[0] === bars[1] ? `第 ${bars[0]} 小节` : `第 ${bars[0]}–${bars[1]} 小节`)
+              if (bars)
+                parts.push(
+                  bars[0] === bars[1] ? `第 ${bars[0]} 小节` : `第 ${bars[0]}–${bars[1]} 小节`,
+                )
               if (r.speedPct !== 100 || bars || r.muted.length) {
                 setRestoreNote(`已恢复上次的练习：${parts.join(' · ')}`)
                 window.setTimeout(() => setRestoreNote(''), 4000)
@@ -750,8 +773,14 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
   useEffect(() => {
     const a = api.current
     if (!a || !score) return
-    score.tracks.forEach((t, i) => a.changeTrackVolume([t], (volumes[i] ?? 100) / 100))
-  }, [volumes, score])
+    // The user's level times the font's balance for that instrument (see fontGain).
+    score.tracks.forEach((t, i) =>
+      a.changeTrackVolume(
+        [t],
+        ((volumes[i] ?? 100) / 100) * fontGain(activeFont, t.playbackInfo.program, t.isPercussion),
+      ),
+    )
+  }, [volumes, score, activeFont])
 
   // Loop: the range, and how passes follow each other.
   const manual = isManualLoop(prefs.trainer)
@@ -954,7 +983,10 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
     wasGrid.current = gridShown
   }, [gridShown])
   const showFretboard =
-    prefs.fretboard && shownTrack !== undefined && hasFretboard(shownTrack) && !isVocalTrack(shownTrack)
+    prefs.fretboard &&
+    shownTrack !== undefined &&
+    hasFretboard(shownTrack) &&
+    !isVocalTrack(shownTrack)
   const status =
     loop && loopState
       ? loopState.done
@@ -967,14 +999,11 @@ export function ScoreViewer({ path, title, artist, pages, band, showDrums, combo
       <style>{SHEET_CSS}</style>
       {bandSong && (
         <div className="gutter mx-auto mb-2 w-full max-w-[1180px]">
-          <LiveBar
-            live={together}
-            members={bandState?.members ?? []}
-            myId={me?.id ?? null}
-          />
+          <LiveBar live={together} members={bandState?.members ?? []} myId={me?.id ?? null} />
           {myTrack !== null && (
             <p className="mt-1 text-xs text-muted-foreground">
-              你在这首歌里弹「{trackNames[myTrack] ?? `音轨 ${myTrack + 1}`}」，已自动显示你的声部并静音它，其他声部照常伴奏。
+              你在这首歌里弹「{trackNames[myTrack] ?? `音轨 ${myTrack + 1}`}
+              」，已自动显示你的声部并静音它，其他声部照常伴奏。
             </p>
           )}
         </div>

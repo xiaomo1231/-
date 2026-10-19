@@ -298,3 +298,19 @@ describe('scoreLibrary search', () => {
     expect(r.songs).toHaveLength(0)
   })
 })
+
+describe('untitled files (未识别歌名)', () => {
+  const lib = buildLibrary(
+    [
+      ['1-华语/男歌手/张震岳/未识别歌名/未识别歌名.gp4', 100],
+      ['1-华语/男歌手/张震岳/未识别歌名/未识别歌名 (2).gp4', 100],
+      ['1-华语/男歌手/张震岳/爱我别走/爱我别走.gp5', 100],
+    ],
+    tools,
+  )
+  it('keeps them out of search and never titles a song 未识别歌名', () => {
+    const r = search(lib, buildSearchIndex(lib, tools), '未识别', tools)
+    expect(r.songs).toHaveLength(0)
+    expect([...lib.songs.values()].flat().some((s) => s.title === '未识别歌名')).toBe(false)
+  })
+})

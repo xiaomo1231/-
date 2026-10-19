@@ -58,8 +58,12 @@ export function formatOf(ext: string): ScoreFormat {
 
 /** Folders the library leaves out (audio and video collections). */
 const SKIP_CATEGORY = /^\d+-非谱文件$/
-/** Categories whose second level is already the artist. */
-const FLAT_CATEGORY = /^(指弹演奏家|网友原创)$/
+/** Categories whose second level is already the artist (动漫音乐: the work, e.g. BanG Dream!). */
+const FLAT_CATEGORY = /^(指弹演奏家|网友原创|动漫音乐)$/
+/** Folders that hold no scores: amp / effect presets and their screenshots (音色). */
+const SKIP_FOLDER = /^(音色|音色预设)$/
+/** The organiser's folder for files whose names give no song title. */
+const NO_TITLE_FOLDER = '未识别歌名'
 /** A level of letter folders: the artists are one level further down. */
 const LETTER_FOLDER = /^([A-Za-z]|0-9与符号)$/
 
@@ -75,6 +79,7 @@ function nounOf(category: string, group: string): string {
   if (/无法确认的文件夹/.test(group)) return '文件夹'
   if (/合集|首$|练习曲|连复段/.test(group) || /未识别歌手/.test(category)) return '合集'
   if (/网友原创/.test(category)) return '作者'
+  if (/动漫音乐/.test(category)) return '作品'
   if (/指弹演奏家/.test(category)) return '演奏家'
   return '歌手'
 }
@@ -343,6 +348,7 @@ export function parseName(
   const unknown =
     !key ||
     NOT_A_SONG.test(s) ||
+    s.trim() === NO_TITLE_FOLDER ||
     /^\d{5,}$/.test(key) ||
     /^(img|dsc|scan|image|微信图片|截图|屏幕截图)\d*/.test(key) ||
     /^\d{4}\d{2}\d{2}/.test(key) ||
@@ -395,6 +401,7 @@ export function locate(
   if (parts.length === 0) return null
   const category = parts[0]!
   if (SKIP_CATEGORY.test(category)) return null
+  if (parts.some((p) => SKIP_FOLDER.test(p))) return null
   if (FLAT_CATEGORY.test(stripOrder(category))) {
     const artist = parts[1] ?? ''
     return {
@@ -628,6 +635,7 @@ function buildSongs(
   tools: TextTools,
 ): ScoreSong[] {
   const names = [artistName, ...frequentPrefixes(entries)]
+  const work = /^\d+-动漫音乐\//.test(artistId)
   // Image pages first: same folder + same name without the page number = one score.
   const versions = new Map<
     string,
@@ -645,8 +653,15 @@ function buildSongs(
     if (title) s.titles.push(title)
   }
   for (const e of entries) {
-    const songFolder = e.inner.length ? e.inner[e.inner.length - 1]! : null
-    const parsed = parseName(e.base, e.file.format, names, collection ? null : songFolder, tools)
+    // The song is the folder right below the artist (deeper ones are parts / sources: 贝斯/GTP…).
+    const songFolder = e.inner.length ? e.inner[0]! : null
+    const hint = songFolder === NO_TITLE_FOLDER ? null : songFolder
+    const parsed = parseName(e.base, e.file.format, names, collection ? null : hint, tools)
+    // 动漫音乐: <作品>/<歌名>/… — the folder is the song whatever the file is called ("Final", "教学版").
+    if (work && hint && !parsed.unknown) {
+      const folder = parseName(hint, 'other', names, null, tools)
+      if (!folder.unknown && folder.title) parsed.title = folder.title
+    }
     const folderTag = collection && songFolder ? [songFolder] : []
     if (e.file.format === 'image') {
       const dir = e.file.path.slice(0, e.file.path.lastIndexOf('/'))
