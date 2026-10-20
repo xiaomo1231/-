@@ -146,7 +146,11 @@ export function parseNewUploadSong(body: unknown): ParseResult<NewUploadSongBody
   const band = body.bandSongId ?? null
   if (band !== null && (typeof band !== 'string' || !band || codePoints(band) > MAX_BAND_ID_CHARS))
     return { ok: false, error: '所选的歌曲不对，请刷新后再试。' }
-  return { ok: true, value: { title, artist: artist.trim(), bandSongId: band } }
+  if (band !== null && body.personal === true) return { ok: false, error: '我的谱子不能挂到乐队的歌上。' }
+  return {
+    ok: true,
+    value: { title, artist: artist.trim(), bandSongId: band, ...(body.personal === true ? { personal: true } : {}) },
+  }
 }
 
 /** Validates the query of POST /api/uploads/file (the body is the raw file). */
@@ -252,8 +256,8 @@ function sanitizeSong(raw: unknown, uploadsDir: string, defaultBandId: string): 
   }
   return {
     id: raw.id,
-    // Songs uploaded before several bands belong to the first band.
-    bandId: typeof raw.bandId === 'string' && raw.bandId ? raw.bandId : defaultBandId,
+    // Songs uploaded before several bands belong to the first band; '' is a personal song.
+    bandId: typeof raw.bandId === 'string' ? raw.bandId : defaultBandId,
     title: typeof raw.title === 'string' ? cut(raw.title, MAX_TITLE_CHARS) : '',
     artist: typeof raw.artist === 'string' ? cut(raw.artist, MAX_ARTIST_CHARS) : '',
     files,
@@ -362,6 +366,24 @@ export class UploadStore {
     let total = 0
     for (const s of this.songs) if (s.bandId === bandId) for (const f of s.files) total += f.size
     return total
+  }
+
+  /** Bytes of one account's personal songs (我的谱子). */
+  bytesOfPersonal(userId: string): number {
+    let total = 0
+    for (const s of this.songs) if (s.bandId === '' && s.createdBy === userId) for (const f of s.files) total += f.size
+    return total
+  }
+
+  /** An account was deleted: its personal songs go too. */
+  removePersonal(userId: string): Promise<void> {
+    return this.queue(async () => {
+      const gone = this.songs.filter((s) => s.bandId === '' && s.createdBy === userId)
+      if (gone.length === 0) return
+      await this.commit(this.songs.filter((s) => !gone.includes(s)))
+      for (const s of gone)
+        await fs.promises.rm(this.songDir(s.id), { recursive: true, force: true }).catch(() => {})
+    })
   }
 
   /** A band was deleted: its songs and their folders go too. */

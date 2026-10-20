@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import { api, errorText } from '../lib/api'
 import { buttonClass, cx } from '../lib/classes'
 import { MINE_KIND_LABEL, mineRows, useMine, type MineKind, type MineRow } from '../lib/mine'
+import { hrefUpload } from '../lib/route'
 import { useRestoreScroll } from '../lib/scrollMemory'
 import { Link } from '../components/Link'
 import { MiddleText } from '../components/MiddleText'
@@ -12,7 +13,7 @@ const fmtDate = (ms: number) =>
 
 const SECTIONS: ReadonlyArray<{ kind: MineKind; empty: string }> = [
   { kind: 'arrangement', empty: '在看谱页的「音轨」里换乐器、调音量，然后点「保存为改编谱」。' },
-  { kind: 'upload', empty: '在乐队页「新建歌曲」上传的谱会出现在这里。' },
+  { kind: 'upload', empty: '点上面的「上传谱子」，或在乐队页「新建歌曲」上传的谱会出现在这里。' },
   { kind: 'combo', empty: '在看谱页「组合乐队谱」里从不同版本挑声部，保存后会出现在这里。' },
 ]
 
@@ -44,6 +45,7 @@ export function MinePage() {
           </Notice>
         )}
         {!data && !error && <p className="text-sm text-muted-foreground">正在读取…</p>}
+        {data && <UploadBox storage={data.storage} />}
         {data &&
           SECTIONS.map((s) => {
             const list = rows.filter((r) => r.kind === s.kind)
@@ -67,6 +69,48 @@ export function MinePage() {
           })}
       </div>
     </>
+  )
+}
+
+const fmtMB = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`
+
+/** 上传谱子: a song of 我的谱子 (only this account sees it), and how much space is left. */
+function UploadBox({ storage }: { storage: { used: number; limit: number | null } }) {
+  const full = storage.limit !== null && storage.used >= storage.limit
+  const pct = storage.limit === null ? 0 : Math.min(100, Math.round((storage.used / storage.limit) * 100))
+  return (
+    <section aria-label="上传谱子" className="rounded-lg border border-border p-4">
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="m-0 font-bold">上传自己的谱子</p>
+          <p className="m-0 mt-1 text-xs leading-relaxed text-muted-foreground">
+            GP、MusicXML、PDF、图片都可以，只有你自己看得到；能播放的谱也能换乐器、存成改编谱。
+          </p>
+        </div>
+        <Link
+          href={hrefUpload({ personal: true })}
+          aria-disabled={full}
+          className={cx(buttonClass('primary'), 'shrink-0', full && 'pointer-events-none opacity-50')}
+        >
+          上传谱子
+        </Link>
+      </div>
+      <div className="mt-3 space-y-1.5">
+        <p className="m-0 text-xs text-muted-foreground">
+          {storage.limit === null
+            ? `已用 ${fmtMB(storage.used)}（管理员不限）`
+            : `已用 ${fmtMB(storage.used)} / ${fmtMB(storage.limit)}${full ? '，空间用完了，先删掉一些再上传' : ''}`}
+        </p>
+        {storage.limit !== null && (
+          <div className="h-1.5 w-full max-w-[320px] overflow-hidden rounded-full bg-border" aria-hidden>
+            <div
+              className={cx('h-full origin-left rounded-full', pct >= 90 ? 'bg-destructive' : 'bg-primary')}
+              style={{ transform: `scaleX(${pct / 100})` }}
+            />
+          </div>
+        )}
+      </div>
+    </section>
   )
 }
 

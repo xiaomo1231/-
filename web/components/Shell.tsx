@@ -434,7 +434,7 @@ function renderRoute(route: Route, libraryHidden: boolean) {
     case 'bandSong':
       return <BandSongPage key={route.id} id={route.id} />
     case 'upload':
-      return <UploadSongPage id={route.id} band={route.band} />
+      return <UploadSongPage id={route.id} band={route.band} personal={route.personal} />
     case 'ensembles':
       return <EnsemblesPage q={route.q} need={route.need} />
     case 'account':

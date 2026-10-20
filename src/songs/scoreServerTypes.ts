@@ -190,7 +190,7 @@ export interface UploadFile {
 /** A song made from uploaded files: a new song, or the own files of a band song from the library. */
 export interface UploadSong {
   id: string
-  /** The band it belongs to (only that band's members see it). */
+  /** The band it belongs to (only that band's members see it); '' = 我的谱子, only its uploader's. */
   bandId: string
   title: string
   artist: string
@@ -206,6 +206,8 @@ export interface NewUploadSongBody {
   artist: string
   /** Attach to this band song (its own files) instead of making a new song. */
   bandSongId: string | null
+  /** 我的谱子: the uploader's own song, in no band (counts against the personal space). */
+  personal?: boolean
 }
 
 /** POST /api/uploads/file?id=&label=&name= with the raw file as body. */
@@ -813,4 +815,6 @@ export interface MyScores {
   uploads: UploadSong[]
   /** 组合乐队谱 I made. */
   combos: ComboRecipe[]
+  /** The personal upload space (我的谱子 uploads); limit null = unlimited (admins). */
+  storage: { used: number; limit: number | null }
 }

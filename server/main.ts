@@ -483,6 +483,24 @@ function bandWithSong(me: StoredUser, songId: string): BandCtx | null {
   return null
 }
 
+/** 我的谱子: each account's own upload space (admins have none). */
+export const PERSONAL_STORAGE_BYTES = 50 * 1024 * 1024
+const personalLimit = (me: StoredUser): number | null => (me.role === 'admin' ? null : PERSONAL_STORAGE_BYTES)
+
+/** Refuses a personal upload that would pass the account's space. */
+function checkPersonal(me: StoredUser, adding: number): void {
+  const limit = personalLimit(me)
+  if (limit === null) return
+  const used = uploads.bytesOfPersonal(me.id)
+  if (used + adding > limit) {
+    const mb = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`
+    throw new HttpError(
+      413,
+      `你的上传空间不够了（已用 ${mb(used)}，每人最多 ${mb(limit)}）。请先删掉一些自己上传的谱。`,
+    )
+  }
+}
+
 /** Bytes a band keeps on this computer (uploaded scores and recordings). */
 const storageOf = (bandId: string): number => uploads.bytesOf(bandId) + recordings.bytesOf(bandId)
 
@@ -733,6 +751,7 @@ async function handleUsers(
   await invites.forgetUser(id)
   await daily.dropUser(id)
   await arrangements.dropUser(id)
+  await uploads.removePersonal(id)
   await favoriteQueue(() => persistFavorites(id, null))
   await practiceQueue(async () => {
     const next = new Map(practice)
@@ -939,11 +958,13 @@ async function handleUploads(
   const mine = myBandIds(me)
   const find = (id: unknown) => {
     const u = uploads.get(typeof id === 'string' ? id : '')
-    if (!u || !mine.includes(u.bandId)) throw new HttpError(404, '找不到这首上传的歌。')
+    const open = u && (u.bandId === '' ? u.createdBy === me.id : mine.includes(u.bandId))
+    if (!u || !open) throw new HttpError(404, '找不到这首上传的歌。')
     return u
   }
-  /** The band an uploaded song belongs to. */
-  const ctxOf = (u: UploadSong): BandCtx => {
+  /** The band an uploaded song belongs to (null: a personal song, 我的谱子). */
+  const ctxOf = (u: UploadSong): BandCtx | null => {
+    if (u.bandId === '') return null
     const meta = bands.get(u.bandId)
     const store = bands.store(u.bandId)
     if (!meta || !store) throw new HttpError(404, '这首歌的乐队已经不存在了。')
@@ -952,6 +973,8 @@ async function handleUploads(
   try {
     if (p === '/api/uploads') {
       if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      if (url.searchParams.get('personal') === '1')
+        return sendJson(res, 200, uploads.list('').filter((u) => u.createdBy === me.id))
       return sendJson(res, 200, uploads.list(bandOf(req, url, me).id))
     }
     if (p === '/api/uploads/get') {
@@ -962,27 +985,34 @@ async function handleUploads(
     if (p === '/api/uploads/file') {
       const q = orBadRequest(parseUploadFileQuery(url))
       const ctx = ctxOf(find(q.id))
+      // A band song counts against the band's space; a personal one against the account's.
+      const check = (n: number) => (ctx ? checkStorage(ctx, n) : checkPersonal(me, n))
       refuseLargeBody(req, MAX_UPLOAD_BYTES, `文件太大了，每个文件最多 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB。`)
       const declared = Number(req.headers['content-length'] ?? 0)
       if (Number.isFinite(declared) && declared > 0) {
         try {
-          checkStorage(ctx, declared)
+          check(declared)
         } catch (err) {
           req.resume()
           throw err
         }
       }
       const bytes = await readUploadFileBody(req, MAX_UPLOAD_BYTES)
-      checkStorage(ctx, bytes.length)
+      check(bytes.length)
       const song = await uploads.addFile(q.id, { label: q.label, name: q.name }, bytes, me.id, now)
       log(`上传自己的谱：${song.title}（${q.label}）`)
-      bandChanged(ctx.id)
+      if (ctx) bandChanged(ctx.id)
       return sendJson(res, 200, song)
     }
     const body = await readJsonBody(req)
     if (p === '/api/uploads/create') {
-      const ctx = bandOf(req, url, me)
       const b = orBadRequest(parseNewUploadSong(body))
+      if (b.personal) {
+        const mineCount = uploads.list('').filter((u) => u.createdBy === me.id).length
+        if (mineCount >= 200) throw new HttpError(409, '我的谱子里上传的歌太多了，请先删掉一些。')
+        return sendJson(res, 200, await uploads.create({ title: b.title, artist: b.artist, bandId: '' }, me.id, now))
+      }
+      const ctx = bandOf(req, url, me)
       const owner = b.bandSongId ? ctx.store.get(b.bandSongId) : null
       if (b.bandSongId && !owner) throw new HttpError(404, '这首歌不在乐队歌单里。')
       if (owner?.uploadId && uploads.get(owner.uploadId))
@@ -1010,17 +1040,17 @@ async function handleUploads(
     } else if (p === '/api/uploads/file/remove') {
       const fileId = typeof body.fileId === 'string' ? body.fileId : ''
       const file = u.files.find((f) => f.id === fileId)
-      if (file && ctx.store.songs().some((b) => b.path === file.path))
+      if (file && ctx && ctx.store.songs().some((b) => b.path === file.path))
         throw new HttpError(409, '这个文件是乐队歌单里这首歌的主谱，不能删除。')
       out = await uploads.removeFile(u.id, fileId, now)
     } else if (p === '/api/uploads/remove') {
-      if (ctx.store.songs().some((b) => b.uploadId === u.id))
+      if (ctx && ctx.store.songs().some((b) => b.uploadId === u.id))
         throw new HttpError(409, '乐队歌单里还有歌在用这些文件，请先从歌单里删除那首歌。')
       await uploads.remove(u.id)
-      bandChanged(ctx.id)
+      if (ctx) bandChanged(ctx.id)
       return sendJson(res, 200, { ok: true })
     } else return sendJson(res, 404, { error: '找不到这个接口。' })
-    bandChanged(ctx.id)
+    if (ctx) bandChanged(ctx.id)
     return sendJson(res, 200, out)
   } catch (err) {
     if (err instanceof UploadError) throw new HttpError(err.status, err.message)
@@ -1369,8 +1399,11 @@ async function handleArrangements(
       const mine = myBandIds(me)
       const out: MyScores = {
         arrangements: arrangements.listOf(me.id).filter((a) => canOpen(me, a.path)),
-        uploads: uploads.list().filter((u) => u.createdBy === me.id && mine.includes(u.bandId)),
+        uploads: uploads
+          .list()
+          .filter((u) => u.createdBy === me.id && (u.bandId === '' || mine.includes(u.bandId))),
         combos: combos.byUser(me.id).filter((c) => canOpen(me, c.base)),
+        storage: { used: uploads.bytesOfPersonal(me.id), limit: personalLimit(me) },
       }
       return sendJson(res, 200, out)
     }
@@ -1640,7 +1673,8 @@ async function handleSongs(
       // Sheets of an uploaded song belong to its band.
       if (item.songKey.startsWith('upload#')) {
         const u = uploads.get(item.songKey.slice('upload#'.length))
-        if (!u || !myBandIds(me).includes(u.bandId)) return sendJson(res, 404, { error: '找不到这个文件。' })
+        const open = u && (u.bandId === '' ? u.createdBy === me.id : myBandIds(me).includes(u.bandId))
+        if (!open) return sendJson(res, 404, { error: '找不到这个文件。' })
       }
       const file = sheets.filePath(item)
       const st = await statOr404(file)
@@ -1768,7 +1802,9 @@ function canOpen(me: StoredUser, rel: string): boolean {
   const mine = myBandIds(me)
   if (isUploadPath(rel)) {
     const hit = uploads.fileOf(rel)
-    return hit !== null && mine.includes(hit.song.bandId)
+    if (!hit) return false
+    // 我的谱子: only its uploader.
+    return hit.song.bandId === '' ? hit.song.createdBy === me.id : mine.includes(hit.song.bandId)
   }
   if (canBrowse(me) || isDailyPath(dailyProgram.category, rel)) return true
   return mine.some((id) =>

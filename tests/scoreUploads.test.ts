@@ -415,3 +415,32 @@ describe('UploadStore', () => {
     expect(store.list()).toEqual([])
   })
 })
+
+describe('personal songs (我的谱子)', () => {
+  it('keep an empty band through a reload and count only their uploader\'s bytes', async () => {
+    const store = await UploadStore.load(dir, 'firstband0001')
+    const mine = await store.create({ title: '我的', artist: '', bandId: '' }, 'u1', NOW)
+    await store.addFile(mine.id, { label: '吉他', name: 'a.gp' }, gp(), 'u1', NOW)
+    const band = await store.create({ title: '乐队的', artist: '', bandId: 'b1' }, 'u1', NOW)
+    await store.addFile(band.id, { label: '吉他', name: 'b.gp' }, gp(), 'u1', NOW)
+    expect(store.bytesOfPersonal('u1')).toBe(gp().length)
+    expect(store.bytesOfPersonal('u2')).toBe(0)
+    const again = await UploadStore.load(dir, 'firstband0001')
+    expect(again.get(mine.id)?.bandId).toBe('')
+    expect(again.get(band.id)?.bandId).toBe('b1')
+  })
+
+  it('go with a deleted account', async () => {
+    const store = await UploadStore.load(dir)
+    const mine = await store.create({ title: '我的', artist: '', bandId: '' }, 'u1', NOW)
+    const other = await store.create({ title: '别人的', artist: '', bandId: '' }, 'u2', NOW)
+    await store.removePersonal('u1')
+    expect(store.get(mine.id)).toBeUndefined()
+    expect(store.get(other.id)).toBeDefined()
+  })
+
+  it('cannot be attached to a band song', () => {
+    expect(parseNewUploadSong({ title: 'x', personal: true }).ok).toBe(true)
+    expect(parseNewUploadSong({ title: 'x', personal: true, bandSongId: 's1' }).ok).toBe(false)
+  })
+})

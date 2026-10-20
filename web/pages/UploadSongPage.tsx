@@ -4,7 +4,7 @@ import { buttonClass, cx, SELECT } from '../lib/classes'
 import { useBand, reloadBand } from '../lib/band'
 import { hrefCombine } from '../lib/combos'
 import { formatSize } from '../lib/format'
-import { HREF_BAND, hrefBandSong, hrefUpload, hrefViewer, navigate } from '../lib/route'
+import { HREF_BAND, HREF_MINE, hrefBandSong, hrefUpload, hrefViewer, navigate } from '../lib/route'
 import { Link } from '../components/Link'
 import { Notice, PageBar } from '../components/ui'
 
@@ -40,14 +40,69 @@ function guessLabel(name: string): string {
   return '其他'
 }
 
-/** 上传自己的谱 / 新建歌曲: a new uploaded song, or the own files of a band song (band = its id). */
-export function UploadSongPage({ id, band }: { id: string; band: string }) {
-  if (id) return <UploadEditor key={id} id={id} />
-  return <NewUploadForm band={band} />
+/**
+ * 上传自己的谱 / 新建歌曲: a new uploaded song, or the own files of a band song (band = its
+ * id); `personal`: a song of 我的谱子, in no band and in the account's own upload space.
+ */
+export function UploadSongPage({
+  id,
+  band,
+  personal,
+}: {
+  id: string
+  band: string
+  personal: boolean
+}) {
+  if (id) return <UploadEditor key={id} id={id} personal={personal} />
+  return <NewUploadForm band={band} personal={personal} />
+}
+
+const fmtMB = (n: number) => `${(n / 1024 / 1024).toFixed(1)} MB`
+
+/** 我的谱子: how much of the account's own upload space is used (re-read when `version` changes). */
+function PersonalSpace({ version }: { version: number }) {
+  const [storage, setStorage] = useState<{ used: number; limit: number | null } | null>(null)
+  useEffect(() => {
+    const ac = new AbortController()
+    api.mine(ac.signal).then(
+      (m) => {
+        if (!ac.signal.aborted) setStorage(m.storage)
+      },
+      () => undefined,
+    )
+    return () => ac.abort()
+  }, [version])
+  if (!storage) return null
+  if (storage.limit === null)
+    return (
+      <p className="m-0 text-xs text-muted-foreground">
+        我的上传空间：已用 {fmtMB(storage.used)}（管理员不限）
+      </p>
+    )
+  const pct = Math.min(100, Math.round((storage.used / storage.limit) * 100))
+  return (
+    <div className="space-y-1.5">
+      <p className="m-0 text-xs text-muted-foreground">
+        我的上传空间：已用 {fmtMB(storage.used)} / {fmtMB(storage.limit)}
+      </p>
+      <div
+        className="h-1.5 w-full max-w-[320px] overflow-hidden rounded-full bg-border"
+        aria-hidden
+      >
+        <div
+          className={cx(
+            'h-full origin-left rounded-full',
+            pct >= 90 ? 'bg-destructive' : 'bg-primary',
+          )}
+          style={{ transform: `scaleX(${pct / 100})` }}
+        />
+      </div>
+    </div>
+  )
 }
 
 /** The form that creates an uploaded song (optionally as the own files of a band song). */
-function NewUploadForm({ band }: { band: string }) {
+function NewUploadForm({ band, personal }: { band: string; personal: boolean }) {
   const { state, error: bandError, reload } = useBand()
   const bandSong = band ? state?.songs.find((s) => s.id === band) : undefined
   const [title, setTitle] = useState('')
@@ -74,9 +129,10 @@ function NewUploadForm({ band }: { band: string }) {
       const song = await api.createUpload({
         title: t,
         artist: artist.trim(),
-        bandSongId: band || null,
+        bandSongId: personal ? null : band || null,
+        ...(personal ? { personal: true } : {}),
       })
-      navigate(hrefUpload({ id: song.id, band: band || undefined }))
+      navigate(hrefUpload({ id: song.id, band: band || undefined, personal }))
     } catch (err) {
       setNotice(errorText(err))
     } finally {
@@ -84,15 +140,31 @@ function NewUploadForm({ band }: { band: string }) {
     }
   }
 
-  const heading = band ? '上传自己的谱' : '新建歌曲'
-  const backFallback = band ? hrefBandSong(band) : HREF_BAND
+  const heading = personal ? '上传我的谱子' : band ? '上传自己的谱' : '新建歌曲'
+  const backFallback = personal ? HREF_MINE : band ? hrefBandSong(band) : HREF_BAND
 
   return (
     <>
-      <PageBar title={heading} fallback={backFallback} back={band ? '← 排练' : '← 乐队'} />
+      <PageBar
+        title={heading}
+        fallback={backFallback}
+        back={personal ? '← 我的谱子' : band ? '← 排练' : '← 乐队'}
+      />
 
       <div className="max-w-[640px] pt-6">
-        {band && state && !bandSong ? (
+        {personal ? (
+          <>
+            <p className="m-0 text-sm leading-relaxed text-muted-foreground">
+              上传自己的谱（GP、MusicXML、PDF、图片），只有你自己看得到，不放进谱库，也不进乐队。先填歌名，下一步选文件。
+            </p>
+            <div className="pt-3">
+              <PersonalSpace version={0} />
+            </div>
+          </>
+        ) : null}
+        {!personal && band && state && !bandSong ? (
+          <Notice tone="error">找不到这首歌，可能已从乐队里移除。</Notice>
+        ) : !personal && bandError && !state ? (
           <Notice tone="error">找不到这首歌，可能已从乐队里移除。</Notice>
         ) : bandError && !state ? (
           <>
@@ -107,11 +179,13 @@ function NewUploadForm({ band }: { band: string }) {
           </>
         ) : (
           <>
-            <p className="m-0 text-sm leading-relaxed text-muted-foreground">
-              {band
-                ? '这首歌的谱不好用？自己上传吉他、贝斯、鼓等各个声部的谱，上传的文件只保存在这台服务器上，不会放进谱库。'
-                : '觉得谱库里的谱都不合适？自己上传各个乐器的谱来建一首歌：比如吉他用一个 GP，贝斯用另一个 GP，鼓用 PDF。上传的文件只保存在这台服务器上，不会放进谱库。'}
-            </p>
+            {!personal && (
+              <p className="m-0 text-sm leading-relaxed text-muted-foreground">
+                {band
+                  ? '这首歌的谱不好用？自己上传吉他、贝斯、鼓等各个声部的谱，上传的文件只保存在这台服务器上，不会放进谱库。'
+                  : '觉得谱库里的谱都不合适？自己上传各个乐器的谱来建一首歌：比如吉他用一个 GP，贝斯用另一个 GP，鼓用 PDF。上传的文件只保存在这台服务器上，不会放进谱库。'}
+              </p>
+            )}
 
             <form onSubmit={create} className="space-y-4 pt-6">
               <div>
@@ -123,7 +197,7 @@ function NewUploadForm({ band }: { band: string }) {
                   value={title}
                   maxLength={120}
                   required
-                  autoFocus={!band}
+                  autoFocus={personal || !band}
                   onChange={(e) => setTitle(e.target.value)}
                   className={cx(INPUT, 'mt-2')}
                 />
@@ -158,9 +232,11 @@ function NewUploadForm({ band }: { band: string }) {
   )
 }
 
-/** The page of one uploaded song: names, its files, and its place in the band. */
-function UploadEditor({ id }: { id: string }) {
+/** The page of one uploaded song: names, its files, and its place in the band (or 我的谱子). */
+function UploadEditor({ id, personal: personalRoute }: { id: string; personal: boolean }) {
   const { state: band } = useBand()
+  /** Bumped after uploads and removals: the personal space is read again. */
+  const [spaceVersion, setSpaceVersion] = useState(0)
   const [song, setSong] = useState<UploadSong | null>(null)
   const [loadError, setLoadError] = useState<string | null>(null)
   const [tick, setTick] = useState(0)
@@ -211,7 +287,11 @@ function UploadEditor({ id }: { id: string }) {
   if (!song) {
     return (
       <>
-        <PageBar title="上传自己的谱" fallback={HREF_BAND} back="← 乐队" />
+        <PageBar
+          title="上传自己的谱"
+          fallback={personalRoute ? HREF_MINE : HREF_BAND}
+          back={personalRoute ? '← 我的谱子' : '← 乐队'}
+        />
         <div className="max-w-[640px] py-6">
           {loadError ? (
             <>
@@ -231,6 +311,10 @@ function UploadEditor({ id }: { id: string }) {
       </>
     )
   }
+
+  // 我的谱子: a song in no band, in the account's own space.
+  const personal = song.bandId === ''
+  const home = personal ? HREF_MINE : HREF_BAND
 
   const saveNames = () =>
     void run('names', () => api.updateUpload(song.id, titleDraft.trim(), artistDraft.trim()))
@@ -263,7 +347,11 @@ function UploadEditor({ id }: { id: string }) {
 
   const removeFile = (f: UploadFile) => {
     if (!window.confirm(`删除文件「${f.name}」？`)) return
-    void run(`rm:${f.id}`, () => api.removeUploadFile(song.id, f.id))
+    void run(`rm:${f.id}`, async () => {
+      const next = await api.removeUploadFile(song.id, f.id)
+      setSpaceVersion((v) => v + 1)
+      return next
+    })
   }
 
   const removeSong = () => {
@@ -272,7 +360,7 @@ function UploadEditor({ id }: { id: string }) {
     setNotice(null)
     api
       .removeUpload(song.id)
-      .then(() => navigate(HREF_BAND))
+      .then(() => navigate(home))
       .catch((e: unknown) => setNotice(errorText(e)))
       .finally(() => setBusy(null))
   }
@@ -305,18 +393,20 @@ function UploadEditor({ id }: { id: string }) {
     }
     setPending(failed)
     setUploadPos(null)
+    setSpaceVersion((v) => v + 1)
   }
 
   return (
     <>
       <PageBar
         title={song.title || '未命名的歌'}
-        subtitle={song.artist || undefined}
-        fallback={HREF_BAND}
-        back="← 乐队"
+        subtitle={song.artist || (personal ? '我的谱子' : undefined)}
+        fallback={home}
+        back={personal ? '← 我的谱子' : '← 乐队'}
       />
 
       <div className="max-w-[640px] space-y-8 pt-6">
+        {personal && <PersonalSpace version={spaceVersion} />}
         {/* names */}
         <section aria-labelledby="upload-names">
           <h2 id="upload-names" className="label m-0">
@@ -501,91 +591,102 @@ function UploadEditor({ id }: { id: string }) {
 
           <div className="pt-3">
             <Notice>
-              GP 和 MusicXML 能播放、能在排练里同步；PDF 和图片只能看。PDF 可以打开后用「转换成
-              GP（实验）」变成可以播放的谱。几个 GP
-              会自动组合成一份乐队谱（各声部按小节对齐，不齐的话可以在「组合乐队谱」里调整）。
+              {personal ? (
+                <>
+                  GP 和 MusicXML 能播放，打开后可以在「音轨」里换乐器、存成改编谱；PDF 和图片只能看。PDF
+                  可以打开后用「转换成 GP（实验）」变成可以播放的谱。每人共 50 MB。
+                </>
+              ) : (
+                <>
+                  GP 和 MusicXML 能播放、能在排练里同步；PDF 和图片只能看。PDF 可以打开后用「转换成
+                  GP（实验）」变成可以播放的谱。几个 GP
+                  会自动组合成一份乐队谱（各声部按小节对齐，不齐的话可以在「组合乐队谱」里调整）。
+                </>
+              )}
             </Notice>
           </div>
         </section>
 
-        {/* band */}
-        <section aria-labelledby="upload-band">
-          <h2 id="upload-band" className="label m-0">
-            乐队歌单
-          </h2>
-          <div className="space-y-3 pt-2.5">
-            {!band && <p className="m-0 text-sm text-muted-foreground">正在读取乐队…</p>}
+        {/* band (a song of 我的谱子 stays out of the bands) */}
+        {!personal && (
+          <section aria-labelledby="upload-band">
+            <h2 id="upload-band" className="label m-0">
+              乐队歌单
+            </h2>
+            <div className="space-y-3 pt-2.5">
+              {!band && <p className="m-0 text-sm text-muted-foreground">正在读取乐队…</p>}
 
-            {used && isOwnSong && (
-              <>
-                <p className="m-0 text-sm">已在乐队歌单里。</p>
-                <div className="flex flex-wrap gap-2">
-                  <Link href={hrefBandSong(used.id)} className={buttonClass('outline')}>
-                    去排练这首歌 →
-                  </Link>
-                </div>
-                {stale && (
-                  <div className="space-y-2">
-                    <p className="m-0 text-xs text-muted-foreground">
-                      上传、删除或改了声部名之后，点这里按现在的文件重新组合乐队谱（声部分配要重新做）。
-                    </p>
-                    <button
-                      type="button"
-                      disabled={busy !== null}
-                      onClick={recombine}
+              {used && isOwnSong && (
+                <>
+                  <p className="m-0 text-sm">已在乐队歌单里。</p>
+                  <div className="flex flex-wrap gap-2">
+                    <Link href={hrefBandSong(used.id)} className={buttonClass('outline')}>
+                      去排练这首歌 →
+                    </Link>
+                  </div>
+                  {stale && (
+                    <div className="space-y-2">
+                      <p className="m-0 text-xs text-muted-foreground">
+                        上传、删除或改了声部名之后，点这里按现在的文件重新组合乐队谱（声部分配要重新做）。
+                      </p>
+                      <button
+                        type="button"
+                        disabled={busy !== null}
+                        onClick={recombine}
+                        className={buttonClass('outline')}
+                      >
+                        {busy === 'recombine' ? '正在组合…' : '重新组合乐队谱'}
+                      </button>
+                    </div>
+                  )}
+                </>
+              )}
+
+              {used && !isOwnSong && (
+                <>
+                  <p className="m-0 text-sm">
+                    这些是《{used.title || '未识别的曲名'}》的自己上传的谱。
+                  </p>
+                  <div className="flex flex-wrap gap-2">
+                    <Link href={hrefBandSong(used.id)} className={buttonClass('outline')}>
+                      回到这首歌 →
+                    </Link>
+                    <Link
+                      href={hrefCombine(used.path, used.comboId ?? undefined)}
                       className={buttonClass('outline')}
                     >
-                      {busy === 'recombine' ? '正在组合…' : '重新组合乐队谱'}
-                    </button>
+                      组合乐队谱 →
+                    </Link>
                   </div>
-                )}
-              </>
-            )}
-
-            {used && !isOwnSong && (
-              <>
-                <p className="m-0 text-sm">
-                  这些是《{used.title || '未识别的曲名'}》的自己上传的谱。
-                </p>
-                <div className="flex flex-wrap gap-2">
-                  <Link href={hrefBandSong(used.id)} className={buttonClass('outline')}>
-                    回到这首歌 →
-                  </Link>
-                  <Link
-                    href={hrefCombine(used.path, used.comboId ?? undefined)}
-                    className={buttonClass('outline')}
-                  >
-                    组合乐队谱 →
-                  </Link>
-                </div>
-                <p className="m-0 text-xs text-muted-foreground">
-                  在「组合乐队谱」里可以把这些文件的声部和原谱拼在一起。
-                </p>
-              </>
-            )}
-
-            {band && !used && (
-              <>
-                <p className="m-0 text-sm text-muted-foreground">
-                  加入乐队歌单后，成员就能一起排练这首歌。
-                </p>
-                <button
-                  type="button"
-                  disabled={scoreCount === 0 || busy !== null}
-                  onClick={addToBand}
-                  className={buttonClass('primary')}
-                >
-                  {busy === 'band' ? '正在加入…' : '加入乐队歌单'}
-                </button>
-                {scoreCount === 0 && (
                   <p className="m-0 text-xs text-muted-foreground">
-                    至少要上传一个 GP 或 MusicXML 文件
+                    在「组合乐队谱」里可以把这些文件的声部和原谱拼在一起。
                   </p>
-                )}
-              </>
-            )}
-          </div>
-        </section>
+                </>
+              )}
+
+              {band && !used && (
+                <>
+                  <p className="m-0 text-sm text-muted-foreground">
+                    加入乐队歌单后，成员就能一起排练这首歌。
+                  </p>
+                  <button
+                    type="button"
+                    disabled={scoreCount === 0 || busy !== null}
+                    onClick={addToBand}
+                    className={buttonClass('primary')}
+                  >
+                    {busy === 'band' ? '正在加入…' : '加入乐队歌单'}
+                  </button>
+                  {scoreCount === 0 && (
+                    <p className="m-0 text-xs text-muted-foreground">
+                      至少要上传一个 GP 或 MusicXML 文件
+                    </p>
+                  )}
+                </>
+              )}
+            </div>
+          </section>
+        )}
 
         {/* delete */}
         <section aria-labelledby="upload-danger" className="pb-24">

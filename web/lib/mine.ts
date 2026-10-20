@@ -44,8 +44,10 @@ export function mineRows(m: MyScores): MineRow[] {
       kind: 'upload' as const,
       id: u.id,
       name: u.title,
-      line: [u.artist, `${u.files.length} 个文件`].filter(Boolean).join(' · '),
-      href: hrefUpload({ id: u.id }),
+      line: [u.bandId === '' ? '我的谱子' : '乐队', u.artist, `${u.files.length} 个文件`]
+        .filter(Boolean)
+        .join(' · '),
+      href: hrefUpload({ id: u.id, personal: u.bandId === '' }),
       updatedAt: u.updatedAt,
     })),
     ...m.combos.map((c) => ({
