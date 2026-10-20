@@ -114,6 +114,8 @@ export function publicUser(u: StoredUser): UserInfo {
     libraryAccess: u.role === 'admin' ? true : u.libraryAccess,
     instrument: u.instrument,
     createdAt: u.createdAt,
+    invitedBy: u.invitedBy,
+    disabled: u.disabled,
   }
 }
 
@@ -314,7 +316,9 @@ function isStoredUser(v: unknown): v is StoredUser {
     u.passwordHash.startsWith('scrypt$') &&
     typeof u.sessionVersion === 'number' &&
     Number.isSafeInteger(u.sessionVersion) &&
-    u.sessionVersion >= 0
+    u.sessionVersion >= 0 &&
+    (u.invitedBy === undefined || u.invitedBy === null || typeof u.invitedBy === 'string') &&
+    (u.disabled === undefined || typeof u.disabled === 'boolean')
   )
 }
 
@@ -330,7 +334,12 @@ function parseStoreText(text: string, file: string): StoredUser[] {
   if (!obj || obj.version !== STORE_VERSION || !Array.isArray(obj.users)) throw corruptError(file)
   const list: unknown[] = obj.users
   if (!list.every(isStoredUser)) throw corruptError(file)
-  const users = list as StoredUser[]
+  // Accounts saved before invites by leaders have neither field.
+  const users = (list as StoredUser[]).map((u) => ({
+    ...u,
+    invitedBy: u.invitedBy ?? null,
+    disabled: u.disabled ?? false,
+  }))
   const ids = new Set<string>()
   const names = new Set<string>()
   for (const u of users) {
@@ -390,6 +399,8 @@ export class UserStore {
         libraryAccess: true,
         instrument: null,
         createdAt: Date.now(),
+        invitedBy: null,
+        disabled: false,
         passwordHash: await hashPassword(bootstrapPassword),
         sessionVersion: 0,
       }
@@ -429,8 +440,8 @@ export class UserStore {
     return user && ok ? user : null
   }
 
-  /** Admin: a new account. Throws UserError (400) on invalid input or a taken name. */
-  async create(body: NewUserBody): Promise<UserInfo> {
+  /** A new account (`invitedBy`: who made the invite it used). Throws UserError (400) on invalid input or a taken name. */
+  async create(body: NewUserBody, invitedBy: string | null = null): Promise<UserInfo> {
     return this.mutate(async (current) => {
       const r = parseNewUser(body, current)
       if (!r.ok) throw new UserError(r.error, 400)
@@ -443,6 +454,8 @@ export class UserStore {
         libraryAccess: v.libraryAccess,
         instrument: v.instrument,
         createdAt: Date.now(),
+        invitedBy,
+        disabled: false,
         passwordHash: await hashPassword(v.password),
         sessionVersion: 0,
       }
@@ -479,6 +492,29 @@ export class UserStore {
       }
       const next = current.map((u) => (u.id === target.id ? updated : u))
       return { next, result: publicUser(updated) }
+    })
+  }
+
+  /**
+   * Admin: stops (or lets back in) these accounts. Stopping signs them out everywhere.
+   * Admins are never stopped.
+   */
+  async setDisabled(ids: readonly string[], disabled: boolean): Promise<UserInfo[]> {
+    return this.mutate(async (current) => {
+      const want = new Set(ids)
+      const next = current.map((u) => {
+        if (!want.has(u.id) || u.role === 'admin' || u.disabled === disabled) return u
+        return { ...u, disabled, sessionVersion: disabled ? u.sessionVersion + 1 : u.sessionVersion }
+      })
+      return { next, result: next.map(publicUser) }
+    })
+  }
+
+  /** Lets a band invite also open the whole library (only ever turns it on). */
+  async grantLibrary(id: string): Promise<void> {
+    await this.mutate(async (current) => {
+      const next = current.map((u) => (u.id === id ? { ...u, libraryAccess: true } : u))
+      return { next, result: undefined }
     })
   }
 

@@ -2,6 +2,7 @@ import { useState, type FormEvent } from 'react'
 import type { UserInfo } from '@/songs/scoreServerTypes'
 import { api, ApiError, errorText } from '../lib/api'
 import { buttonClass } from '../lib/classes'
+import { navigate } from '../lib/route'
 import { Staff } from './ui'
 
 function loginMessage(e: unknown): string {
@@ -77,7 +78,6 @@ export function LoginScreen({
               className={field}
             />
           </label>
-          <p className="text-xs text-muted-foreground">账号由乐队管理员创建。</p>
           {error && (
             <p role="alert" className="text-sm text-destructive">
               {error}
@@ -91,7 +91,16 @@ export function LoginScreen({
             {busy ? '正在打开…' : '打开谱库'}
           </button>
         </form>
-        <p className="mt-6 text-center text-xs text-muted-foreground">
+        <p className="mt-6 text-center text-sm">
+          <button
+            type="button"
+            onClick={() => navigate('#/invite')}
+            className="text-muted-foreground underline underline-offset-4 hover:text-foreground"
+          >
+            没有账号？用邀请码注册
+          </button>
+        </p>
+        <p className="mt-4 text-center text-xs text-muted-foreground">
           只读：在这里看谱、下载，谱库里的文件不会被改动。
         </p>
       </div>

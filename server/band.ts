@@ -11,6 +11,7 @@ import path from 'node:path'
 import type {
   AddBandSongBody,
   AddCommentBody,
+  BandLimits,
   BandSong,
   BandState,
   BarComment,
@@ -370,18 +371,18 @@ export class BandStore {
   private readonly file: string
   private readonly queue = createSerialQueue()
 
-  private constructor(dataDir: string, name: string, songs: BandSong[], setlist: string[]) {
+  private constructor(dataDir: string, fileName: string, name: string, songs: BandSong[], setlist: string[]) {
     this.dataDir = dataDir
-    this.file = path.join(dataDir, BAND_FILE)
+    this.file = path.join(dataDir, fileName)
     this.bandName = name
     this.list = songs
     this.setlistIds = setlist
   }
 
-  /** Reads band.json once at startup. A missing file is an empty band; a damaged one is set aside. */
-  static async load(dataDir: string, inRoot: InRoot): Promise<BandStore> {
-    const file = path.join(dataDir, BAND_FILE)
-    const empty = () => new BandStore(dataDir, DEFAULT_BAND_NAME, [], [])
+  /** Reads the band's file once at startup. A missing file is an empty band; a damaged one is set aside. */
+  static async load(dataDir: string, inRoot: InRoot, fileName: string = BAND_FILE): Promise<BandStore> {
+    const file = path.join(dataDir, fileName)
+    const empty = () => new BandStore(dataDir, fileName, DEFAULT_BAND_NAME, [], [])
     let text: string
     try {
       text = await fs.promises.readFile(file, 'utf8')
@@ -409,7 +410,7 @@ export class BandStore {
         : DEFAULT_BAND_NAME
     const songs = sanitizeSongs(rec.songs, inRoot)
     // Files saved before the rehearsal setlist have none: an empty list.
-    return new BandStore(dataDir, name, songs, sanitizeSetlist(rec.rehearsalSetlist, songs))
+    return new BandStore(dataDir, fileName, name, songs, sanitizeSetlist(rec.rehearsalSetlist, songs))
   }
 
   songs(): BandSong[] {
@@ -501,15 +502,15 @@ export class BandStore {
     })
   }
 
-  /** Deletes a 小节留言; only its author or an admin may. */
-  removeComment(songId: string, commentId: string, actor: { id: string; role: 'admin' | 'member' }): Promise<BandSong> {
+  /** Deletes a 小节留言; only its author, or a moderator (the band's leader or an admin), may. */
+  removeComment(songId: string, commentId: string, actor: { id: string; moderator: boolean }): Promise<BandSong> {
     return this.queue(async () => {
       const old = this.list.find((s) => s.id === songId)
       if (!old) throw new BandError(404, '找不到这首歌。')
       const comment = (old.comments ?? []).find((c) => c.id === commentId)
       if (!comment) throw new BandError(404, '找不到这条留言。')
-      if (comment.userId !== actor.id && actor.role !== 'admin')
-        throw new BandError(403, '只有写留言的人或管理员可以删除。')
+      if (comment.userId !== actor.id && !actor.moderator)
+        throw new BandError(403, '只有写留言的人、队长或管理员可以删除。')
       const updated: BandSong = { ...old, comments: (old.comments ?? []).filter((c) => c.id !== commentId) }
       await this.commit(this.list.map((s) => (s.id === old.id ? updated : s)))
       return updated
@@ -591,6 +592,7 @@ export class BandStore {
  */
 export function bandState(
   store: BandStore,
+  meta: { id: string; leaderId: string; limits: BandLimits; storageUsed: number },
   members: UserInfo[],
   progress: (path: string) => MemberProgress[],
 ): BandState {
@@ -602,6 +604,10 @@ export function bandState(
     if (list.length) progressById[song.id] = list
   }
   return {
+    id: meta.id,
+    leaderId: meta.leaderId,
+    limits: { ...meta.limits },
+    storageUsed: meta.storageUsed,
     name: store.name(),
     songs,
     rehearsalSetlist: store.setlist(),

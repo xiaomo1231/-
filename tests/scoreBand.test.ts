@@ -32,6 +32,8 @@ const user = (id: string): UserInfo => ({
   libraryAccess: true,
   instrument: null,
   createdAt: 0,
+  invitedBy: null,
+  disabled: false,
 })
 
 let dir: string
@@ -380,6 +382,8 @@ describe('comboId on band songs', () => {
   })
 })
 
+const META = { id: 'b1', leaderId: 'u1', limits: { maxMembers: 20, storageBytes: 1000 }, storageUsed: 0 }
+
 describe('bandState', () => {
   it('lists songs in setlist order with members and progress keyed by song id', async () => {
     const store = await BandStore.load(dir, inRoot)
@@ -391,7 +395,7 @@ describe('bandState', () => {
         { userId: 'gone', totalSeconds: 9, maxSpeedPct: 80, lastAt: 6 },
       ],
     }
-    const state = bandState(store, [user('u1'), user('u2')], (p) => progressFor[p] ?? [])
+    const state = bandState(store, META, [user('u1'), user('u2')], (p) => progressFor[p] ?? [])
     expect(state.name).toBe('我们的乐队')
     expect(state.songs.map((s) => s.id)).toEqual([a.id, b.id])
     expect(state.members.map((m) => m.id)).toEqual(['u1', 'u2'])
@@ -403,7 +407,7 @@ describe('bandState', () => {
     const store = await BandStore.load(dir, inRoot)
     const a = await store.add({ path: 'a.gp5', title: 'A', artist: '' }, 'u1', 1)
     await store.setSetlist([a.id])
-    expect(bandState(store, [], () => []).rehearsalSetlist).toEqual([a.id])
+    expect(bandState(store, META, [], () => []).rehearsalSetlist).toEqual([a.id])
   })
 })
 
@@ -612,17 +616,17 @@ describe('小节留言', () => {
     const id2 = c2.comments![1].id
 
     const denied = await store
-      .removeComment(a.id, id1, { id: 'u2', role: 'member' })
+      .removeComment(a.id, id1, { id: 'u2', moderator: false })
       .catch((e) => e)
     expect(denied).toBeInstanceOf(BandError)
     expect(denied.status).toBe(403)
-    expect(denied.message).toBe('只有写留言的人或管理员可以删除。')
+    expect(denied.message).toBe('只有写留言的人、队长或管理员可以删除。')
     expect(store.get(a.id)?.comments).toHaveLength(2)
 
-    const own = await store.removeComment(a.id, id1, { id: 'u1', role: 'member' })
+    const own = await store.removeComment(a.id, id1, { id: 'u1', moderator: false })
     expect(own.comments?.map((c) => c.id)).toEqual([id2])
 
-    const byAdmin = await store.removeComment(a.id, id2, { id: 'u9', role: 'admin' })
+    const byAdmin = await store.removeComment(a.id, id2, { id: 'u9', moderator: true })
     expect(byAdmin.comments).toEqual([])
     expect(readFile().songs[0].comments).toEqual([])
   })
@@ -630,9 +634,9 @@ describe('小节留言', () => {
   it('removeComment of an unknown song or comment is a 404', async () => {
     const store = await BandStore.load(dir, inRoot)
     const a = await store.add({ path: 'a.gp5', title: '', artist: '' }, 'u1', 1)
-    const noSong = await store.removeComment('nope', 'x', { id: 'u1', role: 'admin' }).catch((e) => e)
+    const noSong = await store.removeComment('nope', 'x', { id: 'u1', moderator: true }).catch((e) => e)
     expect(noSong.status).toBe(404)
-    const noComment = await store.removeComment(a.id, 'x', { id: 'u1', role: 'admin' }).catch((e) => e)
+    const noComment = await store.removeComment(a.id, 'x', { id: 'u1', moderator: true }).catch((e) => e)
     expect(noComment.status).toBe(404)
   })
 
@@ -762,7 +766,7 @@ describe('今天的排练歌单', () => {
     const store = await BandStore.load(dir, inRoot)
     const a = await store.add({ path: 'a.gp5', title: '', artist: '' }, 'u1', 1)
     await store.setSetlist([a.id])
-    expect(bandState(store, [user('u1')], () => []).rehearsalSetlist).toEqual([a.id])
+    expect(bandState(store, META, [user('u1')], () => []).rehearsalSetlist).toEqual([a.id])
   })
 })
 

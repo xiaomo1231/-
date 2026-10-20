@@ -1,6 +1,7 @@
 import { useEffect, useState } from 'react'
 import type { UserInfo } from '@/songs/scoreServerTypes'
 import { api, ApiError, AUTH_LOST, errorText } from './lib/api'
+import { reloadMe } from './lib/band'
 import { setMe } from './lib/session'
 import { navigate, useRoute } from './lib/route'
 import { InvitePage } from './pages/InvitePage'
@@ -12,7 +13,17 @@ type Auth = 'checking' | 'in' | 'out'
 export function App() {
   const [auth, setAuth] = useState<Auth>('checking')
   const [notice, setNotice] = useState<string | null>(null)
+  /** On an invite, signed out: show the login first (the invite stays in the address). */
+  const [loginFirst, setLoginFirst] = useState(false)
   const route = useRoute()
+  const signedIn = (u: UserInfo) => {
+    setNotice(null)
+    setLoginFirst(false)
+    setMe(u)
+    setAuth('in')
+    // The login answer has no bands: read them.
+    void reloadMe()
+  }
 
   useEffect(() => {
     const lost = () => {
@@ -41,18 +52,17 @@ export function App() {
       </p>
     )
   }
-  if (auth === 'out' && route.kind === 'invite') {
+  if (auth === 'out' && route.kind === 'invite' && !loginFirst) {
     return (
       <main className="gutter grid min-h-dvh place-items-center py-10">
         <div className="w-full max-w-sm">
           <InvitePage
             token={route.token}
             onJoined={(u) => {
-              setNotice(null)
-              setMe(u)
-              setAuth('in')
+              signedIn(u)
               navigate('#/b')
             }}
+            onLogin={route.token ? () => setLoginFirst(true) : undefined}
           />
           <p className="mt-6 text-center text-sm">
             <button
@@ -71,11 +81,7 @@ export function App() {
     return (
       <LoginScreen
         notice={notice}
-        onLoggedIn={(u) => {
-          setNotice(null)
-          setMe(u)
-          setAuth('in')
-        }}
+        onLoggedIn={signedIn}
       />
     )
   }

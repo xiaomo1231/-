@@ -164,7 +164,7 @@ interface Entry {
 }
 
 /** Checks one stored metadata row; null when it is malformed. */
-function sanitizeRow(raw: unknown): Entry | null {
+function sanitizeRow(raw: unknown, defaultBandId: string): Entry | null {
   if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
   const rec = raw as Record<string, unknown>
   const ext = EXTS.find((x) => x === rec.ext)
@@ -178,6 +178,8 @@ function sanitizeRow(raw: unknown): Entry | null {
     item: {
       id: rec.id,
       songId: rec.songId,
+      // Recordings saved before several bands belong to the first band.
+      bandId: typeof rec.bandId === 'string' && rec.bandId ? rec.bandId : defaultBandId,
       label:
         typeof rec.label === 'string' && rec.label
           ? cut(rec.label, MAX_LABEL_CHARS)
@@ -215,7 +217,7 @@ export class RecordingStore {
   }
 
   /** Reads recordings.json once. Missing is empty; damaged is set aside; rows whose file is missing are dropped. */
-  static async load(dataDir: string): Promise<RecordingStore> {
+  static async load(dataDir: string, defaultBandId = ''): Promise<RecordingStore> {
     const file = path.join(dataDir, RECORDINGS_FILE)
     const empty = () => new RecordingStore(dataDir, [])
     let text: string
@@ -245,7 +247,7 @@ export class RecordingStore {
     const seen = new Set<string>()
     const entries: Entry[] = []
     for (const row of rec.items) {
-      const entry = sanitizeRow(row)
+      const entry = sanitizeRow(row, defaultBandId)
       if (!entry || seen.has(entry.item.id)) continue
       if (!fs.existsSync(path.join(dir, `${entry.item.id}.${entry.ext}`))) continue
       seen.add(entry.item.id)
@@ -272,6 +274,23 @@ export class RecordingStore {
     return e ? { ...e.item } : undefined
   }
 
+  /** Bytes of every recording of a band. */
+  bytesOf(bandId: string): number {
+    let total = 0
+    for (const e of this.entries) if (e.item.bandId === bandId) total += e.item.size
+    return total
+  }
+
+  /** A band was deleted: its recordings and their files go too. */
+  removeBand(bandId: string): Promise<void> {
+    return this.queue(async () => {
+      const gone = this.entries.filter((e) => e.item.bandId === bandId)
+      if (gone.length === 0) return
+      await this.commit(this.entries.filter((e) => e.item.bandId !== bandId))
+      await this.removeFiles(gone)
+    })
+  }
+
   /** Absolute path of the stored file. Throws when the recording is not in the store. */
   filePath(rec: RecordingInfo): string {
     const e = this.entries.find((x) => x.item.id === rec.id)
@@ -286,7 +305,7 @@ export class RecordingStore {
    */
   add(
     songId: string,
-    meta: { label: string; fileName: string },
+    meta: { label: string; fileName: string; bandId?: string },
     bytes: Buffer,
     userId: string,
     now: number,
@@ -302,6 +321,7 @@ export class RecordingStore {
       const item: RecordingInfo = {
         id,
         songId,
+        bandId: meta.bandId ?? '',
         label: cleanLabel(meta.label),
         fileName: cleanFileName(meta.fileName, type.ext),
         size: bytes.length,

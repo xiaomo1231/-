@@ -9,14 +9,20 @@ import {
   InviteStore,
   MAX_INVITES,
   newUserFromInvite,
+  normalizeCode,
   parseAccept,
+  parseJoin,
   parseNewInvite,
 } from '../server/invites'
 
 const NOW = 1_700_000_000_000
 const DAY = 86_400_000
 
+const BAND = 'aaaaaaaaaaaa'
+
 const BODY: NewInviteBody = {
+  kind: 'member',
+  bandId: BAND,
   days: 7,
   maxUses: 1,
   instrument: null,
@@ -38,7 +44,9 @@ describe('creating and checking links', () => {
   it('creates a token that checks as usable', async () => {
     const store = await InviteStore.load(dir)
     const { invite, token } = await store.create(BODY, 'admin1', NOW)
-    expect(token).toMatch(/^[A-Za-z0-9_-]{32}$/)
+    expect(token).toMatch(/^[0-9A-HJKMNP-TV-Z]{5}-[0-9A-HJKMNP-TV-Z]{5}$/)
+    expect(invite.kind).toBe('member')
+    expect(invite.bandId).toBe(BAND)
     expect(invite.id).toMatch(/^[0-9a-f]{12}$/)
     expect(invite.expiresAt).toBe(NOW + 7 * DAY)
     expect(invite.uses).toBe(0)
@@ -60,14 +68,14 @@ describe('creating and checking links', () => {
   it('reports an unknown token', async () => {
     const store = await InviteStore.load(dir)
     await store.create(BODY, 'admin1', NOW)
-    expect(store.check('x'.repeat(32), NOW).reason).toBe('这个邀请链接不存在或已经失效。')
+    expect(store.check('x'.repeat(32), NOW).reason).toBe('这个邀请码不存在或已经失效。')
   })
 
   it('expires after the chosen days', async () => {
     const store = await InviteStore.load(dir)
     const { token } = await store.create({ ...BODY, days: 1 }, 'admin1', NOW)
     expect(store.check(token, NOW + DAY - 1).reason).toBeNull()
-    expect(store.check(token, NOW + DAY).reason).toBe('这个邀请链接已经过期了。')
+    expect(store.check(token, NOW + DAY).reason).toBe('这个邀请码已经过期了。')
   })
 
   it('never expires with days null', async () => {
@@ -91,7 +99,7 @@ describe('uses', () => {
     const { invite, token } = await store.create(BODY, 'admin1', NOW)
     const taken = await store.reserve(token, NOW)
     expect(taken.uses).toBe(1)
-    expect(store.check(token, NOW).reason).toBe('这个邀请链接的名额已经用完了。')
+    expect(store.check(token, NOW).reason).toBe('这个邀请码的名额已经用完了。')
     await expect(store.reserve(token, NOW)).rejects.toMatchObject({ status: 410 })
     expect(store.list()[0]?.id).toBe(invite.id)
   })
@@ -129,7 +137,7 @@ describe('revoke', () => {
     const store = await InviteStore.load(dir)
     const { invite, token } = await store.create(BODY, 'admin1', NOW)
     await store.revoke(invite.id)
-    expect(store.check(token, NOW).reason).toBe('这个邀请链接已经被管理员作废。')
+    expect(store.check(token, NOW).reason).toBe('这个邀请码已经被作废了。')
     expect(store.list()[0]?.revoked).toBe(true)
   })
 
@@ -182,9 +190,75 @@ describe('storage', () => {
   })
 })
 
+describe('codes', () => {
+  it('reads a typed code however it is written', async () => {
+    const store = await InviteStore.load(dir)
+    const { invite, token } = await store.create(BODY, 'admin1', NOW)
+    const plain = token.replace('-', '')
+    for (const typed of [token, plain, plain.toLowerCase(), ` ${token.slice(0, 5)} ${token.slice(6)} `])
+      expect(store.check(typed, NOW).invite?.id).toBe(invite.id)
+  })
+
+  it('reads O as 0 and I / L as 1', () => {
+    expect(normalizeCode('o1il-x')).toBe('0111X')
+  })
+
+  it('old link tokens keep working after the upgrade, and join the first band', async () => {
+    const old = {
+      id: 'abcdefabcdef',
+      createdBy: 'admin1',
+      createdAt: NOW,
+      expiresAt: null,
+      maxUses: null,
+      uses: 0,
+      usedBy: [],
+      instrument: null,
+      libraryAccess: false,
+      note: '',
+      revoked: false,
+      // sha256 of 'oldTokenOldTokenOldToken'
+      tokenHash: (await import('node:crypto')).createHash('sha256').update('oldTokenOldTokenOldToken').digest('hex'),
+    }
+    fs.writeFileSync(path.join(dir, INVITES_FILE), JSON.stringify({ version: 1, items: [old] }))
+    const store = await InviteStore.load(dir, BAND)
+    const hit = store.check('oldTokenOldTokenOldToken', NOW).invite
+    expect(hit?.kind).toBe('member')
+    expect(hit?.bandId).toBe(BAND)
+  })
+
+  it('counts the usable invites of their maker', async () => {
+    const store = await InviteStore.load(dir)
+    await store.create(BODY, 'lead1', NOW)
+    const b = await store.create(BODY, 'lead1', NOW)
+    await store.create(BODY, 'other', NOW)
+    await store.revoke(b.invite.id)
+    expect(store.usableBy('lead1', NOW)).toBe(1)
+  })
+
+  it('forgets the invites of a deleted band', async () => {
+    const store = await InviteStore.load(dir)
+    await store.create(BODY, 'lead1', NOW)
+    await store.create({ ...BODY, kind: 'leader', bandId: null }, 'admin1', NOW)
+    await store.forgetBand(BAND)
+    expect(store.list().map((i) => i.kind)).toEqual(['leader'])
+  })
+})
+
 describe('parsing', () => {
+  it('checks the join body and the new band name', () => {
+    expect(parseJoin({ token: 'ABCDE-FGHJK' }).ok).toBe(true)
+    expect(parseJoin({ token: 'ABCDE-FGHJK', bandName: '  夜行者 ' })).toEqual({
+      ok: true,
+      value: { token: 'ABCDE-FGHJK', bandName: '夜行者' },
+    })
+    expect(parseJoin({ token: 'ABCDE-FGHJK', bandName: 'x'.repeat(41) }).ok).toBe(false)
+    expect(parseJoin({ token: '<script>' }).ok).toBe(false)
+  })
+
   it('accepts a valid body and trims the note', () => {
     const r = parseNewInvite({
+      kind: 'member',
+      bandId: BAND,
       days: 30,
       maxUses: null,
       instrument: 'drums',
@@ -193,12 +267,30 @@ describe('parsing', () => {
     })
     expect(r).toEqual({
       ok: true,
-      value: { days: 30, maxUses: null, instrument: 'drums', libraryAccess: true, note: '给鼓手' },
+      value: {
+        kind: 'member',
+        bandId: BAND,
+        days: 30,
+        maxUses: null,
+        instrument: 'drums',
+        libraryAccess: true,
+        note: '给鼓手',
+      },
     })
   })
 
-  it('rejects out-of-range or wrong-typed fields', () => {
+  it('a leader invite has no band; a member invite needs one', () => {
     const base = { days: 7, maxUses: 1, instrument: null, libraryAccess: false, note: '' }
+    const leader = parseNewInvite({ ...base, kind: 'leader', bandId: BAND })
+    expect(leader.ok && leader.value.bandId).toBe(null)
+    expect(parseNewInvite({ ...base, kind: 'member', bandId: null }).ok).toBe(false)
+    expect(parseNewInvite({ ...base, kind: 'member', bandId: '../x' }).ok).toBe(false)
+    expect(parseNewInvite({ ...base, kind: 'boss', bandId: BAND }).ok).toBe(false)
+  })
+
+  it('rejects out-of-range or wrong-typed fields', () => {
+    const base = { kind: 'member', bandId: BAND, days: 7, maxUses: 1, instrument: null, libraryAccess: false, note: '' }
+    expect(parseNewInvite(base).ok).toBe(true)
     expect(parseNewInvite({ ...base, days: 0 }).ok).toBe(false)
     expect(parseNewInvite({ ...base, days: 91 }).ok).toBe(false)
     expect(parseNewInvite({ ...base, days: 1.5 }).ok).toBe(false)
@@ -229,6 +321,8 @@ describe('parsing', () => {
   it('makes a member from an invite, with the instrument the person picked (none when 不选)', () => {
     const invite = {
       id: '000000000001',
+      kind: 'member' as const,
+      bandId: BAND,
       createdBy: 'admin1',
       createdAt: NOW,
       expiresAt: null,

@@ -24,6 +24,25 @@ export interface UserInfo {
   libraryAccess: boolean
   instrument: Instrument | null
   createdAt: number
+  /** Who made the invite this account registered with (null: made by an admin, or the first admin). */
+  invitedBy: string | null
+  /** A stopped account cannot sign in. */
+  disabled: boolean
+}
+
+/** One band an account belongs to (GET /api/me). */
+export interface BandBrief {
+  id: string
+  name: string
+  leaderId: string
+  /** This account leads it. */
+  leader: boolean
+  members: number
+}
+
+/** GET /api/me: the account and its bands. */
+export interface MeInfo extends UserInfo {
+  bands: BandBrief[]
 }
 
 /** POST /api/login */
@@ -100,9 +119,22 @@ export interface MemberProgress {
   lastAt: number
 }
 
-/** GET /api/band */
+/** A band's size limits, set by an admin. */
+export interface BandLimits {
+  /** Members, the leader included. */
+  maxMembers: number
+  /** Uploaded scores and rehearsal recordings together, in bytes. */
+  storageBytes: number
+}
+
+/** GET /api/band (the band chosen with the X-Band header, else the account's first). */
 export interface BandState {
+  id: string
   name: string
+  leaderId: string
+  limits: BandLimits
+  /** Bytes of uploads and recordings of this band. */
+  storageUsed: number
   /** Setlist order. */
   songs: BandSong[]
   /** 今天排练的歌 (band song ids, in order). */
@@ -156,6 +188,8 @@ export interface UploadFile {
 /** A song made from uploaded files: a new song, or the own files of a band song from the library. */
 export interface UploadSong {
   id: string
+  /** The band it belongs to (only that band's members see it). */
+  bandId: string
   title: string
   artist: string
   files: UploadFile[]
@@ -352,9 +386,15 @@ export interface RehearsalCommandBody {
 // 邀请链接 (invite links)
 // ---------------------------------------------------------------------------
 
-/** An invite as the admin sees it (never the token itself after creation). */
+/** leader: the person registers (or uses his account) to start a new band of his own; member: joins `bandId`. */
+export type InviteKind = 'leader' | 'member'
+
+/** An invite as its maker sees it (never the code itself after creation). */
 export interface InviteInfo {
   id: string
+  kind: InviteKind
+  /** The band a member invite joins; null for a leader invite. */
+  bandId: string | null
   createdBy: string
   createdAt: number
   /** Epoch ms; null = never. */
@@ -371,8 +411,11 @@ export interface InviteInfo {
   revoked: boolean
 }
 
-/** POST /api/invites (admin). */
+/** POST /api/invites: an admin makes leader invites (or member ones of any band); a leader, member invites of his band. */
 export interface NewInviteBody {
+  kind: InviteKind
+  /** The band of a member invite (ignored for a leader invite). */
+  bandId: string | null
   /** 1–90 days; null = never expires. */
   days: number | null
   /** 1–50; null = unlimited. */
@@ -382,7 +425,7 @@ export interface NewInviteBody {
   note: string
 }
 
-/** Answer of POST /api/invites: the only time the token is shown. */
+/** Answer of POST /api/invites: the only time the code is shown (it is also the link's token). */
 export interface NewInviteResult {
   invite: InviteInfo
   token: string
@@ -393,7 +436,11 @@ export interface InviteCheck {
   valid: boolean
   /** Why not (Chinese), when invalid. */
   reason: string | null
+  kind: InviteKind
+  /** The band a member invite joins ('' for a leader invite). */
   bandName: string
+  /** Name of the person who made it. */
+  inviter: string
   instrument: Instrument | null
   note: string
 }
@@ -405,6 +452,42 @@ export interface AcceptInviteBody {
   displayName: string
   password: string
   instrument: Instrument | null
+  /** Name of the new band (leader invites only), 1–40 chars. */
+  bandName?: string
+}
+
+/** POST /api/invite/join (signed in): an existing account uses an invite. */
+export interface JoinInviteBody {
+  token: string
+  /** Name of the new band (leader invites only). */
+  bandName?: string
+}
+
+/** Answer of POST /api/invite/join: the band joined or started. */
+export interface JoinInviteResult {
+  bandId: string
+}
+
+// ---------------------------------------------------------------------------
+// 乐队管理 (admin overview, leaders' member list)
+// ---------------------------------------------------------------------------
+
+/** GET /api/admin/bands: every band, for the admin. */
+export interface BandOverview {
+  id: string
+  name: string
+  leaderId: string
+  memberIds: string[]
+  limits: BandLimits
+  storageUsed: number
+  createdAt: number
+}
+
+/** POST /api/admin/bands/update (admin). */
+export interface UpdateBandBody {
+  id: string
+  limits?: Partial<BandLimits>
+  leaderId?: string
 }
 
 // ---------------------------------------------------------------------------
@@ -413,6 +496,8 @@ export interface AcceptInviteBody {
 
 export interface RecordingInfo {
   id: string
+  /** The band of the song. */
+  bandId: string
   /** Band song id. */
   songId: string
   /** e.g. "10 月 19 日排练", up to 60 chars. */

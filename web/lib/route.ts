@@ -37,6 +37,7 @@ export type Route =
   | { kind: 'drums'; path: string; title: string; artist: string }
   | { kind: 'combine'; path: string; id: string }
   | { kind: 'daily'; day: number | null }
+  /** 注册 / 用邀请码 (token '' = type the code). */
   | { kind: 'invite'; token: string }
   /** 新建歌曲 / 自己上传的谱: an uploaded song ('' = a new one; band = attach to that band song). */
   | { kind: 'upload'; id: string; band: string }
@@ -76,7 +77,7 @@ export function parseHash(hash: string): Route {
   if (bs) return { kind: 'bandSong', id: decode(bs[1] ?? '') }
   if (path === '/e') return { kind: 'ensembles', q: qs.get('q') ?? '', need: qs.get('need') ?? '' }
   if (path === '/me') return { kind: 'account' }
-  const inv = /^\/invite\/([A-Za-z0-9_-]{16,64})$/.exec(path)
+  const inv = /^\/invite(?:\/([A-Za-z0-9_-]{10,64}))?$/.exec(path)
   if (inv) return { kind: 'invite', token: inv[1] ?? '' }
   if (path === '/users') return { kind: 'users' }
   if (path === '/daily') {

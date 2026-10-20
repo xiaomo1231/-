@@ -62,6 +62,8 @@ function stored(over: Partial<StoredUser> = {}): StoredUser {
     libraryAccess: false,
     instrument: null,
     createdAt: 1,
+    invitedBy: null,
+    disabled: false,
     passwordHash: 'scrypt$16384$8$1$00$00',
     sessionVersion: 0,
     ...over,
@@ -167,7 +169,17 @@ describe('validation', () => {
   it('publicUser drops the secrets', () => {
     const u = publicUser(stored({ role: 'admin', libraryAccess: false }))
     expect(Object.keys(u).sort()).toEqual(
-      ['createdAt', 'displayName', 'id', 'instrument', 'libraryAccess', 'role', 'username'].sort(),
+      [
+        'createdAt',
+        'disabled',
+        'displayName',
+        'id',
+        'instrument',
+        'invitedBy',
+        'libraryAccess',
+        'role',
+        'username',
+      ].sort(),
     )
     expect(u.libraryAccess).toBe(true)
   })

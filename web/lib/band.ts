@@ -12,6 +12,7 @@ import {
   type SongStatus,
   type UpdateBandSongBody,
 } from './api'
+import { getBandId, onBandChange, setMe } from './session'
 
 export const STATUS_LABELS: Record<SongStatus, string> = {
   learning: '在练',
@@ -32,6 +33,9 @@ const subscribe = (l: () => void) => {
   }
 }
 
+/** An answer for a band other than the current one (the user switched meanwhile) is dropped. */
+const current = (s: BandState) => s.id === getBandId() || getBandId() === null
+
 /** Reads the band from the server; a request already in flight is shared. Never rejects. */
 function refresh(): Promise<void> {
   if (!loading)
@@ -39,6 +43,7 @@ function refresh(): Promise<void> {
       .band()
       .then(
         (s) => {
+          if (!current(s)) return
           state = s
           error = null
         },
@@ -68,10 +73,28 @@ export function reloadBand(): void {
   void refresh()
 }
 
+// Another band chosen (or joined, or left): forget the old one and read the new one.
+onBandChange(() => {
+  state = null
+  error = null
+  emit()
+  if (getBandId()) void refresh()
+})
+
+/** Reads the account again (its bands' names, who leads them). Never rejects. */
+export async function reloadMe(): Promise<void> {
+  try {
+    setMe(await api.me())
+  } catch {
+    // The next page load corrects it.
+  }
+}
+
 /** Sends a change and stores the band it returns. Rejects with a readable message. */
 async function commit(request: Promise<BandState>): Promise<void> {
   try {
-    state = await request
+    const next = await request
+    if (current(next)) state = next
     error = null
     emit()
   } catch (e) {
@@ -83,7 +106,26 @@ export const addSong = (b: AddBandSongBody) => commit(api.addBandSong(b))
 export const updateSong = (b: UpdateBandSongBody) => commit(api.updateBandSong(b))
 export const removeSong = (id: string) => commit(api.removeBandSong(id))
 export const reorder = (ids: string[]) => commit(api.reorderBandSongs(ids))
-export const rename = (name: string) => commit(api.renameBand(name))
+export const rename = async (name: string) => {
+  await commit(api.renameBand(name))
+  await reloadMe()
+}
+/** The leader (or an admin) takes a member out of the band. */
+export const removeMember = (userId: string) => commit(api.removeBandMember(userId) as Promise<BandState>)
+/** 退出乐队: takes the account out of the current band. */
+export async function leaveBand(myId: string): Promise<void> {
+  try {
+    await api.removeBandMember(myId)
+  } catch (e) {
+    throw new Error(errorText(e))
+  }
+  await reloadMe()
+}
+/** Hands the band over to another member. */
+export const setLeader = async (userId: string) => {
+  await commit(api.setBandLeader(userId))
+  await reloadMe()
+}
 export const setSetlist = (ids: string[]) => commit(api.setRehearsalSetlist(ids))
 export const addComment = (songId: string, bar: number, text: string) =>
   commit(api.addComment({ songId, bar, text }))

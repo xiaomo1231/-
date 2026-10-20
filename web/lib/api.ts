@@ -6,8 +6,14 @@ import type {
   ScoreSong,
 } from '@/songs/scoreLibraryTypes'
 
+import { getBandId } from './session'
 import type {
   AcceptInviteBody,
+  BandOverview,
+  JoinInviteBody,
+  JoinInviteResult,
+  MeInfo,
+  UpdateBandBody,
   NewUploadSongBody,
   UploadFileQuery,
   UploadSong,
@@ -170,16 +176,23 @@ interface Call {
   quietAuth?: boolean
 }
 
+/** Headers plus the band the pages work in (the server answers for that band). */
+function bandHeader(headers: Record<string, string> = {}): Record<string, string> {
+  const band = getBandId()
+  return band ? { ...headers, 'X-Band': band } : headers
+}
+
 async function call<T>(url: string, opts: Call = {}): Promise<T> {
   const init: RequestInit = {
     method: opts.method ?? 'GET',
     credentials: 'same-origin',
     cache: 'no-store',
     signal: opts.signal,
+    headers: bandHeader(),
   }
   if (opts.body !== undefined) {
     init.method = 'POST'
-    init.headers = { 'Content-Type': 'application/json' }
+    init.headers = bandHeader({ 'Content-Type': 'application/json' })
     init.body = JSON.stringify(opts.body)
   }
   const res = await fetch(url, init)
@@ -194,11 +207,11 @@ const enc = encodeURIComponent
 export const api = {
   /** Resolves when the session cookie is valid; rejects with a 401 ApiError otherwise. */
   /** The signed-in account; rejects with a 401 ApiError when the session is gone. */
-  async me(): Promise<UserInfo> {
+  async me(): Promise<MeInfo> {
     const res = await fetch('/api/me', { credentials: 'same-origin', cache: 'no-store' })
     if (res.status === 401) throw new ApiError(401, '')
     if (!res.ok) throw await failure(res)
-    return (await res.json()) as UserInfo
+    return (await res.json()) as MeInfo
   },
   login: (username: string, password: string) =>
     call<UserInfo>('/api/login', {
@@ -211,6 +224,16 @@ export const api = {
   addUser: (b: NewUserBody) => call<UserInfo[]>('/api/users', { body: b }),
   updateUser: (b: UpdateUserBody) => call<UserInfo[]>('/api/users/update', { body: b }),
   removeUser: (id: string) => call<UserInfo[]>('/api/users/remove', { body: { id } }),
+  /** 停用 / 恢复 an account (optionally with everyone it invited). */
+  disableUser: (id: string, disabled: boolean, withInvitees: boolean) =>
+    call<UserInfo[]>('/api/users/disable', { body: { id, disabled, withInvitees } }),
+  // every band (admin)
+  adminBands: (signal?: AbortSignal) => call<BandOverview[]>('/api/admin/bands', { signal }),
+  updateAdminBand: (b: UpdateBandBody) => call<BandOverview[]>('/api/admin/bands/update', { body: b }),
+  removeAdminBand: (id: string) => call<BandOverview[]>('/api/admin/bands/remove', { body: { id } }),
+  // the current band's members (leader / admin; anyone for himself = 退出乐队)
+  removeBandMember: (userId: string) => call<BandState | { ok: true }>('/api/band/members/remove', { body: { userId } }),
+  setBandLeader: (userId: string) => call<BandState>('/api/band/leader', { body: { userId } }),
   // band
   band: (signal?: AbortSignal) => call<BandState>('/api/band', { signal }),
   addBandSong: (b: AddBandSongBody) => call<BandState>('/api/band/songs/add', { body: b }),
@@ -252,7 +275,7 @@ export const api = {
       {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        headers: bandHeader({ 'Content-Type': file.type || 'application/octet-stream' }),
         body: file,
       },
     )
@@ -321,7 +344,7 @@ export const api = {
       {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        headers: bandHeader({ 'Content-Type': file.type || 'application/octet-stream' }),
         body: file,
       },
     )
@@ -345,7 +368,7 @@ export const api = {
       {
         method: 'POST',
         credentials: 'same-origin',
-        headers: { 'Content-Type': file.type || 'application/octet-stream' },
+        headers: bandHeader({ 'Content-Type': file.type || 'application/octet-stream' }),
         body: file,
       },
     )
@@ -371,6 +394,8 @@ export const api = {
   /** No login needed: creates the account and sets the session cookie. */
   acceptInvite: (b: AcceptInviteBody) =>
     call<UserInfo>('/api/invite/accept', { body: b, quietAuth: true }),
+  /** Signed in: join the invite's band (or start one, with a leader invite). */
+  joinInvite: (b: JoinInviteBody) => call<JoinInviteResult>('/api/invite/join', { body: b }),
   logout: () => call<unknown>('/api/logout', { method: 'POST' }),
   library: (signal?: AbortSignal) => call<LibraryInfo>('/api/library', { signal }),
   rescan: () => call<unknown>('/api/rescan', { method: 'POST' }),

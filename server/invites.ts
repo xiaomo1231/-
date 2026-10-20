@@ -1,7 +1,9 @@
 /**
- * Invite links (邀请链接) of the score server: an admin makes a link, the new
- * member opens it and creates his own account. Only a sha256 hash of each
- * token is stored (the token is shown once, at creation). Reserving a use,
+ * Invites (邀请码 / 邀请链接) of the score server. An admin makes leader invites
+ * (the person starts a band of his own) and a leader makes member invites of his
+ * band. The code (XXXXX-XXXXX) is typed on the 注册 page or opened as a link; an
+ * existing account can use one too, to join another band. Only a sha256 hash of
+ * each code is stored (the code is shown once, at creation). Reserving a use,
  * confirming an account and releasing a use all run through one serial queue
  * and save atomically, like the other stores.
  */
@@ -12,6 +14,8 @@ import type {
   AcceptInviteBody,
   Instrument,
   InviteInfo,
+  InviteKind,
+  JoinInviteBody,
   NewInviteBody,
   NewInviteResult,
   NewUserBody,
@@ -28,14 +32,19 @@ const DAY_MS = 86_400_000
 const NOTE_MAX_CHARS = 100
 const ID_RE = /^[0-9a-f]{12}$/
 const HASH_RE = /^[0-9a-f]{64}$/
-const TOKEN_RE = /^[A-Za-z0-9_-]{16,64}$/
+/** Old links' tokens (base64url) and the new codes (with or without the dash). */
+const TOKEN_RE = /^[A-Za-z0-9_ -]{10,64}$/
+const BAND_ID_RE = /^[0-9a-f]{12}$/
+/** Crockford base32: no I, L, O, U. 10 characters = 50 bits. */
+const CODE_ALPHABET = '0123456789ABCDEFGHJKMNPQRSTVWXYZ'
+const CODE_LENGTH = 10
 const MAX_NAME_CHARS = 64
 const MAX_PASSWORD_CHARS = 1024
 
-const REASON_UNKNOWN = '这个邀请链接不存在或已经失效。'
-const REASON_REVOKED = '这个邀请链接已经被管理员作废。'
-const REASON_EXPIRED = '这个邀请链接已经过期了。'
-const REASON_USED_UP = '这个邀请链接的名额已经用完了。'
+const REASON_UNKNOWN = '这个邀请码不存在或已经失效。'
+const REASON_REVOKED = '这个邀请码已经被作废了。'
+const REASON_EXPIRED = '这个邀请码已经过期了。'
+const REASON_USED_UP = '这个邀请码的名额已经用完了。'
 
 /** An error the route can turn into an HTTP status and a Chinese message. */
 export class InviteError extends Error {
@@ -63,6 +72,26 @@ const asRecord = (v: unknown): Record<string, unknown> | null =>
 
 const hashToken = (token: string): string => createHash('sha256').update(token).digest('hex')
 
+/** A fresh code, shown as XXXXX-XXXXX. */
+export function newCode(): string {
+  const bytes = randomBytes(CODE_LENGTH)
+  let out = ''
+  for (let i = 0; i < CODE_LENGTH; i++) out += CODE_ALPHABET[bytes[i]! % 32]
+  return `${out.slice(0, 5)}-${out.slice(5)}`
+}
+
+/**
+ * The stored form of a typed code: capitals, no dashes or spaces, and the letters
+ * people mix up read as the digits they look like (O -> 0, I / L -> 1).
+ */
+export function normalizeCode(text: string): string {
+  return text
+    .toUpperCase()
+    .replace(/[\s-]/g, '')
+    .replace(/O/g, '0')
+    .replace(/[IL]/g, '1')
+}
+
 /** Why an invite cannot be used now, or null when it can. */
 function reasonFor(row: StoredInvite, now: number): string | null {
   if (row.revoked) return REASON_REVOKED
@@ -75,6 +104,8 @@ function reasonFor(row: StoredInvite, now: number): string | null {
 function publicInvite(row: StoredInvite): InviteInfo {
   return {
     id: row.id,
+    kind: row.kind,
+    bandId: row.bandId,
     createdBy: row.createdBy,
     createdAt: row.createdAt,
     expiresAt: row.expiresAt,
@@ -106,7 +137,7 @@ function freshId(rows: Items): string {
   }
 }
 
-function sanitizeRow(raw: unknown): StoredInvite | null {
+function sanitizeRow(raw: unknown, defaultBandId: string | null): StoredInvite | null {
   const r = asRecord(raw)
   if (!r) return null
   const id = r.id
@@ -129,8 +160,19 @@ function sanitizeRow(raw: unknown): StoredInvite | null {
   if (typeof r.libraryAccess !== 'boolean' || typeof r.revoked !== 'boolean') return null
   if (typeof r.note !== 'string') return null
   if (typeof r.tokenHash !== 'string' || !HASH_RE.test(r.tokenHash)) return null
+  // Rows saved before leader invites join the first band.
+  const kind: InviteKind = r.kind === 'leader' ? 'leader' : 'member'
+  const bandId =
+    kind === 'leader'
+      ? null
+      : typeof r.bandId === 'string' && BAND_ID_RE.test(r.bandId)
+        ? r.bandId
+        : defaultBandId
+  if (kind === 'member' && !bandId) return null
   return {
     id,
+    kind,
+    bandId,
     createdBy: r.createdBy,
     createdAt: r.createdAt,
     expiresAt,
@@ -150,6 +192,11 @@ export function parseNewInvite(body: unknown): ParseResult<NewInviteBody> {
   const b = asRecord(body)
   if (!b) return fail('请求内容不对。')
   const { days, maxUses, instrument, libraryAccess, note } = b
+  const kind = b.kind === undefined ? 'member' : b.kind
+  if (kind !== 'leader' && kind !== 'member') return fail('邀请的类型不对。')
+  const bandId = kind === 'leader' ? null : b.bandId
+  if (kind === 'member' && !(typeof bandId === 'string' && BAND_ID_RE.test(bandId)))
+    return fail('请选择要邀请加入的乐队。')
   if (days !== null && !(Number.isInteger(days) && (days as number) >= 1 && (days as number) <= 90))
     return fail('有效期只能是 1–90 天，或永不过期。')
   if (
@@ -167,6 +214,8 @@ export function parseNewInvite(body: unknown): ParseResult<NewInviteBody> {
   const trimmed = note.trim()
   if (charLen(trimmed) > NOTE_MAX_CHARS) return fail('备注最多 100 个字符。')
   return good({
+    kind,
+    bandId: bandId as string | null,
     days: days as number | null,
     maxUses: maxUses as number | null,
     instrument: instrument as Instrument | null,
@@ -179,8 +228,7 @@ export function parseNewInvite(body: unknown): ParseResult<NewInviteBody> {
 export function parseAccept(body: unknown): ParseResult<AcceptInviteBody> {
   const b = asRecord(body)
   if (!b) return fail('请求内容不对。')
-  if (typeof b.token !== 'string' || !TOKEN_RE.test(b.token))
-    return fail('这个邀请链接不存在或已经失效。')
+  if (typeof b.token !== 'string' || !TOKEN_RE.test(b.token)) return fail(REASON_UNKNOWN)
   if (typeof b.username !== 'string' || charLen(b.username) > MAX_NAME_CHARS)
     return fail('用户名不对。')
   if (typeof b.displayName !== 'string' || charLen(b.displayName) > MAX_NAME_CHARS)
@@ -193,13 +241,35 @@ export function parseAccept(body: unknown): ParseResult<AcceptInviteBody> {
     !(typeof instrument === 'string' && INSTRUMENTS.includes(instrument as Instrument))
   )
     return fail('乐器选择不对。')
+  const bandName = parseBandName(b.bandName)
+  if (!bandName.ok) return bandName
   return good({
     token: b.token,
     username: b.username,
     displayName: b.displayName,
     password: b.password,
     instrument: instrument as Instrument | null,
+    ...(bandName.value ? { bandName: bandName.value } : {}),
   })
+}
+
+/** An optional new band's name: absent, or 1-40 characters. */
+function parseBandName(v: unknown): ParseResult<string | null> {
+  if (v === undefined || v === null || v === '') return good(null)
+  if (typeof v !== 'string') return fail('乐队名要在 1–40 个字符之间。')
+  const t = v.trim()
+  if (charLen(t) < 1 || charLen(t) > 40) return fail('乐队名要在 1–40 个字符之间。')
+  return good(t)
+}
+
+/** Validates the body of POST /api/invite/join (signed in). */
+export function parseJoin(body: unknown): ParseResult<JoinInviteBody> {
+  const b = asRecord(body)
+  if (!b) return fail('请求内容不对。')
+  if (typeof b.token !== 'string' || !TOKEN_RE.test(b.token)) return fail(REASON_UNKNOWN)
+  const bandName = parseBandName(b.bandName)
+  if (!bandName.ok) return bandName
+  return good({ token: b.token, ...(bandName.value ? { bandName: bandName.value } : {}) })
 }
 
 /**
@@ -227,8 +297,8 @@ export class InviteStore {
     this.rows = rows
   }
 
-  /** Reads invites.json once. Missing is empty; damaged is set aside and the store starts empty. */
-  static async load(dataDir: string): Promise<InviteStore> {
+  /** Reads invites.json once. Missing is empty; damaged is set aside and the store starts empty. Old rows join `defaultBandId`. */
+  static async load(dataDir: string, defaultBandId: string | null = null): Promise<InviteStore> {
     const file = path.join(dataDir, INVITES_FILE)
     let text: string
     try {
@@ -252,7 +322,7 @@ export class InviteStore {
     const seen = new Set<string>()
     const rows: StoredInvite[] = []
     for (const item of rec.items) {
-      const row = sanitizeRow(item)
+      const row = sanitizeRow(item, defaultBandId)
       if (!row || seen.has(row.id)) continue
       seen.add(row.id)
       rows.push(row)
@@ -260,24 +330,30 @@ export class InviteStore {
     return new InviteStore(dataDir, rows)
   }
 
-  /** The stored row for this token, found by comparing hashes in constant time. */
+  /**
+   * The stored row for this code (as typed) or old link token, found by comparing
+   * hashes in constant time.
+   */
   private find(token: string): StoredInvite | undefined {
     if (typeof token !== 'string') return undefined
-    const want = Buffer.from(hashToken(token), 'hex')
+    const wants = [hashToken(token), hashToken(normalizeCode(token))].map((h) => Buffer.from(h, 'hex'))
     let found: StoredInvite | undefined
     for (const row of this.rows) {
-      if (timingSafeEqual(Buffer.from(row.tokenHash, 'hex'), want)) found = row
+      const have = Buffer.from(row.tokenHash, 'hex')
+      for (const want of wants) if (timingSafeEqual(have, want)) found = row
     }
     return found
   }
 
-  /** Admin: a new link. The token is returned here only; it is never stored. */
-  create(body: NewInviteBody, adminId: string, now: number): Promise<NewInviteResult> {
+  /** A new invite. The code is returned here only; it is never stored. */
+  create(body: NewInviteBody, creatorId: string, now: number): Promise<NewInviteResult> {
     return this.queue(async () => {
-      const token = randomBytes(24).toString('base64url')
+      const token = newCode()
       const row: StoredInvite = {
         id: freshId(this.rows),
-        createdBy: adminId,
+        kind: body.kind,
+        bandId: body.kind === 'leader' ? null : body.bandId,
+        createdBy: creatorId,
         createdAt: now,
         expiresAt: body.days === null ? null : now + body.days * DAY_MS,
         maxUses: body.maxUses,
@@ -287,23 +363,42 @@ export class InviteStore {
         libraryAccess: body.libraryAccess,
         note: body.note,
         revoked: false,
-        tokenHash: hashToken(token),
+        tokenHash: hashToken(normalizeCode(token)),
       }
       await this.commit(trimRows([...this.rows, row], now))
       return { invite: publicInvite(row), token }
     })
   }
 
-  /** Admin: every link, newest first (no hashes). */
+  /** Every invite, newest first (no hashes). */
   list(): InviteInfo[] {
     return this.rows.slice().reverse().map(publicInvite)
   }
 
-  /** Admin: marks a link as revoked. */
+  /** One invite (no hash). */
+  get(id: string): InviteInfo | undefined {
+    const row = this.rows.find((r) => r.id === id)
+    return row ? publicInvite(row) : undefined
+  }
+
+  /** How many invites made by this account can still be used. */
+  usableBy(creatorId: string, now: number): number {
+    return this.rows.filter((r) => r.createdBy === creatorId && reasonFor(r, now) === null).length
+  }
+
+  /** A band was deleted: its invites go with it. */
+  forgetBand(bandId: string): Promise<void> {
+    return this.queue(async () => {
+      if (!this.rows.some((r) => r.bandId === bandId)) return
+      await this.commit(this.rows.filter((r) => r.bandId !== bandId))
+    })
+  }
+
+  /** Marks an invite as revoked. */
   revoke(id: string): Promise<void> {
     return this.queue(async () => {
       const row = this.rows.find((r) => r.id === id)
-      if (!row) throw new InviteError('找不到这个邀请链接。', 404)
+      if (!row) throw new InviteError('找不到这个邀请码。', 404)
       await this.commit(this.rows.map((r) => (r === row ? { ...r, revoked: true } : r)))
     })
   }

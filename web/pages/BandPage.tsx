@@ -3,6 +3,7 @@ import type { ScoreSearchResult, ScoreVersion } from '@/songs/scoreLibraryTypes'
 import {
   api,
   errorText,
+  type BandBrief,
   type BandSong,
   type BandState,
   type DailyMemberProgress,
@@ -13,8 +14,11 @@ import {
 } from '../lib/api'
 import {
   addSong,
+  leaveBand,
+  removeMember,
   rename,
   reorder,
+  setLeader,
   setSetlist,
   STATUS_LABELS,
   updateSong,
@@ -24,11 +28,12 @@ import { buttonClass, cx } from '../lib/classes'
 import { todayNumber } from '../lib/daily'
 import { useRehearsal } from '../lib/rehearsal'
 import { openInRehearsal } from '../lib/rehearsalNav'
-import { canBrowseLibrary, INSTRUMENT_LABELS, useMe } from '../lib/session'
+import { canBrowseLibrary, chooseBand, INSTRUMENT_LABELS, useMe } from '../lib/session'
 import { fmtDuration } from '../lib/practice'
-import { hrefBandSong, hrefEnsembles, hrefUpload } from '../lib/route'
+import { hrefBandSong, hrefEnsembles, hrefUpload, navigate } from '../lib/route'
 import { FormatBadge, Notice, PageBar, Seg } from '../components/ui'
 import { Link } from '../components/Link'
+import { InvitesPanel } from '../components/InvitesPanel'
 
 type Filter = 'all' | SongStatus
 
@@ -55,6 +60,240 @@ const STATUS_CLASS: Record<SongStatus, string> = {
 const ICON_BUTTON =
   'grid h-11 w-11 place-items-center rounded-lg border border-border text-base text-muted-foreground transition-colors hover:border-foreground hover:text-foreground disabled:opacity-40'
 
+/** Not in any band yet: type an invite code (or open the link the leader sent). */
+function NoBand() {
+  const [code, setCode] = useState('')
+  const clean = code.replace(/\s+/g, '').toUpperCase()
+  return (
+    <>
+      <PageBar title="乐队" fallback="#/" back="← 目录" />
+      <div className="max-w-[640px] space-y-4 py-6">
+        <Notice>
+          你还没有加入任何乐队。向队长要一个邀请码填在下面；如果对方发的是链接，直接打开就行，不用另外注册。
+        </Notice>
+        <form
+          className="flex flex-wrap gap-2"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (/^[A-Z0-9_-]{10,64}$/i.test(clean)) navigate(`#/invite/${clean}`)
+          }}
+        >
+          <label className="sr-only" htmlFor="join-code">
+            邀请码
+          </label>
+          <input
+            id="join-code"
+            value={code}
+            onChange={(e) => setCode(e.target.value)}
+            placeholder="邀请码，例如 K7QM3-PXD2A"
+            autoCapitalize="characters"
+            autoComplete="off"
+            spellCheck={false}
+            className="mono h-11 min-w-0 flex-1 basis-56 rounded-lg border border-border bg-transparent px-3 text-base tracking-[0.1em] text-foreground focus:border-primary"
+          />
+          <button
+            type="submit"
+            disabled={!/^[A-Z0-9_-]{10,64}$/i.test(clean)}
+            className={buttonClass('primary') + ' min-h-11 px-4'}
+          >
+            加入
+          </button>
+        </form>
+      </div>
+    </>
+  )
+}
+
+/** Several bands: which one the pages work in (remembered on this device). */
+function BandSwitcher({ bands, current }: { bands: BandBrief[]; current: string }) {
+  return (
+    <div className="flex max-w-[640px] flex-wrap items-center gap-2 pt-4" role="group" aria-label="切换乐队">
+      <span className="text-xs text-muted-foreground">我的乐队</span>
+      {bands.map((b) => (
+        <button
+          key={b.id}
+          type="button"
+          aria-pressed={b.id === current}
+          onClick={() => chooseBand(b.id)}
+          className={cx(
+            'inline-flex min-h-9 items-center rounded-full border px-3 text-sm transition-colors',
+            b.id === current
+              ? 'border-primary bg-primary text-primary-foreground'
+              : 'border-border text-muted-foreground hover:border-foreground hover:text-foreground',
+          )}
+        >
+          {b.name}
+          {b.leader && <span className="ml-1 text-[11px] opacity-80">队长</span>}
+        </button>
+      ))}
+      <Link href="#/invite" className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground">
+        加入其他乐队
+      </Link>
+    </div>
+  )
+}
+
+const MB = 1024 * 1024
+const fmtSpace = (n: number) => (n >= 1024 * MB ? `${(n / 1024 / MB).toFixed(1)} GB` : `${Math.round(n / MB)} MB`)
+
+/** 成员: who is in the band; the leader can take people out or hand over; anyone else can leave. */
+function MembersSection({
+  band,
+  meId,
+  manager,
+  daily,
+}: {
+  band: BandState
+  meId: string | null
+  manager: boolean
+  daily: Map<string, DailyMemberProgress> | null
+}) {
+  const [managing, setManaging] = useState(false)
+  const [confirm, setConfirm] = useState<{ kind: 'remove' | 'leader' | 'leave'; id: string } | null>(null)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const nameOf = (id: string) => band.members.find((m) => m.id === id)?.displayName ?? '这位成员'
+  const imLeader = meId === band.leaderId
+
+  const act = async () => {
+    if (!confirm || busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      if (confirm.kind === 'remove') await removeMember(confirm.id)
+      else if (confirm.kind === 'leader') await setLeader(confirm.id)
+      else if (meId) await leaveBand(meId)
+      setConfirm(null)
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const question =
+    confirm?.kind === 'remove'
+      ? `把「${nameOf(confirm.id)}」移出乐队？TA 分到的声部会空出来，留言保留。之后可以再发邀请码让 TA 回来。`
+      : confirm?.kind === 'leader'
+        ? `把队长交给「${nameOf(confirm.id)}」？交出去后你就是普通成员了，不能再邀请人或移出成员。`
+        : `退出「${band.name}」？你在这个乐队分到的声部会空出来。之后要回来需要队长重新邀请。`
+
+  return (
+    <section aria-labelledby="band-members" className="max-w-[640px] pt-6">
+      <div className="flex flex-wrap items-baseline justify-between gap-2">
+        <h2 id="band-members" className="label m-0">
+          成员
+          <span className="ml-2 normal-case tracking-normal text-muted-foreground">
+            {band.members.length} / {band.limits.maxMembers}
+          </span>
+        </h2>
+        <span className="flex flex-wrap items-center gap-3">
+          {manager && band.members.length > 1 && (
+            <button
+              type="button"
+              onClick={() => {
+                setManaging((v) => !v)
+                setConfirm(null)
+              }}
+              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+            >
+              {managing ? '完成' : '管理成员'}
+            </button>
+          )}
+          {!imLeader && meId && band.members.some((m) => m.id === meId) && (
+            <button
+              type="button"
+              onClick={() => setConfirm({ kind: 'leave', id: meId })}
+              className="text-xs text-muted-foreground underline underline-offset-4 hover:text-destructive"
+            >
+              退出乐队
+            </button>
+          )}
+        </span>
+      </div>
+      <ul className="m-0 mt-2.5 flex list-none flex-wrap gap-2 p-0">
+        {band.members.map((m) => (
+          <li
+            key={m.id}
+            className="inline-flex min-h-11 flex-col justify-center gap-0.5 rounded-2xl border border-border px-3.5 py-1.5 text-sm"
+          >
+            <span className="flex items-center gap-2">
+              <span className="font-medium">
+                {m.displayName}
+                {meId === m.id && <span className="text-muted-foreground">（我）</span>}
+              </span>
+              {m.id === band.leaderId && (
+                <span className="mono rounded-[3px] border border-primary px-1 text-[11px] leading-5 text-primary">
+                  队长
+                </span>
+              )}
+              <span className="mono text-xs text-muted-foreground">
+                {m.instrument ? INSTRUMENT_LABELS[m.instrument] : '未设乐器'}
+              </span>
+            </span>
+            {daily && <span className="mono text-[11px] text-muted-foreground">{dailyLine(daily.get(m.id))}</span>}
+            {managing && m.id !== band.leaderId && (
+              <span className="flex gap-3 pt-1">
+                <button
+                  type="button"
+                  onClick={() => setConfirm({ kind: 'remove', id: m.id })}
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-destructive"
+                >
+                  移出
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setConfirm({ kind: 'leader', id: m.id })}
+                  className="text-xs text-muted-foreground underline underline-offset-4 hover:text-foreground"
+                >
+                  设为队长
+                </button>
+              </span>
+            )}
+          </li>
+        ))}
+      </ul>
+      {confirm && (
+        <div role="alertdialog" className="mt-3 space-y-3 rounded-lg border border-border p-4">
+          <p className="m-0 text-sm leading-relaxed">{question}</p>
+          {error && (
+            <p role="alert" className="m-0 text-sm text-destructive">
+              {error}
+            </p>
+          )}
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void act()}
+              disabled={busy}
+              className={cx(
+                buttonClass('outline'),
+                'min-h-11 px-3',
+                confirm.kind !== 'leader' && 'border-destructive text-destructive',
+              )}
+            >
+              {busy ? '正在保存…' : confirm.kind === 'remove' ? '移出' : confirm.kind === 'leader' ? '交给 TA' : '退出'}
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                setConfirm(null)
+                setError(null)
+              }}
+              className={cx(buttonClass('ghost'), 'min-h-11 px-3')}
+            >
+              取消
+            </button>
+          </div>
+        </div>
+      )}
+      <p className="m-0 mt-2 text-xs text-muted-foreground">
+        上传空间：已用 {fmtSpace(band.storageUsed)} / {fmtSpace(band.limits.storageBytes)}（自己上传的谱和排练录音）
+      </p>
+    </section>
+  )
+}
+
 /** 乐队 page: the band's name and members, the ordered setlist, and adding songs from the library. */
 export function BandPage() {
   const { state, error, reload } = useBand()
@@ -68,7 +307,9 @@ export function BandPage() {
   // Each member's 每日一练 progress; a failed read just leaves the lines out.
   const [daily, setDaily] = useState<Map<string, DailyMemberProgress> | null>(null)
 
+  const bandId = state?.id ?? null
   useEffect(() => {
+    if (!bandId) return
     let alive = true
     api.dailyMembers().then(
       (list) => {
@@ -79,7 +320,7 @@ export function BandPage() {
     return () => {
       alive = false
     }
-  }, [])
+  }, [bandId])
 
   const run = async (key: string, job: () => Promise<void>) => {
     if (busy) return
@@ -93,6 +334,8 @@ export function BandPage() {
       setBusy(null)
     }
   }
+
+  if (me && me.bands.length === 0) return <NoBand />
 
   if (!state) {
     return (
@@ -118,6 +361,7 @@ export function BandPage() {
     )
   }
 
+  const manager = me !== null && (me.role === 'admin' || me.id === state.leaderId)
   const memberById = new Map<string, UserInfo>(state.members.map((m) => [m.id, m]))
   const nameOf = (id: string) => memberById.get(id)?.displayName ?? '已离开的成员'
   const shown = filter === 'all' ? state.songs : state.songs.filter((s) => s.status === filter)
@@ -152,7 +396,7 @@ export function BandPage() {
         fallback="#/"
         subtitle={`${state.songs.length} 首歌 · ${state.members.length} 位成员`}
       >
-        {!renaming && (
+        {!renaming && manager && (
           <button
             type="button"
             onClick={startRename}
@@ -199,37 +443,23 @@ export function BandPage() {
         </form>
       )}
 
+      {me && me.bands.length > 1 && <BandSwitcher bands={me.bands} current={state.id} />}
+
       <RehearsalSection band={state} meId={me?.id ?? null} />
 
-      {/* members */}
-      <section aria-labelledby="band-members" className="max-w-[640px] pt-6">
-        <h2 id="band-members" className="label m-0">
-          成员
-        </h2>
-        <ul className="m-0 mt-2.5 flex list-none flex-wrap gap-2 p-0">
-          {state.members.map((m) => (
-            <li
-              key={m.id}
-              className="inline-flex min-h-11 flex-col justify-center gap-0.5 rounded-2xl border border-border px-3.5 py-1.5 text-sm"
-            >
-              <span className="flex items-center gap-2">
-                <span className="font-medium">
-                  {m.displayName}
-                  {me?.id === m.id && <span className="text-muted-foreground">（我）</span>}
-                </span>
-                <span className="mono text-xs text-muted-foreground">
-                  {m.instrument ? INSTRUMENT_LABELS[m.instrument] : '未设乐器'}
-                </span>
-              </span>
-              {daily && (
-                <span className="mono text-[11px] text-muted-foreground">
-                  {dailyLine(daily.get(m.id))}
-                </span>
-              )}
-            </li>
-          ))}
-        </ul>
-      </section>
+      <MembersSection band={state} meId={me?.id ?? null} manager={manager} daily={daily} />
+
+      {manager && (
+        <div className="max-w-[640px] pt-8">
+          <InvitesPanel
+            key={state.id}
+            title="邀请成员"
+            bandId={state.id}
+            nameOf={nameOf}
+            canGrantLibrary={browse}
+          />
+        </div>
+      )}
 
       {/* setlist */}
       <section aria-labelledby="band-setlist" className="max-w-[640px] pt-8">

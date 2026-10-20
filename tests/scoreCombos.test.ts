@@ -48,6 +48,8 @@ const user = (id: string, role: UserInfo['role'] = 'member'): UserInfo => ({
   libraryAccess: true,
   instrument: null,
   createdAt: 0,
+  invitedBy: null,
+  disabled: false,
 })
 
 let dir: string

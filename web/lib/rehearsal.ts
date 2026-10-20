@@ -17,6 +17,7 @@ import {
   type RehearsalState,
 } from './api'
 import { reloadBand } from './band'
+import { getBandId, onBandChange } from './session'
 
 export interface TimeSample {
   /** Local time before the request. */
@@ -134,7 +135,8 @@ function remeasure(): void {
 function open(): void {
   if (source) return
   remeasure()
-  const url = `/api/rehearsal/events?device=${encodeURIComponent(deviceId)}&label=${encodeURIComponent(deviceLabel())}`
+  const band = getBandId() ?? ''
+  const url = `/api/rehearsal/events?device=${encodeURIComponent(deviceId)}&label=${encodeURIComponent(deviceLabel())}&band=${encodeURIComponent(band)}`
   const es = new EventSource(url)
   source = es
   let opened = false
@@ -180,6 +182,14 @@ function close(): void {
   remeasureTimer = null
   set({ connected: false })
 }
+
+// Another band chosen: its own rehearsal room (the stream reopens for it).
+onBandChange(() => {
+  if (!source) return
+  close()
+  set({ state: null })
+  open()
+})
 
 function retain(): () => void {
   users++

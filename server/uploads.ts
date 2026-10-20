@@ -237,7 +237,7 @@ function sanitizeFile(raw: unknown, songId: string, songDir: string): UploadFile
 }
 
 /** Checks one stored song row. Its files whose bytes are missing are dropped; the song stays. */
-function sanitizeSong(raw: unknown, uploadsDir: string): UploadSong | null {
+function sanitizeSong(raw: unknown, uploadsDir: string, defaultBandId: string): UploadSong | null {
   if (!isRecord(raw) || typeof raw.id !== 'string' || !ID_PATTERN.test(raw.id)) return null
   const songDir = path.join(uploadsDir, raw.id)
   const seen = new Set<string>()
@@ -252,6 +252,8 @@ function sanitizeSong(raw: unknown, uploadsDir: string): UploadSong | null {
   }
   return {
     id: raw.id,
+    // Songs uploaded before several bands belong to the first band.
+    bandId: typeof raw.bandId === 'string' && raw.bandId ? raw.bandId : defaultBandId,
     title: typeof raw.title === 'string' ? cut(raw.title, MAX_TITLE_CHARS) : '',
     artist: typeof raw.artist === 'string' ? cut(raw.artist, MAX_ARTIST_CHARS) : '',
     files,
@@ -284,8 +286,11 @@ export class UploadStore {
     this.songs = songs
   }
 
-  /** Reads uploads.json once. Missing is empty; damaged is set aside; files whose bytes are missing are dropped. */
-  static async load(dataDir: string): Promise<UploadStore> {
+  /**
+   * Reads uploads.json once. Missing is empty; damaged is set aside; files whose bytes
+   * are missing are dropped. Songs without a band join `defaultBandId`.
+   */
+  static async load(dataDir: string, defaultBandId = ''): Promise<UploadStore> {
     const file = path.join(dataDir, UPLOADS_FILE)
     const empty = () => new UploadStore(dataDir, [])
     let text: string
@@ -311,7 +316,7 @@ export class UploadStore {
     const seen = new Set<string>()
     const songs: UploadSong[] = []
     for (const row of raw.songs) {
-      const s = sanitizeSong(row, uploadsDir)
+      const s = sanitizeSong(row, uploadsDir, defaultBandId)
       if (!s || seen.has(s.id)) continue
       seen.add(s.id)
       songs.push(s)
@@ -343,9 +348,30 @@ export class UploadStore {
     return file
   }
 
-  /** The uploaded songs, newest update first. */
-  list(): UploadSong[] {
-    return this.songs.map(cloneSong).sort((a, b) => b.updatedAt - a.updatedAt)
+  /** The uploaded songs (of one band, when given), newest update first. */
+  list(bandId?: string): UploadSong[] {
+    return this.songs
+      .filter((s) => bandId === undefined || s.bandId === bandId)
+      .map(cloneSong)
+      .sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** Bytes of every file a band uploaded. */
+  bytesOf(bandId: string): number {
+    let total = 0
+    for (const s of this.songs) if (s.bandId === bandId) for (const f of s.files) total += f.size
+    return total
+  }
+
+  /** A band was deleted: its songs and their folders go too. */
+  removeBand(bandId: string): Promise<void> {
+    return this.queue(async () => {
+      const gone = this.songs.filter((s) => s.bandId === bandId)
+      if (gone.length === 0) return
+      await this.commit(this.songs.filter((s) => s.bandId !== bandId))
+      for (const s of gone)
+        await fs.promises.rm(this.songDir(s.id), { recursive: true, force: true }).catch(() => {})
+    })
   }
 
   get(id: string): UploadSong | undefined {
@@ -376,9 +402,9 @@ export class UploadStore {
     return stat?.isFile() ? abs : null
   }
 
-  /** Makes a new, empty song. */
+  /** Makes a new, empty song of a band. */
   create(
-    body: { title: string; artist: string },
+    body: { title: string; artist: string; bandId?: string },
     userId: string,
     now: number,
   ): Promise<UploadSong> {
@@ -387,6 +413,7 @@ export class UploadStore {
         throw new UploadError(409, '上传的歌太多了，请先删掉一些。')
       const song: UploadSong = {
         id: newId(),
+        bandId: body.bandId ?? '',
         title: body.title,
         artist: body.artist,
         files: [],

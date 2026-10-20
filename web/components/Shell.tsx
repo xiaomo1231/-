@@ -314,7 +314,7 @@ function AccountLinks({ me }: { me: UserInfo }) {
           href={HREF_USERS}
           className="flex h-9 items-center rounded-lg px-2.5 text-sm text-foreground transition-colors hover:bg-card"
         >
-          成员
+          管理
         </Link>
       )}
       <Link

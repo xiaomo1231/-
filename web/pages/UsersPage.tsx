@@ -1,9 +1,9 @@
-import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react'
-import type { Instrument, InviteInfo, Role, UserInfo } from '@/songs/scoreServerTypes'
+import { useEffect, useState, type FormEvent, type ReactNode } from 'react'
+import type { BandOverview, Instrument, Role, UserInfo } from '@/songs/scoreServerTypes'
 import { api, errorText } from '../lib/api'
 import { buttonClass, cx, SELECT } from '../lib/classes'
-import { inviteUrl } from '../lib/route'
 import { INSTRUMENT_LABELS, useMe } from '../lib/session'
+import { InvitesPanel } from '../components/InvitesPanel'
 import { Notice, PageBar } from '../components/ui'
 
 const INPUT =
@@ -18,6 +18,7 @@ type Panel =
   | { kind: 'edit'; id: string }
   | { kind: 'reset'; id: string }
   | { kind: 'delete'; id: string }
+  | { kind: 'disable'; id: string }
   | null
 
 function Field({ label, children }: { label: string; children: ReactNode }) {
@@ -407,325 +408,258 @@ function DeleteConfirm({
   )
 }
 
-const DAY_OPTIONS: { value: string; label: string; days: number | null }[] = [
-  { value: '1', label: '1 天', days: 1 },
-  { value: '7', label: '7 天', days: 7 },
-  { value: '30', label: '30 天', days: 30 },
-  { value: 'never', label: '永不过期', days: null },
-]
-
-const USE_OPTIONS: { value: string; label: string; uses: number | null }[] = [
-  { value: '1', label: '1 次', uses: 1 },
-  { value: '5', label: '5 次', uses: 5 },
-  { value: 'unlimited', label: '不限', uses: null },
-]
-
-type InviteStatus = '有效' | '已过期' | '已用完' | '已作废'
-
-const STATUS_CLASS: Record<InviteStatus, string> = {
-  有效: 'border-primary text-primary',
-  已过期: 'border-border text-muted-foreground',
-  已用完: 'border-border text-muted-foreground',
-  已作废: 'border-border text-muted-foreground',
+/** The accounts in invite order: each one under the person who invited it (depth = how far down). */
+function inviteTree(users: UserInfo[]): { user: UserInfo; depth: number }[] {
+  const ids = new Set(users.map((u) => u.id))
+  const kids = new Map<string | null, UserInfo[]>()
+  for (const u of users) {
+    const parent = u.invitedBy && ids.has(u.invitedBy) && u.invitedBy !== u.id ? u.invitedBy : null
+    kids.set(parent, [...(kids.get(parent) ?? []), u])
+  }
+  const out: { user: UserInfo; depth: number }[] = []
+  const seen = new Set<string>()
+  const walk = (parent: string | null, depth: number) => {
+    for (const u of (kids.get(parent) ?? []).sort((a, b) => a.createdAt - b.createdAt)) {
+      if (seen.has(u.id)) continue
+      seen.add(u.id)
+      out.push({ user: u, depth })
+      walk(u.id, depth + 1)
+    }
+  }
+  walk(null, 0)
+  // Anything left (a loop in old data) still shows.
+  for (const u of users) if (!seen.has(u.id)) out.push({ user: u, depth: 0 })
+  return out
 }
 
-/** The state of a link now: revoked, expired, used up, or still usable. */
-function inviteStatus(inv: InviteInfo, now: number): InviteStatus {
-  if (inv.revoked) return '已作废'
-  if (inv.expiresAt !== null && now >= inv.expiresAt) return '已过期'
-  if (inv.maxUses !== null && inv.uses >= inv.maxUses) return '已用完'
-  return '有效'
+/** Everyone an account brought in, directly or through the people it invited. */
+function inviteesOf(users: UserInfo[], id: string): string[] {
+  const out = new Set<string>()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const u of users)
+      if (u.invitedBy && (u.invitedBy === id || out.has(u.invitedBy)) && !out.has(u.id) && u.id !== id) {
+        out.add(u.id)
+        grew = true
+      }
+  }
+  return [...out]
 }
 
-const fmtDate = (ms: number): string =>
-  new Date(ms).toLocaleDateString('zh-CN', { year: 'numeric', month: 'numeric', day: 'numeric' })
-
-/** 邀请链接 (admin): make a one-off link for a new member, and list / revoke the links made. */
-function InvitesSection({ users }: { users: UserInfo[] }) {
-  const [list, setList] = useState<InviteInfo[] | null>(null)
-  const [loadError, setLoadError] = useState<string | null>(null)
-  const [days, setDays] = useState('7')
-  const [uses, setUses] = useState('1')
-  const [instrument, setInstrument] = useState<Instrument | ''>('')
-  const [libraryAccess, setLibraryAccess] = useState(false)
-  const [note, setNote] = useState('')
-  const [created, setCreated] = useState<string | null>(null)
-  const [copyNote, setCopyNote] = useState<string | null>(null)
-  const [revokeId, setRevokeId] = useState<string | null>(null)
+/** 停用 / 恢复: a stopped account cannot sign in; optionally everyone it invited too. */
+function DisableConfirm({
+  user,
+  users,
+  onCancel,
+  onDone,
+}: {
+  user: UserInfo
+  users: UserInfo[]
+  onCancel: () => void
+  onDone: (rows: UserInfo[]) => void
+}) {
+  const stopping = !user.disabled
+  const below = inviteesOf(users, user.id).length
+  const [all, setAll] = useState(false)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [message, setMessage] = useState<string | null>(null)
-  const linkRef = useRef<HTMLInputElement>(null)
-
-  useEffect(() => {
-    const ac = new AbortController()
-    api.invites(ac.signal).then(
-      (rows) => setList(rows),
-      (e: unknown) => {
-        if (!ac.signal.aborted) setLoadError(errorText(e))
-      },
-    )
-    return () => ac.abort()
-  }, [])
-
-  const create = async (e: FormEvent<HTMLFormElement>) => {
-    e.preventDefault()
-    if (busy) return
-    const dayOpt = DAY_OPTIONS.find((o) => o.value === days)
-    const useOpt = USE_OPTIONS.find((o) => o.value === uses)
-    setBusy(true)
-    setError(null)
-    setMessage(null)
-    setCopyNote(null)
-    try {
-      const res = await api.createInvite({
-        days: dayOpt?.days ?? null,
-        maxUses: useOpt?.uses ?? null,
-        instrument: instrument || null,
-        libraryAccess,
-        note: note.trim(),
-      })
-      setCreated(inviteUrl(res.token))
-      setList((rows) => [res.invite, ...(rows ?? [])])
-      setNote('')
-    } catch (err) {
-      setError(errorText(err))
-    } finally {
-      setBusy(false)
-    }
-  }
-
-  const copy = async () => {
-    if (!created) return
-    try {
-      await navigator.clipboard.writeText(created)
-      setCopyNote('已复制。')
-    } catch {
-      // Clipboard API is missing on plain-http addresses: select the text for a manual copy.
-      linkRef.current?.select()
-      setCopyNote('浏览器不允许自动复制，链接已选中，请按 Ctrl+C 复制。')
-    }
-  }
-
-  const revoke = async (id: string) => {
-    if (busy) return
+  const go = async () => {
     setBusy(true)
     setError(null)
     try {
-      setList(await api.revokeInvite(id))
-      setRevokeId(null)
-      setMessage('已作废这个邀请链接。')
+      onDone(await api.disableUser(user.id, stopping, all))
     } catch (err) {
       setError(errorText(err))
-    } finally {
       setBusy(false)
     }
   }
-
-  const nameOf = (id: string): string =>
-    users.find((u) => u.id === id)?.displayName ?? '已删除的成员'
-  const now = Date.now()
-
   return (
-    <section className="space-y-4">
-      <h2 className="label m-0">邀请链接</h2>
-      <form onSubmit={create} className="space-y-4 rounded-lg border border-border p-4">
-        <div className="grid gap-4 sm:grid-cols-2">
-          <Field label="有效期">
-            <select
-              value={days}
-              onChange={(e) => setDays(e.target.value)}
-              className={cx(SELECT, 'w-full')}
-            >
-              {DAY_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="可用次数">
-            <select
-              value={uses}
-              onChange={(e) => setUses(e.target.value)}
-              className={cx(SELECT, 'w-full')}
-            >
-              {USE_OPTIONS.map((o) => (
-                <option key={o.value} value={o.value}>
-                  {o.label}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="默认乐器">
-            <select
-              value={instrument}
-              onChange={(e) => setInstrument(e.target.value as Instrument | '')}
-              className={cx(SELECT, 'w-full')}
-            >
-              <option value="">不指定</option>
-              {(Object.keys(INSTRUMENT_LABELS) as Instrument[]).map((k) => (
-                <option key={k} value={k}>
-                  {INSTRUMENT_LABELS[k]}
-                </option>
-              ))}
-            </select>
-          </Field>
-          <Field label="备注（可不填，对方打开链接时能看到）">
-            <input
-              type="text"
-              name="note"
-              maxLength={100}
-              placeholder="例如：给新鼓手"
-              value={note}
-              onChange={(e) => setNote(e.target.value)}
-              className={INPUT}
-            />
-          </Field>
-        </div>
-        <label className="flex min-h-11 items-start gap-3 text-base">
+    <div className="mt-3 space-y-3 rounded-lg border border-border p-4">
+      <p className="m-0 text-sm">
+        {stopping
+          ? `停用后「${user.displayName}」不能再登录（已经登录的设备也会退出），资料都保留，随时可以恢复。`
+          : `恢复后「${user.displayName}」可以重新登录。`}
+      </p>
+      {below > 0 && (
+        <label className="flex min-h-11 items-center gap-3 text-sm">
           <input
             type="checkbox"
-            checked={libraryAccess}
-            onChange={(e) => setLibraryAccess(e.target.checked)}
-            className="mt-1 h-5 w-5 shrink-0 accent-[hsl(var(--primary))]"
+            checked={all}
+            onChange={(e) => setAll(e.target.checked)}
+            className="h-5 w-5 accent-[hsl(var(--primary))]"
           />
-          <span>
-            能看整个谱库
-            <span className="block text-xs text-muted-foreground">
-              不勾选时，对方只能看乐队歌单里的歌。
-            </span>
-          </span>
+          连同 TA 邀请来的 {below} 个账号一起{stopping ? '停用' : '恢复'}
         </label>
-        <FormError error={error} />
-        <button type="submit" disabled={busy} className={buttonClass('primary')}>
-          {busy ? '正在生成…' : '生成邀请链接'}
+      )}
+      <FormError error={error} />
+      <div className="flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => void go()}
+          disabled={busy}
+          className={cx(buttonClass('outline'), stopping && 'border-destructive text-destructive')}
+        >
+          {busy ? '正在保存…' : stopping ? '停用' : '恢复'}
         </button>
-      </form>
+        <button type="button" onClick={onCancel} className={buttonClass('ghost')}>
+          取消
+        </button>
+      </div>
+    </div>
+  )
+}
 
-      {created && (
-        <div role="status" className="space-y-3 rounded-lg border border-primary p-4">
-          <p className="m-0 text-sm font-bold">邀请链接已生成</p>
-          <div className="flex flex-col gap-2 sm:flex-row">
-            <input
-              ref={linkRef}
-              type="text"
-              readOnly
-              value={created}
-              aria-label="邀请链接"
-              onFocus={(e) => e.target.select()}
-              className={cx(INPUT, 'mono text-xs')}
-            />
-            <button
-              type="button"
-              onClick={() => void copy()}
-              className={cx(buttonClass('primary'), 'min-h-11 shrink-0 px-4')}
-            >
-              复制
+const GB = 1024 ** 3
+const fmtSize = (n: number) => (n >= GB ? `${(n / GB).toFixed(1)} GB` : `${Math.round(n / 1024 / 1024)} MB`)
+
+/** One band's limits, leader and delete, for the admin. */
+function BandRow({
+  band,
+  nameOf,
+  onChange,
+}: {
+  band: BandOverview
+  nameOf: (id: string) => string
+  onChange: (rows: BandOverview[], text: string) => void
+}) {
+  const [open, setOpen] = useState<'edit' | 'delete' | null>(null)
+  const [members, setMembers] = useState(String(band.limits.maxMembers))
+  const [gb, setGb] = useState(String(Math.round((band.limits.storageBytes / GB) * 10) / 10))
+  const [leader, setLeader] = useState(band.leaderId)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+
+  const save = async (e: FormEvent<HTMLFormElement>) => {
+    e.preventDefault()
+    const max = Number(members)
+    const bytes = Math.round(Number(gb) * GB)
+    if (!Number.isInteger(max) || max < 1 || max > 200) return setError('人数上限要在 1–200 之间。')
+    if (!Number.isFinite(bytes) || bytes < 1 || bytes > 200 * GB) return setError('上传空间要在 0.1–200 GB 之间。')
+    if (max < band.memberIds.length) return setError(`乐队现在有 ${band.memberIds.length} 人，上限不能更少。`)
+    setBusy(true)
+    setError(null)
+    try {
+      const rows = await api.updateAdminBand({
+        id: band.id,
+        limits: { maxMembers: max, storageBytes: bytes },
+        ...(leader !== band.leaderId ? { leaderId: leader } : {}),
+      })
+      setOpen(null)
+      onChange(rows, `已保存「${band.name}」。`)
+    } catch (err) {
+      setError(errorText(err))
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const remove = async () => {
+    setBusy(true)
+    setError(null)
+    try {
+      onChange(await api.removeAdminBand(band.id), `已删除「${band.name}」。`)
+    } catch (err) {
+      setError(errorText(err))
+      setBusy(false)
+    }
+  }
+
+  return (
+    <li className="border-t border-border py-3 first:border-t-0">
+      <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
+        <span className="break-all text-base font-bold">{band.name}</span>
+        <span className="text-xs text-muted-foreground">队长：{nameOf(band.leaderId)}</span>
+      </div>
+      <p className="m-0 mt-1 text-xs text-muted-foreground">
+        {band.memberIds.length} / {band.limits.maxMembers} 人 · 上传空间 {fmtSize(band.storageUsed)} /{' '}
+        {fmtSize(band.limits.storageBytes)} · 成员：{band.memberIds.map(nameOf).join('、')}
+      </p>
+      <div className="mt-2 flex flex-wrap gap-2">
+        <button
+          type="button"
+          onClick={() => setOpen(open === 'edit' ? null : 'edit')}
+          className={cx(buttonClass('outline'), 'min-h-11 px-3')}
+        >
+          设置
+        </button>
+        <button
+          type="button"
+          onClick={() => setOpen(open === 'delete' ? null : 'delete')}
+          className={cx(buttonClass('ghost'), 'min-h-11 px-3 hover:text-destructive')}
+        >
+          删除乐队
+        </button>
+      </div>
+      {open === 'edit' && (
+        <form onSubmit={save} className="mt-3 space-y-4 rounded-lg border border-border p-4">
+          <div className="grid gap-4 sm:grid-cols-3">
+            <Field label="人数上限">
+              <input
+                type="number"
+                inputMode="numeric"
+                min={1}
+                max={200}
+                value={members}
+                onChange={(e) => setMembers(e.target.value)}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="上传空间（GB）">
+              <input
+                type="number"
+                inputMode="decimal"
+                min={0.1}
+                step={0.1}
+                max={200}
+                value={gb}
+                onChange={(e) => setGb(e.target.value)}
+                className={INPUT}
+              />
+            </Field>
+            <Field label="队长">
+              <select value={leader} onChange={(e) => setLeader(e.target.value)} className={cx(SELECT, 'w-full')}>
+                {band.memberIds.map((id) => (
+                  <option key={id} value={id}>
+                    {nameOf(id)}
+                  </option>
+                ))}
+              </select>
+            </Field>
+          </div>
+          <FormError error={error} />
+          <div className="flex flex-wrap gap-2">
+            <button type="submit" disabled={busy} className={buttonClass('primary')}>
+              {busy ? '正在保存…' : '保存'}
+            </button>
+            <button type="button" onClick={() => setOpen(null)} className={buttonClass('ghost')}>
+              取消
             </button>
           </div>
-          {copyNote && <p className="m-0 text-xs text-muted-foreground">{copyNote}</p>}
+        </form>
+      )}
+      {open === 'delete' && (
+        <div className="mt-3 space-y-3 rounded-lg border border-destructive p-4">
           <p className="m-0 text-sm leading-relaxed">
-            链接只显示这一次，请现在复制发给对方。对方打开后自己设置用户名和密码。
+            删除「{band.name}」会同时删掉它的歌单、留言、上传的谱和排练录音（{fmtSize(band.storageUsed)}），
+            还有它的邀请码。成员的账号不受影响。确定删除？
           </p>
-          <p className="m-0 text-xs text-muted-foreground">
-            对方要能访问这台服务器（同一 Wi-Fi，或已加入 Tailscale）。
-          </p>
-          <button
-            type="button"
-            onClick={() => setCreated(null)}
-            className={cx(buttonClass('ghost'), 'min-h-11 px-3')}
-          >
-            收起
-          </button>
+          <FormError error={error} />
+          <div className="flex flex-wrap gap-2">
+            <button
+              type="button"
+              onClick={() => void remove()}
+              disabled={busy}
+              className={cx(buttonClass('outline'), 'border-destructive text-destructive')}
+            >
+              {busy ? '正在删除…' : '删除'}
+            </button>
+            <button type="button" onClick={() => setOpen(null)} className={buttonClass('ghost')}>
+              取消
+            </button>
+          </div>
         </div>
       )}
-
-      {message && (
-        <p role="status" className="m-0 text-sm text-muted-foreground">
-          {message}
-        </p>
-      )}
-      {loadError && <Notice tone="error">{loadError}</Notice>}
-      {!list && !loadError && <p className="py-4 text-sm text-muted-foreground">正在读取…</p>}
-
-      {list && list.length === 0 && (
-        <p className="m-0 text-sm text-muted-foreground">还没有邀请链接。</p>
-      )}
-
-      {list && list.length > 0 && (
-        <ul className="m-0 list-none p-0">
-          {list.map((inv) => {
-            const status = inviteStatus(inv, now)
-            const joined = inv.usedBy.map(nameOf)
-            return (
-              <li key={inv.id} className="border-t border-border py-3 first:border-t-0">
-                <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
-                  <span className="break-all text-base font-bold">{inv.note || '（无备注）'}</span>
-                  <span
-                    className={cx(
-                      'mono inline-flex items-center rounded-[3px] border px-1 text-[11px] leading-5',
-                      STATUS_CLASS[status],
-                    )}
-                  >
-                    {status}
-                  </span>
-                </div>
-                <p className="m-0 mt-1 text-xs leading-relaxed text-muted-foreground">
-                  创建于 {fmtDate(inv.createdAt)} ·{' '}
-                  {inv.expiresAt === null ? '永不过期' : `${fmtDate(inv.expiresAt)} 到期`} · 已用{' '}
-                  {inv.uses} / {inv.maxUses ?? '不限'} · 默认乐器：
-                  {inv.instrument ? INSTRUMENT_LABELS[inv.instrument] : '不指定'} ·
-                  {inv.libraryAccess ? '可看完整谱库' : '只能看乐队歌单'}
-                </p>
-                <p className="m-0 mt-1 text-xs text-muted-foreground">
-                  加入的成员：{joined.length > 0 ? joined.join('、') : '暂无'}
-                </p>
-                {status === '有效' &&
-                  (revokeId === inv.id ? (
-                    <div className="mt-2 space-y-2 rounded-lg border border-destructive p-3">
-                      <p className="m-0 text-sm">作废后这个链接就不能再用了，确定作废？</p>
-                      <div className="flex flex-wrap gap-2">
-                        <button
-                          type="button"
-                          onClick={() => void revoke(inv.id)}
-                          disabled={busy}
-                          className={cx(
-                            buttonClass('outline'),
-                            'min-h-11 border-destructive px-3 text-destructive',
-                          )}
-                        >
-                          {busy ? '正在作废…' : '作废'}
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => setRevokeId(null)}
-                          className={cx(buttonClass('ghost'), 'min-h-11 px-3')}
-                        >
-                          取消
-                        </button>
-                      </div>
-                    </div>
-                  ) : (
-                    <div className="mt-2">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setMessage(null)
-                          setRevokeId(inv.id)
-                        }}
-                        className={cx(buttonClass('outline'), 'min-h-11 px-3')}
-                      >
-                        作废
-                      </button>
-                    </div>
-                  ))}
-              </li>
-            )
-          })}
-        </ul>
-      )}
-    </section>
+    </li>
   )
 }
 
@@ -737,6 +671,7 @@ export function UsersPage() {
   const [loadError, setLoadError] = useState<string | null>(null)
   const [panel, setPanel] = useState<Panel>(null)
   const [message, setMessage] = useState<string | null>(null)
+  const [bands, setBands] = useState<BandOverview[] | null>(null)
 
   useEffect(() => {
     if (!isAdmin) return
@@ -747,15 +682,21 @@ export function UsersPage() {
         if (!ac.signal.aborted) setLoadError(errorText(e))
       },
     )
+    api.adminBands(ac.signal).then(
+      (rows) => setBands(rows),
+      (e: unknown) => {
+        if (!ac.signal.aborted) setLoadError(errorText(e))
+      },
+    )
     return () => ac.abort()
   }, [isAdmin])
 
   if (!isAdmin) {
     return (
       <>
-        <PageBar title="成员管理" back="← 我的账号" fallback="#/me" />
+        <PageBar title="管理" back="← 我的账号" fallback="#/me" />
         <div className="max-w-[640px] py-6">
-          <Notice tone="error">只有管理员可以管理成员。</Notice>
+          <Notice tone="error">只有管理员可以打开管理页。</Notice>
         </div>
       </>
     )
@@ -768,14 +709,17 @@ export function UsersPage() {
     setMessage(text)
     setLoadError(null)
   }
+  const nameOf = (id: string): string => list?.find((u) => u.id === id)?.displayName ?? '已删除的账号'
+  const bandsOf = (id: string): string[] =>
+    (bands ?? []).filter((b) => b.memberIds.includes(id)).map((b) => (b.leaderId === id ? `${b.name}（队长）` : b.name))
 
   return (
     <>
       <PageBar
-        title="成员管理"
+        title="管理"
         back="← 我的账号"
         fallback="#/me"
-        subtitle={list ? `${list.length} 个账号` : undefined}
+        subtitle={list ? `${list.length} 个账号${bands ? ` · ${bands.length} 个乐队` : ''}` : undefined}
       >
         <button
           type="button"
@@ -806,15 +750,47 @@ export function UsersPage() {
 
         {!list && !loadError && <p className="py-6 text-sm text-muted-foreground">正在读取…</p>}
 
+        {bands && list && (
+          <section>
+            <h2 className="label m-0">乐队</h2>
+            <p className="m-0 mt-1 text-xs text-muted-foreground">
+              队长用你发的队长邀请码注册后会自动建一个乐队。每个乐队的歌单、排练、上传的谱和录音互相看不到。
+            </p>
+            {bands.length === 0 ? (
+              <p className="m-0 mt-3 text-sm text-muted-foreground">还没有乐队。</p>
+            ) : (
+              <ul className="m-0 mt-3 list-none p-0">
+                {bands.map((b) => (
+                  <BandRow
+                    key={b.id}
+                    band={b}
+                    nameOf={nameOf}
+                    onChange={(rows, text) => {
+                      setBands(rows)
+                      setMessage(text)
+                    }}
+                  />
+                ))}
+              </ul>
+            )}
+          </section>
+        )}
+
         {list && (
           <section>
-            <h2 className="label m-0">成员</h2>
+            <h2 className="label m-0">账号</h2>
+            <p className="m-0 mt-1 text-xs text-muted-foreground">按邀请关系排列：缩进的账号是上面那个人邀请来的。</p>
             <ul className="m-0 mt-3 list-none p-0">
-              {list.map((u) => {
+              {inviteTree(list).map(({ user: u, depth }) => {
                 const open = panel && 'id' in panel && panel.id === u.id ? panel : null
                 const isSelf = u.id === me?.id
+                const inBands = bandsOf(u.id)
                 return (
-                  <li key={u.id} className="border-t border-border py-3 first:border-t-0">
+                  <li
+                    key={u.id}
+                    className="border-t border-border py-3 first:border-t-0"
+                    style={{ paddingLeft: `${Math.min(depth, 4) * 20}px` }}
+                  >
                     <div className="flex flex-wrap items-baseline gap-x-3 gap-y-1">
                       <span className="break-all text-base font-bold">{u.displayName}</span>
                       <span className="mono break-all text-xs text-muted-foreground">
@@ -825,12 +801,21 @@ export function UsersPage() {
                           管理员
                         </span>
                       )}
+                      {u.disabled && (
+                        <span className="mono inline-flex items-center rounded-[3px] border border-destructive px-1 text-[11px] leading-5 text-destructive">
+                          已停用
+                        </span>
+                      )}
                       {isSelf && <span className="text-xs text-muted-foreground">（你）</span>}
                     </div>
                     <p className="m-0 mt-1 text-xs text-muted-foreground">
                       乐器：{u.instrument ? INSTRUMENT_LABELS[u.instrument] : '未设置'} ·
                       可看完整谱库：
                       {u.role === 'admin' || u.libraryAccess ? '是' : '否'}
+                      {u.invitedBy && ` · 邀请人：${nameOf(u.invitedBy)}`}
+                    </p>
+                    <p className="m-0 mt-0.5 text-xs text-muted-foreground">
+                      乐队：{inBands.length > 0 ? inBands.join('、') : '还没加入乐队'}
                     </p>
                     <div className="mt-2 flex flex-wrap gap-2">
                       <button
@@ -853,6 +838,18 @@ export function UsersPage() {
                       >
                         重置密码
                       </button>
+                      {!isSelf && u.role !== 'admin' && (
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setMessage(null)
+                            setPanel({ kind: 'disable', id: u.id })
+                          }}
+                          className={cx(buttonClass('outline'), 'min-h-11 px-3')}
+                        >
+                          {u.disabled ? '恢复' : '停用'}
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
@@ -880,6 +877,16 @@ export function UsersPage() {
                         }
                       />
                     )}
+                    {open?.kind === 'disable' && (
+                      <DisableConfirm
+                        user={u}
+                        users={list}
+                        onCancel={() => setPanel(null)}
+                        onDone={(rows) =>
+                          applied(rows, u.disabled ? `已恢复 ${u.displayName}。` : `已停用 ${u.displayName}。`)
+                        }
+                      />
+                    )}
                     {open?.kind === 'delete' && (
                       <DeleteConfirm
                         user={u}
@@ -894,7 +901,14 @@ export function UsersPage() {
           </section>
         )}
 
-        {list && <InvitesSection users={list} />}
+        {list && bands && (
+          <InvitesPanel
+            title="邀请码"
+            bands={bands.map((b) => ({ id: b.id, name: b.name }))}
+            nameOf={nameOf}
+            canGrantLibrary
+          />
+        )}
       </div>
     </>
   )

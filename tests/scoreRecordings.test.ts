@@ -264,6 +264,7 @@ describe('serveRecording', () => {
   const rec: RecordingInfo = {
     id: '0123456789abcdef',
     songId: 's1',
+    bandId: 'b1',
     label: '排练',
     fileName: '排练.mp3',
     size: body.length,
