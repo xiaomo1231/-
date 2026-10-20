@@ -4,6 +4,7 @@
  * formats, and the star hook both share.
  */
 import { useState } from 'react'
+import { INSTRUMENT_GROUPS, instrumentName } from '@/songs/gmInstruments'
 import { errorText, type FavoriteItem } from '../lib/api'
 import { isFavorite, toggleFavorite, useFavorites } from '../lib/favorites'
 import { cx } from '../lib/classes'
@@ -135,6 +136,18 @@ const REMOTE_CSS = `
 .gl-tracks li { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
 .gl-tracks .gl-trk-vol { grid-column: 1 / -1; }
 .gl-tracks .gl-trk-vol .gl-val { min-width: 48px; }
+.gl-tracks .gl-trk-inst { grid-column: 1 / -1; display: flex; align-items: center; gap: 8px; font-size: 12px; color: hsl(var(--muted-foreground)); }
+.gl-inst { min-height: 32px; border: 1px dashed hsl(var(--border)); background: none; color: hsl(var(--foreground)); border-radius: 8px; padding: 3px 9px; font-size: 12px; }
+.gl-inst[aria-expanded="true"] { border-style: solid; border-color: hsl(var(--primary)); }
+.gl-inst .gl-changed { color: hsl(var(--primary)); margin-left: 4px; }
+.gl-inst-list { grid-column: 1 / -1; display: grid; gap: 8px; padding: 8px; border: 1px solid hsl(var(--border)); border-radius: 10px; }
+.gl-inst-list h5 { margin: 0; font-size: 12px; font-weight: 600; color: hsl(var(--muted-foreground)); }
+.gl-inst-list .gl-chips .gl-pill { min-height: 34px; padding: 4px 9px; font-size: 12px; }
+.gl-arr { margin-top: 12px; padding-top: 12px; border-top: 1px solid hsl(var(--border)); display: grid; gap: 8px; }
+.gl-arr-line { font-size: 13px; }
+.gl-arr-line .gl-changed { color: hsl(var(--primary)); }
+.gl-arr input[type="text"] { min-height: 40px; width: 100%; border: 1px solid hsl(var(--border)); border-radius: 9px; background: none; color: inherit; padding: 6px 10px; font-size: 16px; }
+.gl-arr .gl-err { color: hsl(var(--destructive)); font-size: 12px; margin: 0; }
 .gl-ms {
   min-width: 40px; min-height: 40px; border: 1px solid hsl(var(--border)); background: none; color: inherit;
   border-radius: 9px; font-family: var(--font-mono); font-size: 13px;
@@ -235,6 +248,22 @@ export interface RemoteProps {
   /** Per-track volume in percent (0–150), index-aligned with `tracks`; missing entries count as 100. */
   volumes: number[]
   onVolume: (i: number, pct: number) => void
+  /** Each track's instrument (GM program) and the file's own one, index-aligned with `tracks`. */
+  instruments: Array<{ program: number; base: number; changed: boolean; percussion: boolean }>
+  /** Picks a track's instrument (the file's own one undoes the change). */
+  onInstrument: (i: number, program: number | null) => void
+  /** The 改编谱 being played, if any. */
+  arrangement: { name: string } | null
+  /** The instruments / mix differ from the 改编谱 (or, without one, instruments were changed). */
+  arrDirty: boolean
+  /** 改编谱 can be saved here (not for a combo, a PDF conversion or the rehearsal). */
+  canArrange: boolean
+  defaultArrName: string
+  /** Saves (asNew: as another 改编谱). Rejects with a readable message. */
+  onSaveArrangement: (name: string, asNew: boolean) => Promise<void>
+  onRevertArrangement: () => void
+  /** Downloads the score with the chosen instruments (null: nothing changed). */
+  onExportArranged: (() => void) | null
   /** 指板 (fretboard) view is on. */
   fretboard: boolean
   onFretboard: () => void
@@ -524,12 +553,14 @@ function SpeedPop({ p }: { p: RemoteProps }) {
 }
 
 function TracksPop({ p }: { p: RemoteProps }) {
+  const [picking, setPicking] = useState<number | null>(null)
   return (
     <div className="gl-pop" role="dialog" aria-label="音轨">
       <h4>音 轨</h4>
       <ul className="gl-tracks">
         {p.tracks.map((name, i) => {
           const vol = p.volumes[i] ?? 100
+          const inst = p.instruments[i]
           return (
             <li key={i}>
               <button
@@ -573,11 +604,183 @@ function TracksPop({ p }: { p: RemoteProps }) {
                 />
                 <span className="gl-val num">{vol}%</span>
               </div>
+              {inst && (
+                <div className="gl-trk-inst">
+                  {inst.percussion ? (
+                    <span>鼓组（不能换）</span>
+                  ) : (
+                    <>
+                      <span>乐器</span>
+                      <button
+                        type="button"
+                        className="gl-inst"
+                        aria-expanded={picking === i}
+                        aria-label={`${name} 的乐器：${instrumentName(inst.program)}，点击更换`}
+                        onClick={() => setPicking(picking === i ? null : i)}
+                      >
+                        {instrumentName(inst.program)}
+                        {inst.changed && <span className="gl-changed">· 已换</span>}
+                      </button>
+                    </>
+                  )}
+                </div>
+              )}
+              {inst && !inst.percussion && picking === i && (
+                <InstrumentList
+                  current={inst.program}
+                  base={inst.base}
+                  onPick={(prog) => {
+                    p.onInstrument(i, prog)
+                    setPicking(null)
+                  }}
+                />
+              )}
             </li>
           )
         })}
       </ul>
-      <p className="gl-hint">点音轨名显示这一轨；S 独奏，M 静音（M 键静音当前音轨）。</p>
+      <p className="gl-hint">点音轨名显示这一轨；S 独奏，M 静音（M 键静音当前音轨）；点乐器可以换音色。</p>
+      {p.canArrange && <ArrangementBar p={p} />}
+    </div>
+  )
+}
+
+/** The instruments to pick from: the file's own first, then by kind. */
+function InstrumentList({
+  current,
+  base,
+  onPick,
+}: {
+  current: number
+  base: number
+  onPick: (program: number | null) => void
+}) {
+  return (
+    <div className="gl-inst-list" role="group" aria-label="选择乐器">
+      <div className="gl-chips">
+        <button type="button" className="gl-pill" aria-pressed={current === base} onClick={() => onPick(null)}>
+          谱里原来的：{instrumentName(base)}
+        </button>
+      </div>
+      {INSTRUMENT_GROUPS.map((g) => (
+        <div key={g.name} className="gl-stack">
+          <h5>{g.name}</h5>
+          <div className="gl-chips">
+            {g.programs.map((prog) => (
+              <button
+                key={prog}
+                type="button"
+                className="gl-pill"
+                aria-pressed={current === prog}
+                onClick={() => onPick(prog)}
+              >
+                {instrumentName(prog)}
+              </button>
+            ))}
+          </div>
+        </div>
+      ))}
+    </div>
+  )
+}
+
+/** 改编谱: save the instruments, volumes, mutes and transposition (or go back to them). */
+function ArrangementBar({ p }: { p: RemoteProps }) {
+  const [naming, setNaming] = useState<'new' | null>(null)
+  const [name, setName] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState<string | null>(null)
+  const [done, setDone] = useState<string | null>(null)
+
+  const save = async (asNew: boolean, n: string) => {
+    if (busy) return
+    setBusy(true)
+    setError(null)
+    try {
+      await p.onSaveArrangement(n, asNew)
+      setNaming(null)
+      setDone('已保存。在主页「我的谱子」里能找到它。')
+      window.setTimeout(() => setDone(null), 4000)
+    } catch (e) {
+      setError(errorText(e))
+    } finally {
+      setBusy(false)
+    }
+  }
+  const startNew = () => {
+    setName(p.arrangement ? `${p.arrangement.name} 2` : p.defaultArrName)
+    setNaming('new')
+    setError(null)
+  }
+
+  return (
+    <div className="gl-arr">
+      <p className="gl-arr-line" style={{ margin: 0 }}>
+        {p.arrangement ? `改编谱：${p.arrangement.name}` : '改编谱'}
+        {p.arrDirty && <span className="gl-changed"> · 已修改</span>}
+      </p>
+      {naming === 'new' ? (
+        <form
+          className="gl-stack"
+          onSubmit={(e) => {
+            e.preventDefault()
+            if (name.trim()) void save(true, name.trim())
+          }}
+        >
+          <input
+            type="text"
+            aria-label="改编谱名字"
+            value={name}
+            maxLength={60}
+            autoFocus
+            onChange={(e) => setName(e.target.value)}
+          />
+          <div className="gl-chips">
+            <button type="submit" className="gl-pill" aria-pressed disabled={busy || !name.trim()}>
+              {busy ? '正在保存…' : '保存'}
+            </button>
+            <button type="button" className="gl-pill" onClick={() => setNaming(null)}>
+              取消
+            </button>
+          </div>
+        </form>
+      ) : (
+        <div className="gl-chips">
+          {p.arrangement && p.arrDirty && (
+            <button
+              type="button"
+              className="gl-pill"
+              aria-pressed
+              disabled={busy}
+              onClick={() => void save(false, p.arrangement!.name)}
+            >
+              {busy ? '正在保存…' : '保存'}
+            </button>
+          )}
+          <button type="button" className="gl-pill" onClick={startNew}>
+            {p.arrangement ? '另存为…' : '保存为改编谱…'}
+          </button>
+          {p.arrDirty && (
+            <button type="button" className="gl-pill" onClick={p.onRevertArrangement}>
+              还原
+            </button>
+          )}
+          {p.onExportArranged && (
+            <button type="button" className="gl-pill" onClick={p.onExportArranged}>
+              下载改编后的 GP
+            </button>
+          )}
+        </div>
+      )}
+      {error && <p className="gl-err">{error}</p>}
+      {done && (
+        <p className="gl-hint" role="status" style={{ margin: 0 }}>
+          {done}
+        </p>
+      )}
+      <p className="gl-hint" style={{ margin: 0 }}>
+        改编谱只记下乐器、音量、静音和移调，不复制谱子，只有你自己看得到。
+      </p>
     </div>
   )
 }

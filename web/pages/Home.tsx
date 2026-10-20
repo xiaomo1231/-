@@ -5,7 +5,8 @@ import { dailyStaffNotes } from '@/songs/dailyStaff'
 import { useFavorites } from '../lib/favorites'
 import { usePractice } from '../lib/practice'
 import { libraryName } from '../lib/format'
-import { hrefCategory, hrefGroup, hrefViewer, HREF_DAILY, HREF_FAVORITES } from '../lib/route'
+import { hrefCategory, hrefGroup, hrefViewer, HREF_DAILY, HREF_FAVORITES, HREF_MINE } from '../lib/route'
+import { MINE_KIND_LABEL, mineRows, useMine } from '../lib/mine'
 import { useLibrary } from '../lib/libraryContext'
 import { readRecent, type RecentItem } from '../lib/recent'
 import { buildContinueList } from '../lib/continueList'
@@ -77,6 +78,7 @@ export function Home() {
 
         <aside className="min-w-0">
           <ContinueSection />
+          <MineSection />
           <DailySection />
         </aside>
       </div>
@@ -178,6 +180,44 @@ function ContinueSection() {
         className="mt-2.5 inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-primary"
       >
         我的收藏 →
+      </Link>
+    </section>
+  )
+}
+
+/** 我的谱子: the latest 改编谱, uploaded songs and 组合乐队谱; the whole list on its own page. */
+function MineSection() {
+  const { data } = useMine()
+  const rows = data ? mineRows(data) : []
+  return (
+    <section className="mt-10 scroll-mt-16">
+      <p className="label mb-2.5">我 的 谱 子</p>
+      {rows.length === 0 ? (
+        <p className="py-2.5 text-sm text-muted-foreground">
+          {data ? '在看谱页「音轨」里换乐器后可以保存成改编谱，会出现在这里。' : '正在读取…'}
+        </p>
+      ) : (
+        <ul className="m-0 list-none p-0">
+          {rows.slice(0, 5).map((r) => (
+            <li key={r.key} className="border-t border-border last:border-b">
+              <Link href={r.href} className="group block py-2.5">
+                <span className="flex items-baseline justify-between gap-3">
+                  <span className="min-w-0 truncate font-bold transition-colors group-hover:text-primary">
+                    {r.name}
+                  </span>
+                  <span className="shrink-0 text-[11px] text-muted-foreground">{MINE_KIND_LABEL[r.kind]}</span>
+                </span>
+                <span className="mt-0.5 block truncate text-xs text-muted-foreground">{r.line}</span>
+              </Link>
+            </li>
+          ))}
+        </ul>
+      )}
+      <Link
+        href={HREF_MINE}
+        className="mt-2.5 inline-flex min-h-11 items-center text-sm text-muted-foreground transition-colors hover:text-primary"
+      >
+        {rows.length > 5 ? `全部 ${rows.length} 个 →` : '我的谱子 →'}
       </Link>
     </section>
   )

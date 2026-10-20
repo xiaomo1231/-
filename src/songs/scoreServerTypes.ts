@@ -755,3 +755,60 @@ export interface LibraryJianpu {
   /** File name as shown. */
   label: string
 }
+
+// ---------------------------------------------------------------------------
+// 改编谱 (a member's own instruments / mix of a score) and 我的谱子
+// ---------------------------------------------------------------------------
+
+/** One track's changes in an arrangement; absent fields keep the score's own. */
+export interface ArrangementTrack {
+  /** General MIDI program 0–127. */
+  program?: number
+  /** Percent, 0–150 (100 = unchanged). */
+  volume?: number
+  mute?: boolean
+}
+
+/**
+ * 改编谱: not a copy of the file, only how to play it — each track's instrument,
+ * volume and mute, and the transposition. Private to its owner.
+ */
+export interface Arrangement {
+  id: string
+  owner: string
+  /** 1–60 characters. */
+  name: string
+  /** The score it changes (a library or uploaded file). */
+  path: string
+  title: string
+  artist: string
+  /** Track index ("0".."63") → its changes. */
+  tracks: Record<string, ArrangementTrack>
+  /** Semitones, −6..6. */
+  transpose: number
+  /** Tracks the score had when saved (a changed file is noticed). */
+  trackCount: number
+  createdAt: number
+  updatedAt: number
+}
+
+/** POST /api/arrangements/save (id null = a new one). */
+export interface SaveArrangementBody {
+  id: string | null
+  name: string
+  path: string
+  title: string
+  artist: string
+  tracks: Record<string, ArrangementTrack>
+  transpose: number
+  trackCount: number
+}
+
+/** GET /api/mine: 我的谱子. */
+export interface MyScores {
+  arrangements: Arrangement[]
+  /** Songs I uploaded (in my bands). */
+  uploads: UploadSong[]
+  /** 组合乐队谱 I made. */
+  combos: ComboRecipe[]
+}

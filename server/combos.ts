@@ -211,6 +211,11 @@ export class ComboStore {
     return this.items.find((r) => r.id === id)
   }
 
+  /** The recipes one account made, newest first. */
+  byUser(userId: string): ComboRecipe[] {
+    return this.items.filter((r) => r.createdBy === userId).sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
   /**
    * Stores a recipe. A null id creates one (new id, createdBy = userId); a known
    * id replaces that recipe and keeps its createdBy; an unknown id is a 404.

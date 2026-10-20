@@ -1,7 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
 import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
-import { errorText, fetchBytes, fileUrl, type PracticeUpdate } from '../lib/api'
+import { errorText, fetchBytes, fileUrl, type Arrangement, type PracticeUpdate } from '../lib/api'
+import { configOf, mixOf, sameConfig } from '@/songs/arrangement'
 import { clampTranspose } from '../lib/transpose'
 import { cx } from '../lib/classes'
 import { loadPracticeFor, practiceFor, savePractice, savePracticeOnExit } from '../lib/practice'
@@ -121,6 +122,8 @@ interface Props {
   conv: string
   /** Opened by the band's rehearsal: follow it (音箱 / 看谱) instead of practising alone. */
   rehearsal: boolean
+  /** 改编谱 id: its instruments, volumes, mutes and transposition ('' = none). */
+  arr: string
 }
 
 type RehearsalPop = 'fill' | 'comments' | 'calibrate' | null
@@ -185,6 +188,7 @@ export function ScoreViewer({
   combo,
   conv,
   rehearsal,
+  arr,
 }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
@@ -213,6 +217,19 @@ export function ScoreViewer({
   const [solo, setSolo] = useState<Set<number>>(new Set())
   const [mute, setMute] = useState<Set<number>>(new Set())
   const [volumes, setVolumes] = useState<number[]>([])
+  /** 改编谱 being played (opened with ?arr=, or saved here). */
+  const [arrangement, setArrangement] = useState<Arrangement | null>(null)
+  /** Each track's instrument as the file has it (after the channel fixes): 「谱里原来的」. */
+  const [basePrograms, setBasePrograms] = useState<number[]>([])
+  /** Instruments chosen in the 音轨 panel; null = the file's own. */
+  const [programs, setPrograms] = useState<Array<number | null>>([])
+  /** The file's own instrument changes (GM numbers), put back when a track returns to its own. */
+  const autoOriginal = useRef(new WeakMap<object, number>())
+  /** The sound font the score was loaded with (instruments it lacks are swapped). */
+  const loadedFont = useRef<SoundFontId>('basic')
+  const arrApplied = useRef('')
+  /** After the music is regenerated (an instrument changed): carry on where playback was. */
+  const resumeAfterMidi = useRef<(() => void) | null>(null)
   const [followAlong, setFollowAlong] = useState(false)
   const [metroOnly, setMetroOnly] = useState(false)
   const [loopState, setLoopState] = useState<LoopState | null>(null)
@@ -586,6 +603,17 @@ export function ScoreViewer({
         } as never)
         api.current = a
         renders.current = renderQueue(a)
+        // Registered once: alphaTab 1.8 overflows the stack when it replays the last
+        // midiLoaded to a handler added later (the handler is registered before that fails).
+        try {
+          a.midiLoaded.on(() => {
+            const resume = resumeAfterMidi.current
+            resumeAfterMidi.current = null
+            resume?.()
+          })
+        } catch {
+          // see above
+        }
         a.countInVolume = cur.countIn ? 1 : 0
         a.metronomeVolume = cur.metro ? 1 : 0
         a.playbackSpeed = cur.speedPct / 100
@@ -608,17 +636,27 @@ export function ScoreViewer({
           // guessed instrument: the file's instrument changes to the shared one follow it.
           const guessed = separateChannels(s.tracks)
           // Instruments the font cannot play are swapped before the player reads the score.
+          // The file's own instruments are kept aside for 「谱里原来的」 in the 音轨 panel.
+          const base: number[] = []
           for (const t of s.tracks) {
             const was = guessed.get(t)
-            t.playbackInfo.program = playedProgram(font, t.playbackInfo.program)
+            const own = t.playbackInfo.program
+            base.push(own)
+            t.playbackInfo.program = playedProgram(font, own)
             for (const st of t.staves)
               for (const b of st.bars)
                 for (const v of b.voices)
                   for (const bt of v.beats)
                     for (const au of bt.automations)
-                      if (au.type === at.model.AutomationType.Instrument)
-                        au.value = playedProgram(font, was === au.value ? t.playbackInfo.program : au.value)
+                      if (au.type === at.model.AutomationType.Instrument) {
+                        const gm = was === au.value ? own : au.value
+                        autoOriginal.current.set(au, gm)
+                        au.value = playedProgram(font, gm)
+                      }
           }
+          loadedFont.current = font
+          setBasePrograms(base)
+          setPrograms((p) => (again && p.length === s.tracks.length ? p : s.tracks.map(() => null)))
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
           setVolumes((v) => (again && v.length === s.tracks.length ? v : s.tracks.map(() => 100)))
@@ -645,7 +683,8 @@ export function ScoreViewer({
             if (disposed) return
             if (r) {
               if (bandSpeedRef.current === null) setSpeedPct(r.speedPct)
-              setMute(new Set(r.muted.filter((i) => i < s.tracks.length)))
+              // An 改编谱 brings its own muted tracks.
+              if (!arr) setMute(new Set(r.muted.filter((i) => i < s.tracks.length)))
               const bars = r.loopBars && r.loopBars[1] <= s.masterBars.length ? r.loopBars : null
               if (bars && rendered) highlightBars(a, s, live.current.track, bars)
               else pendingBars.current = bars
@@ -1030,7 +1069,79 @@ export function ScoreViewer({
           fontGain(activeFont, t.playbackInfo.program, t.isPercussion),
       ),
     )
-  }, [volumes, score, activeFont, mix])
+  }, [volumes, score, activeFont, mix, programs])
+
+  // 改编谱: read it once; it is applied as soon as the score is in.
+  useEffect(() => {
+    if (!arr) return
+    const ac = new AbortController()
+    server.arrangement(arr, ac.signal).then(
+      (x) => setArrangement(x),
+      (e: unknown) => {
+        if (ac.signal.aborted) return
+        setRestoreNote(`改编谱打不开：${errorText(e)}（现在是原谱）`)
+        window.setTimeout(() => setRestoreNote(''), 6000)
+      },
+    )
+    return () => ac.abort()
+  }, [arr])
+
+  const visibleCount = score ? (drums.std !== null ? drums.std : score.tracks.length) : 0
+
+  useEffect(() => {
+    if (!arrangement || !score || basePrograms.length !== score.tracks.length) return
+    if (arrApplied.current === arrangement.id) return
+    arrApplied.current = arrangement.id
+    const m = mixOf(arrangement, visibleCount)
+    setPrograms(score.tracks.map((_, i) => m.programs[i] ?? null))
+    setVolumes(score.tracks.map((_, i) => m.volumes[i] ?? 100))
+    setMute(new Set(m.mute))
+    setTranspose(m.transpose)
+    if (arrangement.trackCount !== visibleCount) {
+      setRestoreNote('这首谱的音轨和保存改编谱时不一样了，部分设置可能对不上。')
+      window.setTimeout(() => setRestoreNote(''), 6000)
+    }
+  }, [arrangement, score, basePrograms, visibleCount])
+
+  // Instruments chosen in the 音轨 panel: each track (and the file's instrument changes on
+  // it) plays the chosen one; the playback continues where it was.
+  useEffect(() => {
+    const a = api.current
+    const at = window.alphaTab
+    if (!a || !score || !at || basePrograms.length !== score.tracks.length) return
+    const font = loadedFont.current
+    let changed = false
+    score.tracks.forEach((t, i) => {
+      if (t.isPercussion) return
+      const chosen = programs[i] ?? null
+      const want = chosen ?? basePrograms[i]!
+      const sound = playedProgram(font, want)
+      if (t.playbackInfo.program !== sound) {
+        t.playbackInfo.program = sound
+        changed = true
+      }
+      for (const st of t.staves)
+        for (const b of st.bars)
+          for (const v of b.voices)
+            for (const bt of v.beats)
+              for (const au of bt.automations) {
+                if (au.type !== at.model.AutomationType.Instrument) continue
+                const value = playedProgram(font, chosen ?? autoOriginal.current.get(au) ?? want)
+                if (au.value !== value) {
+                  au.value = value
+                  changed = true
+                }
+              }
+    })
+    if (!changed) return
+    const wasPlaying = a.playerState === 1
+    const tick = a.tickPosition
+    resumeAfterMidi.current = () => {
+      a.tickPosition = tick
+      if (wasPlaying) a.play()
+    }
+    a.loadMidiForScore()
+  }, [programs, basePrograms, score])
 
   // Loop: the range, and how passes follow each other.
   const manual = isManualLoop(prefs.trainer)
@@ -1149,6 +1260,85 @@ export function ScoreViewer({
   const setSpeed = (pct: number) =>
     setSpeedPct(Math.max(SPEED_MIN, Math.min(SPEED_MAX, Math.round(pct))))
   const shift = (d: number) => setTranspose((t) => clampTranspose(t + d))
+
+  // 改编谱: what the 音轨 panel changed, against the file (or the 改编谱 opened).
+  const mixNow = configOf({ programs, volumes, mute, transpose }, visibleCount)
+  const mixSaved = arrangement
+    ? { tracks: arrangement.tracks, transpose: arrangement.transpose }
+    : { tracks: {}, transpose: 0 }
+  const instrumentsChanged = programs.some((p, i) => p !== null && i < visibleCount)
+  const arrDirty = arrangement ? !sameConfig(mixNow, mixSaved) : instrumentsChanged
+  // A combo, a PDF conversion or the rehearsal plays something other than the file itself.
+  const canArrange = !combo && !conv && !rehearsal
+
+  const saveArrangement = async (name: string, asNew: boolean) => {
+    const saved = await server.saveArrangement({
+      id: asNew || !arrangement ? null : arrangement.id,
+      name,
+      path,
+      title,
+      artist,
+      tracks: mixNow.tracks,
+      transpose: mixNow.transpose,
+      trackCount: visibleCount,
+    })
+    arrApplied.current = saved.id
+    setArrangement(saved)
+    // The address now opens this 改编谱 (without reloading the page).
+    const hash = window.location.hash
+    const q = hash.indexOf('?')
+    const params = new URLSearchParams(q >= 0 ? hash.slice(q + 1) : '')
+    params.set('arr', saved.id)
+    window.history.replaceState(window.history.state, '', `#/v?${params.toString()}`)
+  }
+
+  /** Back to the 改编谱 as saved, or to the file's own instruments and mix. */
+  const revertArrangement = () => {
+    if (!score) return
+    const m = mixOf(mixSaved, visibleCount)
+    setPrograms(score.tracks.map((_, i) => m.programs[i] ?? null))
+    setVolumes(score.tracks.map((_, i) => m.volumes[i] ?? 100))
+    setMute(new Set(m.mute))
+    setTranspose(m.transpose)
+  }
+
+  /** The score with the chosen instruments, as a Guitar Pro file (the hidden helper tracks left out). */
+  const exportArranged = () => {
+    const at = window.alphaTab
+    if (!at || !score) return
+    // The file gets the chosen GM instruments, not the ones the sound font plays instead.
+    const sounding = score.tracks.map((t) => t.playbackInfo.program)
+    const changes: Array<[{ value: number }, number]> = []
+    score.tracks.forEach((t, i) => {
+      if (t.isPercussion || i >= visibleCount) return
+      const want = programs[i] ?? basePrograms[i] ?? t.playbackInfo.program
+      t.playbackInfo.program = want
+      for (const st of t.staves)
+        for (const b of st.bars)
+          for (const v of b.voices)
+            for (const bt of v.beats)
+              for (const au of bt.automations)
+                if (au.type === at.model.AutomationType.Instrument) {
+                  changes.push([au, au.value])
+                  au.value = programs[i] ?? autoOriginal.current.get(au) ?? want
+                }
+    })
+    const hidden = score.tracks.splice(visibleCount)
+    let bytes: Uint8Array
+    try {
+      bytes = exportGp(at, score)
+    } finally {
+      score.tracks.push(...hidden)
+      score.tracks.forEach((t, i) => (t.playbackInfo.program = sounding[i]!))
+      for (const [au, value] of changes) au.value = value
+    }
+    const url = URL.createObjectURL(new Blob([bytes as Uint8Array<ArrayBuffer>], { type: 'application/octet-stream' }))
+    const link = document.createElement('a')
+    link.href = url
+    link.download = `${(arrangement?.name ?? `${title}（改编）`).replace(/[\\/:*?"<>|]/g, '_')}.gp`
+    link.click()
+    window.setTimeout(() => URL.revokeObjectURL(url), 10000)
+  }
   const openPop = (k: PopKind) => {
     setKeyPop(true)
     setCollapsed(false)
@@ -1636,6 +1826,24 @@ export function ScoreViewer({
           onVolume={(i: number, pct: number) =>
             setVolumes((v) => v.map((x, j) => (j === i ? pct : x)))
           }
+          instruments={score.tracks.slice(0, visibleCount).map((t, i) => ({
+            program: programs[i] ?? basePrograms[i] ?? t.playbackInfo.program,
+            base: basePrograms[i] ?? t.playbackInfo.program,
+            changed: (programs[i] ?? null) !== null,
+            percussion: t.isPercussion,
+          }))}
+          onInstrument={(i: number, program: number | null) =>
+            setPrograms((prev) =>
+              prev.map((x, j) => (j === i ? (program === basePrograms[i] ? null : program) : x)),
+            )
+          }
+          arrangement={arrangement ? { name: arrangement.name } : null}
+          arrDirty={arrDirty}
+          canArrange={canArrange}
+          defaultArrName={`${title}（改编）`}
+          onSaveArrangement={saveArrangement}
+          onRevertArrangement={revertArrangement}
+          onExportArranged={arrangement || instrumentsChanged ? exportArranged : null}
           fretboard={prefs.fretboard}
           onFretboard={toggleFretboard}
           soundFonts={soundFonts}

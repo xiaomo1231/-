@@ -9,7 +9,10 @@ import type {
 import { getBandId } from './session'
 import type {
   AcceptInviteBody,
+  Arrangement,
   BandOverview,
+  MyScores,
+  SaveArrangementBody,
   JoinInviteBody,
   JoinInviteResult,
   MeInfo,
@@ -394,6 +397,14 @@ export const api = {
   /** No login needed: creates the account and sets the session cookie. */
   acceptInvite: (b: AcceptInviteBody) =>
     call<UserInfo>('/api/invite/accept', { body: b, quietAuth: true }),
+  // 改编谱 and 我的谱子
+  mine: (signal?: AbortSignal) => call<MyScores>('/api/mine', { signal }),
+  arrangement: (id: string, signal?: AbortSignal) =>
+    call<Arrangement>(`/api/arrangements/get?id=${enc(id)}`, { signal }),
+  saveArrangement: (b: SaveArrangementBody) => call<Arrangement>('/api/arrangements/save', { body: b }),
+  renameArrangement: (id: string, name: string) =>
+    call<Arrangement>('/api/arrangements/rename', { body: { id, name } }),
+  removeArrangement: (id: string) => call<{ ok: true }>('/api/arrangements/remove', { body: { id } }),
   /** Signed in: join the invite's band (or start one, with a leader invite). */
   joinInvite: (b: JoinInviteBody) => call<JoinInviteResult>('/api/invite/join', { body: b }),
   logout: () => call<unknown>('/api/logout', { method: 'POST' }),

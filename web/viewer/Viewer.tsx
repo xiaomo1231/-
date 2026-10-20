@@ -44,7 +44,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
     case 'score':
       body = (
         <ScoreViewer
-          key={path + route.combo + route.conv}
+          key={path + route.combo + route.conv + route.arr}
           path={path}
           title={title}
           artist={artist}
@@ -53,6 +53,7 @@ export function Viewer({ route }: { route: ViewerRoute }) {
           showDrums={route.drums}
           combo={route.combo}
           conv={route.conv}
+          arr={route.arr}
           rehearsal={route.rehearsal}
         />
       )

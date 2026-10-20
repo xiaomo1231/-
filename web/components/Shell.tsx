@@ -33,6 +33,7 @@ import { DrumEditorPage } from '../pages/DrumEditorPage'
 import { CombinePage } from '../pages/CombinePage'
 import { DailyPage } from '../pages/DailyPage'
 import { InvitePage } from '../pages/InvitePage'
+import { MinePage } from '../pages/MinePage'
 import { Viewer } from '../viewer/Viewer'
 import { PreviewHost } from '../viewer/PreviewPanel'
 import { closePreview, usePreview } from '../lib/preview'
@@ -422,6 +423,8 @@ function renderRoute(route: Route, libraryHidden: boolean) {
       return <SongsPage key={route.id} artist={route} />
     case 'search':
       return <SearchPage q={route.q} />
+    case 'mine':
+      return <MinePage />
     case 'favorites':
       return <FavoritesPage />
     case 'band':

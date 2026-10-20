@@ -67,6 +67,7 @@ import {
   type StoredUser,
 } from './users'
 import { BandRegistry, BandsError, parseLimits, type BandMeta } from './bands'
+import { ArrangementError, ArrangementStore, parseSave as parseSaveArrangement } from './arrangements'
 import {
   BandError,
   type BandStore,
@@ -148,6 +149,7 @@ import {
 import type {
   BandOverview,
   BandState,
+  MyScores,
   ComboPart,
   InviteCheck,
   InviteInfo,
@@ -309,6 +311,7 @@ let invites: InviteStore
 let recordings: RecordingStore
 let uploads: UploadStore
 let combos: ComboStore
+let arrangements: ArrangementStore
 let conversions: ConversionStore
 let daily: DailyProgressStore
 let dailyProgram: DailyProgram = { category: null, days: [], backing: [], extras: [] }
@@ -691,6 +694,7 @@ async function handleUsers(
   // Their favourites and practice go with the account.
   await invites.forgetUser(id)
   await daily.dropUser(id)
+  await arrangements.dropUser(id)
   await favoriteQueue(() => persistFavorites(id, null))
   await practiceQueue(async () => {
     const next = new Map(practice)
@@ -1267,6 +1271,58 @@ async function handleAdminBands(
     return sendJson(res, 200, overview())
   }
   return sendJson(res, 404, { error: '找不到这个接口。' })
+}
+
+/** 改编谱: an account's own instruments / mix of a score, and 我的谱子. */
+async function handleArrangements(
+  req: http.IncomingMessage,
+  res: http.ServerResponse,
+  url: URL,
+  me: StoredUser,
+): Promise<void> {
+  const p = url.pathname
+  const now = Date.now()
+  try {
+    if (p === '/api/mine') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      const mine = myBandIds(me)
+      const out: MyScores = {
+        arrangements: arrangements.listOf(me.id).filter((a) => canOpen(me, a.path)),
+        uploads: uploads.list().filter((u) => u.createdBy === me.id && mine.includes(u.bandId)),
+        combos: combos.byUser(me.id).filter((c) => canOpen(me, c.base)),
+      }
+      return sendJson(res, 200, out)
+    }
+    if (p === '/api/arrangements') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      return sendJson(res, 200, arrangements.listOf(me.id))
+    }
+    if (p === '/api/arrangements/get') {
+      if (req.method !== 'GET') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+      const a = arrangements.get(url.searchParams.get('id') ?? '', me.id)
+      if (!a) return sendJson(res, 404, { error: '找不到这个改编谱。' })
+      return sendJson(res, 200, a)
+    }
+    if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
+    const body = await readJsonBody(req, MAX_FAVORITE_BODY)
+    if (p === '/api/arrangements/save') {
+      const b = orBadRequest(parseSaveArrangement(body, (x) => inRoot(x) && canOpen(me, x)))
+      return sendJson(res, 200, await arrangements.save(b, me.id, now))
+    }
+    const id = typeof body.id === 'string' ? body.id : ''
+    if (p === '/api/arrangements/rename') {
+      const name = typeof body.name === 'string' ? body.name : ''
+      return sendJson(res, 200, await arrangements.rename(id, me.id, name, now))
+    }
+    if (p === '/api/arrangements/remove') {
+      await arrangements.remove(id, me.id)
+      return sendJson(res, 200, { ok: true })
+    }
+    return sendJson(res, 404, { error: '找不到这个接口。' })
+  } catch (err) {
+    if (err instanceof ArrangementError) throw new HttpError(err.status, err.message)
+    throw err
+  }
 }
 
 /** 32-bit FNV-1a of a string: the fixed seed of a song's rehearsal drums. */
@@ -1892,6 +1948,8 @@ async function handleApi(
     return handleUsers(req, res, p, me)
   if (p === '/api/band' || p.startsWith('/api/band/')) return handleBand(req, res, url, me)
   if (p === '/api/invite/join') return handleInviteJoin(req, res, me)
+  if (p === '/api/mine' || p === '/api/arrangements' || p.startsWith('/api/arrangements/'))
+    return handleArrangements(req, res, url, me)
   if (p === '/api/admin/bands' || p.startsWith('/api/admin/bands/'))
     return handleAdminBands(req, res, p, me)
   if (p === '/api/invites' || p.startsWith('/api/invites/')) return handleInvites(req, res, p, me)
@@ -2229,6 +2287,7 @@ async function main(): Promise<void> {
   recordings = await RecordingStore.load(cfg.dataDir, firstBand)
   uploads = await UploadStore.load(cfg.dataDir, firstBand)
   combos = await ComboStore.load(cfg.dataDir, inRoot)
+  arrangements = await ArrangementStore.load(cfg.dataDir)
   conversions = await ConversionStore.load(cfg.dataDir)
   daily = await DailyProgressStore.load(cfg.dataDir)
   ensembles = new EnsembleIndex(cfg.root, cfg.dataDir)

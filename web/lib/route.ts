@@ -18,6 +18,8 @@ export interface ViewerRoute {
   combo: string
   /** A PDF 转换版 id: the converted GP5 is shown instead of the PDF at `path`. */
   conv: string
+  /** An 改编谱 id: its instruments, volumes, mutes and transposition are applied. */
+  arr: string
   /** Opened by the band's rehearsal: follow the rehearsal (音箱 / 看谱) instead of practising alone. */
   rehearsal: boolean
 }
@@ -29,6 +31,8 @@ export type Route =
   | { kind: 'artist'; id: string; name: string }
   | { kind: 'search'; q: string }
   | { kind: 'favorites' }
+  /** 我的谱子: 改编谱, uploaded songs and 组合乐队谱 of this account. */
+  | { kind: 'mine' }
   | { kind: 'band' }
   | { kind: 'bandSong'; id: string }
   | { kind: 'ensembles'; q: string; need: string }
@@ -71,6 +75,7 @@ export function parseHash(hash: string): Route {
   }
   if (path === '/s') return { kind: 'search', q: qs.get('q') ?? '' }
   if (path === '/f') return { kind: 'favorites' }
+  if (path === '/mine') return { kind: 'mine' }
   if (path === '/b') return { kind: 'band' }
   if (path === '/b/up') return { kind: 'upload', id: qs.get('id') ?? '', band: qs.get('b') ?? '' }
   const bs = /^\/b\/s\/(.+)$/.exec(path)
@@ -105,6 +110,7 @@ export function parseHash(hash: string): Route {
       drums: qs.get('drums') === '1',
       combo: qs.get('combo') ?? '',
       conv: qs.get('conv') ?? '',
+      arr: qs.get('arr') ?? '',
       rehearsal: qs.get('r') === '1',
     }
   }
@@ -117,6 +123,7 @@ export function hrefSearch(q = ''): string {
 }
 
 export const HREF_FAVORITES = '#/f'
+export const HREF_MINE = '#/mine'
 export const HREF_BAND = '#/b'
 export const HREF_DAILY = '#/daily'
 export const HREF_ACCOUNT = '#/me'
@@ -167,12 +174,15 @@ export function hrefViewer(v: {
   rehearsal?: boolean
   /** A 组合乐队谱 recipe id. */
   combo?: string
+  /** An 改编谱 id. */
+  arr?: string
 }): string {
   const parts = [`p=${enc(v.path)}`, `f=${enc(v.format)}`]
   if (v.pages && v.pages.length > 0) parts.push(`pages=${enc(JSON.stringify(v.pages))}`)
   parts.push(`title=${enc(v.title)}`, `artist=${enc(v.artist)}`)
   if (v.band) parts.push(`b=${enc(v.band)}`)
   if (v.combo) parts.push(`combo=${enc(v.combo)}`)
+  if (v.arr) parts.push(`arr=${enc(v.arr)}`)
   if (v.rehearsal) parts.push('r=1')
   return `#/v?${parts.join('&')}`
 }

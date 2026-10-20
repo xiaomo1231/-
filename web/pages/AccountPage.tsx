@@ -3,7 +3,7 @@ import type { Instrument } from '@/songs/scoreServerTypes'
 import { api, errorText } from '../lib/api'
 import { buttonClass, cx, SELECT } from '../lib/classes'
 import { INSTRUMENT_LABELS, setMe, useMe } from '../lib/session'
-import { HREF_USERS } from '../lib/route'
+import { HREF_MINE, HREF_USERS } from '../lib/route'
 import { Link } from '../components/Link'
 import { Notice, PageBar } from '../components/ui'
 
@@ -242,6 +242,19 @@ export function AccountPage() {
           </button>
         </form>
 
+        <section className="space-y-3">
+          <h2 className="label m-0">我的谱子</h2>
+          <Link
+            href={HREF_MINE}
+            className="flex min-h-11 items-center justify-between border-t border-border py-2 text-base font-bold transition-colors hover:text-primary"
+          >
+            <span>改编谱、上传的谱、组合乐队谱</span>
+            <span aria-hidden className="text-muted-foreground">
+              →
+            </span>
+          </Link>
+        </section>
+
         {me.role === 'admin' && (
           <section className="space-y-3">
             <h2 className="label m-0">管理</h2>
@@ -249,7 +262,7 @@ export function AccountPage() {
               href={HREF_USERS}
               className="flex min-h-11 items-center justify-between border-t border-border py-2 text-base font-bold transition-colors hover:text-primary"
             >
-              <span>成员管理</span>
+              <span>乐队、账号和邀请码</span>
               <span aria-hidden className="text-muted-foreground">
                 →
               </span>
