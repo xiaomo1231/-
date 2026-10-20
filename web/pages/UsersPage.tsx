@@ -103,12 +103,15 @@ function FormError({ error }: { error: string | null }) {
 
 /** 添加成员: a new account with an initial password the admin hands over. */
 function AddForm({
+  bands,
   onDone,
   onCancel,
 }: {
+  bands: BandOverview[]
   onDone: (list: UserInfo[], name: string) => void
   onCancel: () => void
 }) {
+  const [bandId, setBandId] = useState(bands[0]?.id ?? '')
   const [username, setUsername] = useState('')
   const [displayName, setDisplayName] = useState('')
   const [password, setPassword] = useState('')
@@ -145,6 +148,7 @@ function AddForm({
         role,
         libraryAccess: role === 'admin' || libraryAccess,
         instrument: instrument || null,
+        bandId: bandId || null,
       })
       onDone(list, shown)
     } catch (err) {
@@ -194,6 +198,16 @@ function AddForm({
         </Field>
         <Field label="乐器">
           <InstrumentSelect value={instrument} onChange={setInstrument} />
+        </Field>
+        <Field label="加入乐队">
+          <select value={bandId} onChange={(e) => setBandId(e.target.value)} className={cx(SELECT, 'w-full')}>
+            {bands.map((b) => (
+              <option key={b.id} value={b.id}>
+                {b.name}
+              </option>
+            ))}
+            <option value="">先不加入（以后用邀请码加入）</option>
+          </select>
         </Field>
         <div className="flex items-end">
           <LibraryCheck
@@ -741,10 +755,14 @@ export function UsersPage() {
         )}
         {loadError && <Notice tone="error">{loadError}</Notice>}
 
-        {panel?.kind === 'add' && (
+        {panel?.kind === 'add' && bands && (
           <AddForm
+            bands={bands}
             onCancel={() => setPanel(null)}
-            onDone={(rows, name) => applied(rows, `已添加 ${name}。`)}
+            onDone={(rows, name) => {
+              applied(rows, `已添加 ${name}。`)
+              void api.adminBands().then(setBands, () => undefined)
+            }}
           />
         )}
 

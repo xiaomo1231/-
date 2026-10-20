@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { UserInfo } from '@/songs/scoreServerTypes'
 import { api, ApiError, AUTH_LOST, errorText } from './lib/api'
 import { reloadMe } from './lib/band'
@@ -16,7 +16,16 @@ export function App() {
   /** On an invite, signed out: show the login first (the invite stays in the address). */
   const [loginFirst, setLoginFirst] = useState(false)
   const route = useRoute()
+  /** The account last signed in on this page (its stores live in memory). */
+  const lastUser = useRef<string | null>(null)
   const signedIn = (u: UserInfo) => {
+    // Someone else signs in after a lost session: start from a fresh page, so nothing of
+    // the previous account (favourites, practice, band, 每日一练) is shown to them.
+    if (lastUser.current && lastUser.current !== u.id) {
+      window.location.reload()
+      return
+    }
+    lastUser.current = u.id
     setNotice(null)
     setLoginFirst(false)
     setMe(u)
@@ -33,6 +42,7 @@ export function App() {
     window.addEventListener(AUTH_LOST, lost)
     api.me().then(
       (u: UserInfo) => {
+        lastUser.current = u.id
         setMe(u)
         setAuth('in')
       },

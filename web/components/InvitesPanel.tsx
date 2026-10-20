@@ -99,8 +99,11 @@ export function InvitesPanel({
   useEffect(() => {
     const ac = new AbortController()
     setList(null)
+    setLoadError(null)
     api.invites(ac.signal).then(
-      (rows) => setList(rows),
+      (rows) => {
+        if (!ac.signal.aborted) setList(rows)
+      },
       (e: unknown) => {
         if (!ac.signal.aborted) setLoadError(errorText(e))
       },

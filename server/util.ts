@@ -151,8 +151,20 @@ export function mimeFor(name: string): string {
 /** Writes a file atomically (temp file, then rename), readable by the owner only. */
 export async function writeFileAtomic(target: string, text: string): Promise<void> {
   const tmp = `${target}.tmp`
-  await fs.promises.writeFile(tmp, text, { mode: 0o600 })
-  await fs.promises.rename(tmp, target)
+  try {
+    // Flushed to disk before it replaces the file: a power cut never leaves an empty file.
+    const handle = await fs.promises.open(tmp, 'w', 0o600)
+    try {
+      await handle.writeFile(text)
+      await handle.sync()
+    } finally {
+      await handle.close()
+    }
+    await fs.promises.rename(tmp, target)
+  } catch (err) {
+    await fs.promises.rm(tmp, { force: true }).catch(() => {})
+    throw err
+  }
 }
 
 /** Content-Disposition for a download, with an ASCII fallback name. */

@@ -51,6 +51,8 @@ const LIBRARY_ROUTES: ReadonlySet<Route['kind']> = new Set<Route['kind']>([
   'artist',
   'search',
   'favorites',
+  // 找乐队谱 searches the whole library too.
+  'ensembles',
 ])
 
 /** The signed-in page: the library state (shared by every page), the top bar and the current page. */

@@ -274,15 +274,16 @@ export function parseJoin(body: unknown): ParseResult<JoinInviteBody> {
 
 /**
  * The account an accepted invite creates: always a member, with the instrument the
- * person picked (the form starts from the invite's default; 不选 means none).
+ * person picked (the form starts from the invite's default; 不选 means none). Library
+ * access, when the invite gives it, is granted once the account is in its band.
  */
-export function newUserFromInvite(invite: InviteInfo, body: AcceptInviteBody): NewUserBody {
+export function newUserFromInvite(body: AcceptInviteBody): NewUserBody {
   return {
     username: body.username,
     displayName: body.displayName,
     password: body.password,
     role: 'member',
-    libraryAccess: invite.libraryAccess,
+    libraryAccess: false,
     instrument: body.instrument,
   }
 }

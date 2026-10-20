@@ -252,10 +252,29 @@ function sendText(res: http.ServerResponse, status: number, text: string): void 
   res.end(text)
 }
 
+/** A file's details; a file that vanished meanwhile (a rescan, a removal) is a 404, not a 500. */
+async function statOr404(file: string): Promise<fs.Stats> {
+  try {
+    return await fs.promises.stat(file)
+  } catch {
+    throw new HttpError(404, '找不到文件。')
+  }
+}
+
+/** Refuses a body whose declared size is over the limit before reading it (so the 413 arrives). */
+function refuseLargeBody(req: http.IncomingMessage, maxBytes: number, message: string): void {
+  const declared = Number(req.headers['content-length'] ?? 0)
+  if (Number.isFinite(declared) && declared > maxBytes) {
+    req.resume()
+    throw new HttpError(413, message)
+  }
+}
+
 async function readJsonBody(
   req: http.IncomingMessage,
   maxBytes = MAX_JSON_BODY,
 ): Promise<Record<string, unknown>> {
+  refuseLargeBody(req, maxBytes, '请求内容太长。')
   const chunks: Buffer[] = []
   let size = 0
   for await (const chunk of req) {
@@ -432,7 +451,11 @@ function myBandIds(me: StoredUser): string[] {
 function bandOf(req: http.IncomingMessage, url: URL | null, me: StoredUser): BandCtx {
   const asked = String(req.headers['x-band'] ?? url?.searchParams.get('band') ?? '')
   const mine = bands.bandIdsOf(me.id)
-  let id: string | undefined = asked && (mine.includes(asked) || (me.role === 'admin' && bands.get(asked))) ? asked : mine[0]
+  const allowed = asked !== '' && (mine.includes(asked) || (me.role === 'admin' && bands.get(asked) !== undefined))
+  // A band asked for by name but no longer open to this account (taken out, or deleted) is
+  // never swapped for another one: the page reads the account again and picks its band.
+  if (asked && !allowed) throw new HttpError(404, '你已经不在这个乐队里了，或者这个乐队已经被删除。')
+  let id: string | undefined = allowed ? asked : mine[0]
   if (!id && me.role === 'admin') id = bands.firstId() ?? undefined
   const meta = id ? bands.get(id) : undefined
   const store = id ? bands.store(id) : undefined
@@ -659,8 +682,21 @@ async function handleUsers(
   if (p === '/api/users') {
     if (req.method === 'GET') return sendJson(res, 200, users.list())
     if (req.method !== 'POST') return sendJson(res, 405, { error: '不支持这种请求方式。' })
-    const body = orBadRequest(parseNewUser(await readJsonBody(req), storedUsers()))
-    await users.create(body, me.id).catch(asHttp)
+    const raw = await readJsonBody(req)
+    const body = orBadRequest(parseNewUser(raw, storedUsers()))
+    // The band the new account joins (optional): checked before the account is made.
+    const bandId = typeof raw.bandId === 'string' && raw.bandId ? raw.bandId : null
+    if (bandId)
+      try {
+        bands.canAdd(bandId, null)
+      } catch (err) {
+        asHttp(err)
+      }
+    const created = await users.create(body, me.id).catch(asHttp)
+    if (bandId) {
+      await bands.addMember(bandId, created.id, Date.now()).catch(asHttp)
+      bandChanged(bandId)
+    }
     log(`新建账号：${body.username}`)
     return sendJson(res, 200, users.list())
   }
@@ -679,6 +715,8 @@ async function handleUsers(
     const disabled = body.disabled !== false
     const ids = body.withInvitees === true ? withInvitees(id) : [id]
     const list = await users.setDisabled(ids, disabled).catch(asHttp)
+    // Stopped accounts leave every rehearsal at once.
+    if (disabled) for (const uid of ids) for (const hub of hubs.values()) hub.evictUser(uid)
     log(`${disabled ? '停用' : '恢复'}账号：${ids.length} 个`)
     return sendJson(res, 200, list)
   }
@@ -701,7 +739,10 @@ async function handleUsers(
     next.delete(id)
     await persistPractice(next)
   })
-  for (const b of theirBands) bandChanged(b)
+  for (const b of theirBands) {
+    hubs.get(b)?.evictUser(id)
+    bandChanged(b)
+  }
   log(`删除账号：${id}`)
   return sendJson(res, 200, users.list())
 }
@@ -754,7 +795,14 @@ async function handleBand(
   } else if (p === '/api/band/songs/update') {
     // Parts go to members of this band only.
     const u = orBadRequest(parseUpdateSong(body, (id) => memberIds.has(id)))
-    if (u.comboId && !combos.get(u.comboId)) throw new HttpError(400, '找不到这个组合乐队谱。')
+    if (u.comboId) {
+      // A combo of this very song (its parts become openable for the band's members).
+      const recipe = combos.get(u.comboId)
+      const song = band.get(u.id)
+      const key = song ? findSong(song.path, band)?.songKey : undefined
+      if (!recipe || !song || (recipe.songKey !== key && recipe.songKey !== `upload#${song.uploadId ?? ''}`))
+        throw new HttpError(400, '找不到这个组合乐队谱。')
+    }
     if (u.uploadId !== undefined && u.uploadId !== null && uploads.get(u.uploadId)?.bandId !== ctx.id)
       throw new HttpError(400, '找不到这首上传的歌。')
     await band.update(u, now).catch(asHttp)
@@ -796,6 +844,7 @@ async function handleBand(
     const userId = typeof body.userId === 'string' ? body.userId : ''
     if (userId !== me.id) requireManager(ctx)
     await bands.removeMember(ctx.id, userId).catch(asHttp)
+    hubs.get(ctx.id)?.evictUser(userId)
     log(`${userId === me.id ? '退出' : '移出'}乐队：${userId}`)
     bandChanged(ctx.id)
     if (userId === me.id) return sendJson(res, 200, { ok: true })
@@ -913,8 +962,16 @@ async function handleUploads(
     if (p === '/api/uploads/file') {
       const q = orBadRequest(parseUploadFileQuery(url))
       const ctx = ctxOf(find(q.id))
+      refuseLargeBody(req, MAX_UPLOAD_BYTES, `文件太大了，每个文件最多 ${MAX_UPLOAD_BYTES / 1024 / 1024} MB。`)
       const declared = Number(req.headers['content-length'] ?? 0)
-      if (Number.isFinite(declared) && declared > 0) checkStorage(ctx, declared)
+      if (Number.isFinite(declared) && declared > 0) {
+        try {
+          checkStorage(ctx, declared)
+        } catch (err) {
+          req.resume()
+          throw err
+        }
+      }
       const bytes = await readUploadFileBody(req, MAX_UPLOAD_BYTES)
       checkStorage(ctx, bytes.length)
       const song = await uploads.addFile(q.id, { label: q.label, name: q.name }, bytes, me.id, now)
@@ -1000,8 +1057,16 @@ async function handleRecordings(
       const q = orBadRequest(parseRecordingQuery(url))
       const ctx = bandWithSong(me, q.songId)
       if (!ctx) return notInBand()
+      refuseLargeBody(req, MAX_RECORDING_BYTES, `录音太大了，每段最多 ${MAX_RECORDING_BYTES / 1024 / 1024} MB。`)
       const declared = Number(req.headers['content-length'] ?? 0)
-      if (Number.isFinite(declared) && declared > 0) checkStorage(ctx, declared)
+      if (Number.isFinite(declared) && declared > 0) {
+        try {
+          checkStorage(ctx, declared)
+        } catch (err) {
+          req.resume()
+          throw err
+        }
+      }
       const bytes = await readRecordingBody(req, MAX_RECORDING_BYTES)
       checkStorage(ctx, bytes.length)
       await recordings.add(
@@ -1090,8 +1155,17 @@ async function handleInvites(
 
 /** What the invite page shows about a usable invite: which band, made by whom. */
 function inviteFacts(invite: InviteInfo): { bandName: string; inviter: string; reason: string | null } {
-  const inviter = users.get(invite.createdBy)?.displayName ?? ''
-  if (invite.kind === 'leader') return { bandName: '', inviter, reason: null }
+  const maker = users.get(invite.createdBy)
+  const inviter = maker?.displayName ?? ''
+  const stale = '邀请你的人现在不能再邀请别人了，请向队长要一个新的邀请码。'
+  // Whoever made it must still be allowed to: an admin for a leader invite, the band's
+  // leader (or an admin) for a member one; library access only from someone who has it.
+  if (!maker || maker.disabled) return { bandName: '', inviter, reason: stale }
+  if (invite.libraryAccess && !canBrowse(maker)) return { bandName: '', inviter, reason: stale }
+  if (invite.kind === 'leader')
+    return { bandName: '', inviter, reason: maker.role === 'admin' ? null : stale }
+  if (maker.role !== 'admin' && !bands.isLeader(invite.bandId ?? '', maker.id))
+    return { bandName: '', inviter, reason: stale }
   const meta = bands.get(invite.bandId ?? '')
   const store = bands.store(invite.bandId ?? '')
   if (!meta || !store) return { bandName: '', inviter, reason: '这个邀请码的乐队已经不存在了。' }
@@ -1112,6 +1186,7 @@ async function applyInvite(invite: InviteInfo, userId: string, bandName: string 
     const meta = await bands
       .create({ name: bandName ?? '我的乐队', leaderId: userId, createdBy: invite.createdBy }, now)
       .catch(asHttp)
+    if (invite.libraryAccess) await users.grantLibrary(userId)
     log(`新乐队：${bandName ?? ''}`)
     return meta.id
   }
@@ -1167,20 +1242,26 @@ async function handleInviteLink(
   }
   let user
   try {
-    user = await users.create(newUserFromInvite(invite, body), invite.createdBy)
+    user = await users.create(newUserFromInvite(body), invite.createdBy)
   } catch (err) {
     await invites.release(invite.id)
     return asHttp(err)
   }
   await invites.confirm(invite.id, user.id)
+  let joinError: string | null = null
   try {
     await applyInvite(invite, user.id, body.bandName)
   } catch (err) {
-    // The account stays (it can use another invite later); say what went wrong.
-    log(`新账号 ${user.username} 没能加入乐队：${errorText(err)}`)
+    // The account stays (it can use another invite later); the use is given back and the
+    // page is told the band could not be joined.
+    joinError = errorText(err)
+    await invites.release(invite.id)
+    log(`新账号 ${user.username} 没能加入乐队：${joinError}`)
   }
   const stored = users.get(user.id)
   if (stored) setSession(req, res, stored)
+  if (joinError)
+    return sendJson(res, 409, { error: `账号已经建好并登录了，但没能加入乐队：${joinError}` })
   log(`新账号通过邀请码注册：${user.displayName}`)
   return sendJson(res, 200, user)
 }
@@ -1392,20 +1473,23 @@ async function handleRehearsal(
   const body = orBadRequest(parseRehearsalBody(await readJsonBody(req, MAX_FAVORITE_BODY)))
   const cmd = body.command
   const cctx = { now: Date.now(), songExists: (id: string) => band.get(id) !== undefined }
-  // Starting saves today's setlist first (it shows on the band page too).
-  if (cmd.type === 'start') {
-    const ids = orBadRequest(
-      parseSetlist(
-        { ids: cmd.setlist },
-        band.songs().map((x) => x.id),
-      ),
-    )
-    if (rehearsal.state().active) throw new HttpError(409, '排练已经开始了。')
-    await band.setSetlist(ids).catch(asHttp)
-    bandChanged(ctx.id)
-  }
+  const startIds =
+    cmd.type === 'start'
+      ? orBadRequest(
+          parseSetlist(
+            { ids: cmd.setlist },
+            band.songs().map((x) => x.id),
+          ),
+        )
+      : null
+  // The room decides first (one of two simultaneous starts wins); the winner's setlist is
+  // then saved as today's (it shows on the band page too).
   const r = rehearsal.command({ userId: me.id, deviceId: body.deviceId }, cmd, cctx)
   if ('error' in r) return sendJson(res, r.status, { error: r.error })
+  if (startIds) {
+    await band.setSetlist(startIds).catch(asHttp)
+    bandChanged(ctx.id)
+  }
   if (cmd.type === 'start') log(`开始排练（${me.displayName}）`)
   if (cmd.type === 'end') log(`结束排练（${me.displayName}）`)
   return sendJson(res, 200, r.state)
@@ -1456,6 +1540,12 @@ async function handleDrums(
     const body = await readJsonBody(req)
     const rel = typeof body.path === 'string' ? body.path : ''
     allowed(rel)
+    // A drum part is shared by everyone who opens the score: only whoever saved it last,
+    // a band leader or an admin deletes it.
+    const part = drums.get(rel)
+    const leads = bands.list().some((b) => b.leaderId === me.id)
+    if (part && part.updatedBy !== me.id && me.role !== 'admin' && !leads)
+      throw new HttpError(403, '只有保存这份鼓谱的人、队长或管理员可以删除。')
     await drums.remove(rel)
     return sendJson(res, 200, { ok: true })
   }
@@ -1547,8 +1637,13 @@ async function handleSongs(
         return sendJson(res, 405, { error: '不支持这种请求方式。' })
       const item = sheets.get(url.searchParams.get('id') ?? '')
       if (!item) return sendJson(res, 404, { error: '找不到这个文件。' })
+      // Sheets of an uploaded song belong to its band.
+      if (item.songKey.startsWith('upload#')) {
+        const u = uploads.get(item.songKey.slice('upload#'.length))
+        if (!u || !myBandIds(me).includes(u.bandId)) return sendJson(res, 404, { error: '找不到这个文件。' })
+      }
       const file = sheets.filePath(item)
-      const st = await fs.promises.stat(file)
+      const st = await statOr404(file)
       const ext = path.extname(file).slice(1)
       res.writeHead(200, {
         'Content-Type': sheetContentType(item.kind, ext as never),
@@ -1723,7 +1818,7 @@ async function handleConversions(
       allowed(item.sourcePath)
       if (p === '/api/conversions/get') return sendJson(res, 200, conversions.toRecord(item, me.id))
       const file = conversions.filePath(item.id)
-      const st = await fs.promises.stat(file)
+      const st = await statOr404(file)
       res.writeHead(200, {
         'Content-Type': 'application/octet-stream',
         'Content-Length': st.size,
@@ -2090,7 +2185,7 @@ async function handleText(res: http.ServerResponse, rel: string): Promise<void> 
     throw new HttpError(400, '只能读取 .txt 或 .tab 文件。')
   const real = await resolveAnyFile(rel)
   if (!real) return sendJson(res, 404, { error: '找不到文件。' })
-  const st = await fs.promises.stat(real)
+  const st = await statOr404(real)
   if (st.size > MAX_TEXT_BYTES)
     return sendJson(res, 413, { error: '文件太大了，无法在网页里显示。' })
   const bytes = await fs.promises.readFile(real)
@@ -2117,7 +2212,7 @@ async function handleFile(
   // Members without library access open only their bands' setlists; uploads only their bands'.
   if (!canOpen(me, rel)) return sendJson(res, 403, { error: '你的账号只能查看乐队歌单里的谱子。' })
 
-  const st = await fs.promises.stat(real)
+  const st = await statOr404(real)
   const size = st.size
   const name = path.basename(rel)
   const headers: Record<string, string | number> = {
@@ -2184,7 +2279,7 @@ async function handleStatic(
   }
 
   const isIndex = path.basename(file) === 'index.html' && path.dirname(file) === webDir
-  const st = await fs.promises.stat(file)
+  const st = await statOr404(file)
   res.writeHead(200, {
     'Content-Type': mimeFor(file),
     'Content-Length': st.size,
@@ -2204,7 +2299,7 @@ async function handleStatic(
 
 async function isRegularFile(file: string): Promise<boolean> {
   try {
-    return (await fs.promises.stat(file)).isFile()
+    return (await statOr404(file)).isFile()
   } catch {
     return false
   }
@@ -2216,7 +2311,12 @@ async function isRegularFile(file: string): Promise<boolean> {
 
 async function handle(req: http.IncomingMessage, res: http.ServerResponse): Promise<void> {
   setSecurityHeaders(res)
-  const url = new URL(req.url ?? '/', 'http://localhost')
+  let url: URL
+  try {
+    url = new URL(req.url ?? '/', 'http://localhost')
+  } catch {
+    return sendText(res, 400, '地址不对。')
+  }
   if (url.pathname.startsWith('/api/')) return handleApi(req, res, url)
   if (url.pathname.startsWith('/files/')) return handleFile(req, res, url)
   return handleStatic(req, res, url)
@@ -2244,7 +2344,7 @@ async function main(): Promise<void> {
   cfg = parsed
 
   try {
-    const st = await fs.promises.stat(cfg.root)
+    const st = await statOr404(cfg.root)
     if (!st.isDirectory()) throw new Error('not a directory')
   } catch {
     console.error(`SCORES_ROOT 不是一个存在的文件夹：${cfg.root}`)
@@ -2294,6 +2394,8 @@ async function main(): Promise<void> {
   webDir = path.join(path.dirname(fileURLToPath(import.meta.url)), 'web')
 
   const server = http.createServer(onRequest)
+  // Large recordings over Tailscale can take longer than Node's default 5 minutes.
+  server.requestTimeout = 60 * 60 * 1000
   server.on('error', (err: NodeJS.ErrnoException) => {
     const reason =
       err.code === 'EADDRINUSE'
@@ -2312,4 +2414,10 @@ async function main(): Promise<void> {
   void refreshLibrary(true)
 }
 
-void main()
+// A failure nobody waited for is logged; the server keeps running.
+process.on('unhandledRejection', (reason) => log(`未处理的错误：${errorText(reason)}`))
+
+main().catch((err: unknown) => {
+  console.error(`谱库服务启动失败：${errorText(err)}`)
+  process.exit(1)
+})

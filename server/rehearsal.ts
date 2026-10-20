@@ -302,6 +302,14 @@ export function applyRehearsal(
   const isLeader = state.leaderId === actor.userId
   const leaderHasDevice = (userId: string) => state.devices.some((d) => d.userId === userId)
   const referenceDevice = state.speakerDevice !== null ? state.speakerDevice : state.leaderDevice
+  // Device ids are visible to everyone: a device-bound command must come from its owner.
+  const listedDevice = state.devices.find((d) => d.deviceId === actor.deviceId)
+  if (
+    listedDevice &&
+    listedDevice.userId !== actor.userId &&
+    (cmd.type === 'speaker' || cmd.type === 'passEnded' || cmd.type === 'clock' || cmd.type === 'device')
+  )
+    return err('这个设备不是你的。', 403)
   const leaderOnly = (): RehearsalResult | null =>
     isLeader ? null : err('只有指挥可以控制排练。', 403)
 
@@ -533,6 +541,12 @@ export class RehearsalHub {
     req: IncomingMessage,
     res: ServerResponse,
   ): void {
+    // A device listed for someone else is never taken over by another account.
+    if (this.room.devices.some((d) => d.deviceId === deviceId && d.userId !== userId)) {
+      res.writeHead(409, { 'Content-Type': 'application/json; charset=utf-8' })
+      res.end(JSON.stringify({ error: '设备编号冲突，请刷新页面。' }))
+      return
+    }
     res.writeHead(200, {
       'Content-Type': 'text/event-stream; charset=utf-8',
       'Cache-Control': 'no-cache, no-transform',
@@ -574,6 +588,36 @@ export class RehearsalHub {
   notifyBand(): void {
     this.bandVersion += 1
     this.send(`event: band\ndata: ${JSON.stringify({ v: this.bandVersion })}\n\n`)
+  }
+
+  /**
+   * Someone left the band (removed, deleted or stopped): their streams close and their
+   * devices leave the room at once; a leader gives up the lead.
+   */
+  evictUser(userId: string): void {
+    const gone = new Set<string>()
+    for (const conn of [...this.conns])
+      if (conn.userId === userId) {
+        gone.add(conn.deviceId)
+        this.closeConn(conn)
+        this.conns.delete(conn)
+      }
+    for (const d of this.room.devices) if (d.userId === userId) gone.add(d.deviceId)
+    for (const id of gone) {
+      const pending = this.deviceGraces.get(id)
+      if (pending) clearTimeout(pending)
+      this.deviceGraces.delete(id)
+      this.removeDevice(id)
+    }
+    if (this.room.leaderId === userId) {
+      const s = this.room
+      this.room =
+        s.devices.length === 0 && s.active
+          ? { ...freshRehearsal(), seq: s.seq + 1 }
+          : { ...s, leaderId: null, leaderDevice: null }
+      this.reconcileLeaderGrace()
+      this.broadcast()
+    }
   }
 
   /** Ends every stream and clears all timers (shutdown / tests). */
@@ -659,6 +703,9 @@ export class RehearsalHub {
       const other = devices.find((d) => d.userId === s.leaderId)
       if (other) next = { ...next, leaderDevice: other.deviceId }
     }
+    // Everyone has gone and nobody leads it any more: the rehearsal ends.
+    if (devices.length === 0 && s.active && s.leaderId === null)
+      next = { ...freshRehearsal(), seq: s.seq + 1 }
     this.room = next
     this.reconcileLeaderGrace()
     this.broadcast()
@@ -691,7 +738,11 @@ export class RehearsalHub {
       this.leaderGraceFor = null
       const s = this.room
       if (s.leaderId !== leader || s.devices.some((d) => d.userId === leader)) return
-      this.room = { ...s, leaderId: null, leaderDevice: null }
+      // The leader did not come back; with nobody left the rehearsal ends.
+      this.room =
+        s.devices.length === 0 && s.active
+          ? { ...freshRehearsal(), seq: s.seq + 1 }
+          : { ...s, leaderId: null, leaderDevice: null }
       this.broadcast()
     }, LEADER_GRACE_MS)
     timer.unref()

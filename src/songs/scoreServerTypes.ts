@@ -53,6 +53,8 @@ export interface LoginBody {
 
 /** POST /api/users (admin): a new account. Password 6–128 chars. */
 export interface NewUserBody {
+  /** The band it joins (admin form only; absent = none). */
+  bandId?: string | null
   username: string
   displayName: string
   password: string

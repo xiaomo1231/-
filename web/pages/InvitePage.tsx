@@ -34,6 +34,7 @@ const Title = ({ children }: { children: ReactNode }) => (
 
 /** 输入邀请码: the code as typed goes into the address (spaces dropped), then it is checked. */
 function CodeEntry() {
+  const me = useMe()
   const [code, setCode] = useState('')
   const clean = code.replace(/\s+/g, '').toUpperCase()
   const ok = /^[A-Z0-9_-]{10,64}$/i.test(clean)
@@ -43,9 +44,10 @@ function CodeEntry() {
   }
   return (
     <div className="mx-auto w-full max-w-sm">
-      <Title>用邀请码注册</Title>
+      <Title>{me ? '用邀请码加入乐队' : '用邀请码注册'}</Title>
       <p className="mt-4 text-sm leading-relaxed text-muted-foreground">
-        谱库只对受邀的人开放。向队长要一个邀请码（像 <span className="mono">K7QM3-PXD2A</span>），填在下面。
+        {me ? '用现在的账号加入另一个乐队，不用再注册。' : '谱库只对受邀的人开放。'}
+        向队长要一个邀请码（像 <span className="mono">K7QM3-PXD2A</span>），填在下面。
       </p>
       <form onSubmit={submit} className="mt-8 space-y-4">
         <Field label="邀请码">

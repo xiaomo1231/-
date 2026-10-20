@@ -768,3 +768,32 @@ describe('RehearsalHub', () => {
     expect(a.res.chunks.length).toBe(before)
   })
 })
+
+describe('RehearsalHub: accounts and devices', () => {
+  let hub: RehearsalHub
+  afterEach(() => {
+    hub.close()
+    vi.useRealTimers()
+  })
+
+  it('a device listed for one account is never taken over by another', () => {
+    hub = new RehearsalHub()
+    const a = fakeStream()
+    hub.subscribe('a', 'dev-shared-1234', 'iPad', a.req, a.res as never)
+    const b = fakeStream()
+    hub.subscribe('b', 'dev-shared-1234', 'phone', b.req, b.res as never)
+    expect(hub.state().devices.map((d) => d.userId)).toEqual(['a'])
+    const r = hub.command({ userId: 'b', deviceId: 'dev-shared-1234' }, { type: 'speaker', take: true }, { now: 0, songExists: () => true })
+    expect('error' in r && r.status).toBe(403)
+  })
+
+  it('an account taken out of the band leaves at once, and an empty rehearsal ends', () => {
+    hub = new RehearsalHub()
+    const a = fakeStream()
+    hub.subscribe('a', 'dev-aaaa-1234', 'iPad', a.req, a.res as never)
+    hub.command({ userId: 'a', deviceId: 'dev-aaaa-1234' }, { type: 'start', setlist: ['s1'] }, { now: 0, songExists: () => true })
+    expect(hub.state().active).toBe(true)
+    hub.evictUser('a')
+    expect(hub.state()).toMatchObject({ active: false, leaderId: null, devices: [] })
+  })
+})

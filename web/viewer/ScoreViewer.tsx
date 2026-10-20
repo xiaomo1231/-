@@ -208,6 +208,8 @@ export function ScoreViewer({
   const [activeFont, setActiveFont] = useState<SoundFontId>('basic')
   const [playing, setPlaying] = useState(false)
   const [rendering, setRendering] = useState(false)
+  /** A layout is running (an error then is a layout error, not a sound one). */
+  const renderingRef = useRef(false)
   const [speedPct, setSpeedPct] = useState(100)
   const [loop, setLoop] = useState(false)
   const [hasSelection, setHasSelection] = useState(false)
@@ -657,6 +659,13 @@ export function ScoreViewer({
           loadedFont.current = font
           setBasePrograms(base)
           setPrograms((p) => (again && p.length === s.tracks.length ? p : s.tracks.map(() => null)))
+          // Reloaded with another number of tracks (the rehearsal drums changed): per-track
+          // choices no longer line up; start them again and re-apply the 改编谱.
+          if (again && live.current.score && live.current.score.tracks.length !== s.tracks.length) {
+            setMute(new Set())
+            setSolo(new Set())
+            arrApplied.current = ''
+          }
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
           setVolumes((v) => (again && v.length === s.tracks.length ? v : s.tracks.map(() => 100)))
@@ -701,8 +710,12 @@ export function ScoreViewer({
             clock.current.restored = true
           })
         })
-        a.renderStarted.on(() => setRendering(true))
+        a.renderStarted.on(() => {
+          renderingRef.current = true
+          setRendering(true)
+        })
         a.renderFinished.on(() => {
+          renderingRef.current = false
           setRendering(false)
           // The loop range can be drawn only once the bars are laid out.
           rendered = true
@@ -721,7 +734,8 @@ export function ScoreViewer({
         a.error.on(() => {
           if (disposed) return
           const shown = a.score?.tracks[live.current.track]
-          if (shown?.staves.some((st) => st.showNumbered)) {
+          if (renderingRef.current && shown?.staves.some((st) => st.showNumbered)) {
+            renderingRef.current = false
             setNoNumbered(true)
             return
           }
@@ -852,6 +866,8 @@ export function ScoreViewer({
       flushRef.current(true)
       window.clearTimeout(soundTimer)
       cancelGap()
+      renders.current?.dispose()
+      renders.current = null
       api.current?.destroy()
       api.current = null
     }
@@ -1066,10 +1082,17 @@ export function ScoreViewer({
         [t],
         ((volumes[i] ?? 100) / 100) *
           (mix ? (mix.volume[i] ?? 1) : 1) *
-          fontGain(activeFont, t.playbackInfo.program, t.isPercussion),
+          fontGain(
+            activeFont,
+            // The instrument chosen in the 音轨 panel (it is put on the track just after this).
+            t.isPercussion
+              ? t.playbackInfo.program
+              : playedProgram(loadedFont.current, programs[i] ?? basePrograms[i] ?? t.playbackInfo.program),
+            t.isPercussion,
+          ),
       ),
     )
-  }, [volumes, score, activeFont, mix, programs])
+  }, [volumes, score, activeFont, mix, programs, basePrograms])
 
   // 改编谱: read it once; it is applied as soon as the score is in.
   useEffect(() => {
@@ -1093,7 +1116,8 @@ export function ScoreViewer({
     if (arrApplied.current === arrangement.id) return
     arrApplied.current = arrangement.id
     const m = mixOf(arrangement, visibleCount)
-    setPrograms(score.tracks.map((_, i) => m.programs[i] ?? null))
+    // An instrument equal to the file's own is no change.
+    setPrograms(score.tracks.map((_, i) => (m.programs[i] === basePrograms[i] ? null : (m.programs[i] ?? null))))
     setVolumes(score.tracks.map((_, i) => m.volumes[i] ?? 100))
     setMute(new Set(m.mute))
     setTranspose(m.transpose)
@@ -1136,10 +1160,12 @@ export function ScoreViewer({
     if (!changed) return
     const wasPlaying = a.playerState === 1
     const tick = a.tickPosition
-    resumeAfterMidi.current = () => {
-      a.tickPosition = tick
-      if (wasPlaying) a.play()
-    }
+    // Several changes before the music is ready again: the first one knows where it was.
+    if (!resumeAfterMidi.current)
+      resumeAfterMidi.current = () => {
+        a.tickPosition = tick
+        if (wasPlaying) a.play()
+      }
     a.loadMidiForScore()
   }, [programs, basePrograms, score])
 

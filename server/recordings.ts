@@ -224,8 +224,9 @@ export class RecordingStore {
     try {
       text = await fs.promises.readFile(file, 'utf8')
     } catch (err) {
+      // Not readable now: never start empty, or the next change would overwrite the file.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
-        console.warn(`[排练录音] 数据读取失败，已当作空：${(err as Error).message}`)
+        throw new Error(`排练录音 ${file} 读取失败：${(err as Error).message}`)
       return empty()
     }
     let raw: unknown
@@ -333,8 +334,15 @@ export class RecordingStore {
       await fs.promises.mkdir(this.recordingsDir, { recursive: true })
       await writeBytesAtomic(file, bytes)
 
+      // A full store makes way with this band's own oldest recordings, never another band's.
       const overflow = this.entries.length + 1 - MAX_RECORDINGS
-      const oldest = [...this.entries].sort((a, b) => a.item.uploadedAt - b.item.uploadedAt)
+      const oldest = this.entries
+        .filter((e) => e.item.bandId === item.bandId)
+        .sort((a, b) => a.item.uploadedAt - b.item.uploadedAt)
+      if (overflow > oldest.length) {
+        await fs.promises.rm(file, { force: true }).catch(() => {})
+        throw new RecordingError(409, '排练录音已经存满了，请先删除一些。')
+      }
       const dropped = overflow > 0 ? oldest.slice(0, overflow) : []
       const kept = this.entries.filter((e) => !dropped.includes(e))
       try {

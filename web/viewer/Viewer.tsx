@@ -44,7 +44,8 @@ export function Viewer({ route }: { route: ViewerRoute }) {
     case 'score':
       body = (
         <ScoreViewer
-          key={path + route.combo + route.conv + route.arr}
+          // Not keyed on the 改编谱: saving one puts its id in the address without reloading.
+          key={path + route.combo + route.conv}
           path={path}
           title={title}
           artist={artist}

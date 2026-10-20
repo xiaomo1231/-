@@ -388,8 +388,9 @@ export class BandStore {
       text = await fs.promises.readFile(file, 'utf8')
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return empty()
-      console.warn(`[谱库] 乐队数据读取失败，已当作空乐队：${(err as Error).message}`)
-      return empty()
+      // Not readable now (permissions, a disk not mounted yet): never start empty, or the
+      // next change would overwrite the real file.
+      throw new Error(`乐队数据 ${file} 读取失败：${(err as Error).message}`)
     }
     let raw: unknown
     try {

@@ -16,7 +16,7 @@ import {
   type RehearsalDevice,
   type RehearsalState,
 } from './api'
-import { reloadBand } from './band'
+import { reloadBand, reloadMe } from './band'
 import { getBandId, onBandChange } from './session'
 
 export interface TimeSample {
@@ -164,12 +164,16 @@ function open(): void {
       // ignore
     }
   })
-  es.addEventListener('band', () => reloadBand())
+  // Another member changed the band (its name and leader too, shown from the account).
+  es.addEventListener('band', () => {
+    reloadBand()
+    void reloadMe()
+  })
   es.onerror = () => {
     set({ connected: false })
     if (es.readyState === EventSource.CLOSED) {
       showError('和服务器的实时连接断开了，请刷新页面。')
-      source = null
+      close()
     }
   }
   remeasureTimer = setInterval(remeasure, REMEASURE_MS)
@@ -185,7 +189,7 @@ function close(): void {
 
 // Another band chosen: its own rehearsal room (the stream reopens for it).
 onBandChange(() => {
-  if (!source) return
+  if (users === 0) return
   close()
   set({ state: null })
   open()
@@ -225,8 +229,11 @@ export function onRehearsalClock(cb: (c: RehearsalClock) => void): () => void {
 
 /** Sends a command; the answer (the new state) is shown right away. Rejects with a readable message. */
 export async function sendRehearsal(cmd: RehearsalCommand): Promise<void> {
+  const band = getBandId()
   try {
-    acceptState(await api.rehearsalCommand({ deviceId, command: cmd }))
+    const s = await api.rehearsalCommand({ deviceId, command: cmd })
+    // An answer for the band shown before a switch is not this band's room.
+    if (getBandId() === band) acceptState(s)
   } catch (e) {
     showError(e)
     throw new Error(errorText(e))
@@ -235,9 +242,12 @@ export async function sendRehearsal(cmd: RehearsalCommand): Promise<void> {
 
 /** Sends without waiting and without showing errors (clock reports, device status). */
 export function sendRehearsalQuietly(cmd: RehearsalCommand): void {
+  const band = getBandId()
   api
     .rehearsalCommand({ deviceId, command: cmd })
-    .then(acceptState)
+    .then((s) => {
+      if (getBandId() === band) acceptState(s)
+    })
     .catch(() => undefined)
 }
 

@@ -70,6 +70,7 @@ export function useMine(): { data: MyScores | null; error: string | null; reload
     const ac = new AbortController()
     api.mine(ac.signal).then(
       (m) => {
+        if (ac.signal.aborted) return
         setData(m)
         setError(null)
       },

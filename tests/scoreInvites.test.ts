@@ -318,22 +318,7 @@ describe('parsing', () => {
     expect(parseAccept({ ...ok, username: 5 }).ok).toBe(false)
   })
 
-  it('makes a member from an invite, with the instrument the person picked (none when 不选)', () => {
-    const invite = {
-      id: '000000000001',
-      kind: 'member' as const,
-      bandId: BAND,
-      createdBy: 'admin1',
-      createdAt: NOW,
-      expiresAt: null,
-      maxUses: null,
-      uses: 0,
-      usedBy: [],
-      instrument: 'bass' as const,
-      libraryAccess: true,
-      note: '',
-      revoked: false,
-    }
+  it('makes a member from an invite (library access comes later, with the band), with the instrument picked', () => {
     const body = {
       token: 'abcdefghijklmnop',
       username: 'b',
@@ -341,14 +326,14 @@ describe('parsing', () => {
       password: '123456',
       instrument: null,
     }
-    expect(newUserFromInvite(invite, body)).toEqual({
+    expect(newUserFromInvite(body)).toEqual({
       username: 'b',
       displayName: 'B',
       password: '123456',
       role: 'member',
-      libraryAccess: true,
+      libraryAccess: false,
       instrument: null,
     })
-    expect(newUserFromInvite(invite, { ...body, instrument: 'keys' }).instrument).toBe('keys')
+    expect(newUserFromInvite({ ...body, instrument: 'keys' }).instrument).toBe('keys')
   })
 })

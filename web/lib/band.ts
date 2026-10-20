@@ -12,6 +12,7 @@ import {
   type SongStatus,
   type UpdateBandSongBody,
 } from './api'
+import { ApiError } from './api'
 import { getBandId, onBandChange, setMe } from './session'
 
 export const STATUS_LABELS: Record<SongStatus, string> = {
@@ -23,6 +24,10 @@ export const STATUS_LABELS: Record<SongStatus, string> = {
 let state: BandState | null = null
 let error: string | null = null
 let loading: Promise<void> | null = null
+/** The band the request in flight is for (a switch meanwhile needs a request of its own). */
+let loadingFor: string | null = null
+/** The band last found gone (read the account again once for it). */
+let goneBand: string | null = null
 const listeners = new Set<() => void>()
 const emit = () => listeners.forEach((l) => l())
 
@@ -38,8 +43,10 @@ const current = (s: BandState) => s.id === getBandId() || getBandId() === null
 
 /** Reads the band from the server; a request already in flight is shared. Never rejects. */
 function refresh(): Promise<void> {
-  if (!loading)
-    loading = api
+  const want = getBandId()
+  if (!loading || loadingFor !== want) {
+    loadingFor = want
+    const request: Promise<void> = api
       .band()
       .then(
         (s) => {
@@ -48,13 +55,22 @@ function refresh(): Promise<void> {
           error = null
         },
         (e: unknown) => {
+          if (getBandId() !== want) return
           error = errorText(e)
+          // Taken out of the band (or it was deleted): read the account again, which picks
+          // another band (or shows how to join one).
+          if (e instanceof ApiError && e.status === 404 && want !== null && goneBand !== want) {
+            goneBand = want
+            void reloadMe()
+          }
         },
       )
       .finally(() => {
-        loading = null
+        if (loading === request) loading = null
         emit()
       })
+    loading = request
+  }
   return loading
 }
 

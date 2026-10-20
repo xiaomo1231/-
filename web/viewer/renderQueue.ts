@@ -6,6 +6,8 @@ export interface RenderQueue {
   render(): void
   /** Shows these tracks (and re-renders). */
   renderTracks(tracks: model.Track[]): void
+  /** The api is going away: nothing more is rendered. */
+  dispose(): void
 }
 
 /**
@@ -22,6 +24,7 @@ export function renderQueue(a: AlphaTabApi): RenderQueue {
   let waiting = false
   let tracks: model.Track[] | null = null
   let guard = 0
+  let dead = false
 
   const hold = (ms: number) => {
     busy = true
@@ -31,6 +34,7 @@ export function renderQueue(a: AlphaTabApi): RenderQueue {
     guard = window.setTimeout(release, ms)
   }
   const run = () => {
+    if (dead) return
     hold(3000)
     const t = tracks
     tracks = null
@@ -58,6 +62,11 @@ export function renderQueue(a: AlphaTabApi): RenderQueue {
       tracks = t
       if (busy) waiting = true
       else run()
+    },
+    dispose() {
+      dead = true
+      waiting = false
+      window.clearTimeout(guard)
     },
   }
 }

@@ -297,8 +297,9 @@ export class UploadStore {
     try {
       text = await fs.promises.readFile(file, 'utf8')
     } catch (err) {
+      // Not readable now: never start empty, or the next change would overwrite the file.
       if ((err as NodeJS.ErrnoException).code !== 'ENOENT')
-        console.warn(`[谱库] 上传的谱读取失败，已当作空：${(err as Error).message}`)
+        throw new Error(`上传的谱 ${file} 读取失败：${(err as Error).message}`)
       return empty()
     }
     let raw: unknown
