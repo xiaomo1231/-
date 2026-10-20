@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type PointerEvent as ReactPointerEvent } from 'react'
 import type { AlphaTabApi, model } from '@coderline/alphatab'
+import { separateChannels } from '@/songs/trackChannels'
 import type { ScoreFormat } from '@/songs/scoreLibraryTypes'
 import { fetchBytes, fileUrl } from '../lib/api'
 import { buttonClass, cx } from '../lib/classes'
@@ -501,6 +502,16 @@ function ScoreBody({ path, onSummary }: { path: string; onSummary: (summary: str
           if (disposed) return
           cleanHeader(s)
           tidyTempoMarks(s)
+          // Tracks sharing one channel (many songsterr files) each get their own instrument.
+          const guessed = separateChannels(s.tracks)
+          for (const [t, was] of guessed)
+            for (const st of t.staves)
+              for (const bar of st.bars)
+                for (const v of bar.voices)
+                  for (const bt of v.beats)
+                    for (const au of bt.automations)
+                      if (au.type === at.model.AutomationType.Instrument && au.value === was)
+                        au.value = t.playbackInfo.program
           setScore(s)
           summaryRef.current(kindSummary(s.tracks))
         })

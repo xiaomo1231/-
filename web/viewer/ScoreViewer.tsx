@@ -78,6 +78,8 @@ import {
   type TrainerConfig,
 } from './practiceEngine'
 import { availableSoundFonts, soundFontUrl, type SoundFontId } from './soundFonts'
+import { separateChannels } from '@/songs/trackChannels'
+import { renderQueue, type RenderQueue } from './renderQueue'
 import { fontGain, playedProgram } from './fontGain'
 import { hasFretboard, notesFromBeats, tuningLabels, type FretNote } from './fretboardNotes'
 import { Fretboard } from './Fretboard'
@@ -186,6 +188,8 @@ export function ScoreViewer({
 }: Props) {
   const host = useRef<HTMLDivElement>(null)
   const api = useRef<AlphaTabApi | null>(null)
+  /** Our renders of the sheet, one at a time (overlapping ones leave the sheet blank). */
+  const renders = useRef<RenderQueue | null>(null)
   const [phase, setPhase] = useState<Phase>('loading')
   const [message, setMessage] = useState('')
   const [slow, setSlow] = useState(false)
@@ -299,8 +303,16 @@ export function ScoreViewer({
     artist,
   })
 
+  // 简谱 cannot be laid out for some files (alphaTab fails on their rests and ties):
+  // this score then shows its singers' parts in 五线谱 instead.
+  const [noNumbered, setNoNumbered] = useState(false)
+  const notationPrefs = useMemo(
+    () => (noNumbered ? { ...prefs, vocalStaff: 'Score' as const } : prefs),
+    [noNumbered, prefs],
+  )
   // alphaTab callbacks, timers and key handling read the latest values from here.
   const live = useRef({
+    notationPrefs,
     prefs,
     transpose,
     loop,
@@ -315,6 +327,7 @@ export function ScoreViewer({
     score,
   })
   live.current = {
+    notationPrefs,
     prefs,
     transpose,
     loop,
@@ -572,6 +585,7 @@ export function ScoreViewer({
           },
         } as never)
         api.current = a
+        renders.current = renderQueue(a)
         a.countInVolume = cur.countIn ? 1 : 0
         a.metronomeVolume = cur.metro ? 1 : 0
         a.playbackSpeed = cur.speedPct / 100
@@ -590,8 +604,12 @@ export function ScoreViewer({
             savedExists: savedDrums !== null,
           })
           if (showDrumsRef.current && (added ?? original) !== null) setTrack((added ?? original)!)
+          // Tracks sharing one channel (many songsterr files) each get their own, with a
+          // guessed instrument: the file's instrument changes to the shared one follow it.
+          const guessed = separateChannels(s.tracks)
           // Instruments the font cannot play are swapped before the player reads the score.
           for (const t of s.tracks) {
+            const was = guessed.get(t)
             t.playbackInfo.program = playedProgram(font, t.playbackInfo.program)
             for (const st of t.staves)
               for (const b of st.bars)
@@ -599,7 +617,7 @@ export function ScoreViewer({
                   for (const bt of v.beats)
                     for (const au of bt.automations)
                       if (au.type === at.model.AutomationType.Instrument)
-                        au.value = playedProgram(font, au.value)
+                        au.value = playedProgram(font, was === au.value ? t.playbackInfo.program : au.value)
           }
           if (live.current.transpose) applyTranspose(a, s, live.current.transpose)
           setScore(s)
@@ -660,8 +678,15 @@ export function ScoreViewer({
         a.soundFontLoad.on((e) => setSoundPct(Math.round((e.loaded / Math.max(1, e.total)) * 100)))
         // A larger sound font that cannot be read (too big for this device's memory, a broken
         // download…) falls back to the basic one instead of leaving the player silent.
+        // A layout error while a part is in 简谱: show it in 五线谱 instead (see noNumbered).
         a.error.on(() => {
-          if (disposed || playerReadyRef.current || font === 'basic') return
+          if (disposed) return
+          const shown = a.score?.tracks[live.current.track]
+          if (shown?.staves.some((st) => st.showNumbered)) {
+            setNoNumbered(true)
+            return
+          }
+          if (playerReadyRef.current || font === 'basic') return
           setRestoreNote('这个音色在这台设备上没能加载，已换回标准音色。')
           window.setTimeout(() => setRestoreNote(''), 6000)
           setPrefs((p) => ({ ...p, soundFont: 'basic' }))
@@ -821,12 +846,12 @@ export function ScoreViewer({
     const at = window.alphaTab
     if (a && t && at) {
       // Singers' parts in 简谱 / 五线谱; drums, piano and other parts without tab in 五线谱.
-      const want = prepareNotation(at, t, live.current.prefs)
+      const want = prepareNotation(at, t, live.current.notationPrefs)
       if (a.settings.display.staveProfile !== want) {
         a.settings.display.staveProfile = want as never
         a.updateSettings()
       }
-      a.renderTracks([t])
+      renders.current?.renderTracks([t])
     }
     setActiveNotes([])
   }, [track, score, drums])
@@ -838,13 +863,20 @@ export function ScoreViewer({
     if (!a || !score || !at) return
     const shown = score.tracks[live.current.track]
     a.settings.display.staveProfile = (
-      shown ? prepareNotation(at, shown, prefs) : staveProfileOf(at, prefs.staff)
+      shown ? prepareNotation(at, shown, notationPrefs) : staveProfileOf(at, prefs.staff)
     ) as never
     a.settings.display.scale = effectiveScale(prefs)
     a.settings.fillFromJson({ display: { resources: sheetResources(prefs.sheet) } } as never)
     a.updateSettings()
-    a.render()
-  }, [prefs.staff, prefs.vocalStaff, prefs.zoom, prefs.sheet, score]) // eslint-disable-line react-hooks/exhaustive-deps
+    renders.current?.render()
+  }, [prefs.staff, prefs.vocalStaff, prefs.zoom, prefs.sheet, score, noNumbered]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    if (!noNumbered) return
+    setRestoreNote('这份谱的简谱排不出来，已改用五线谱显示人声。')
+    const t = window.setTimeout(() => setRestoreNote(''), 6000)
+    return () => window.clearTimeout(t)
+  }, [noNumbered])
 
   useEffect(() => savePrefs(prefs), [prefs])
 
@@ -854,7 +886,7 @@ export function ScoreViewer({
     if (!a || !score) return
     applyTranspose(a, score, transpose)
     a.updateSettings()
-    a.render()
+    renders.current?.render()
     a.loadMidiForScore()
   }, [transpose, score])
 
@@ -1215,7 +1247,7 @@ export function ScoreViewer({
   // Back from the grid / text view: the sheet was laid out while hidden, draw it again.
   const wasGrid = useRef(false)
   useEffect(() => {
-    if (wasGrid.current && !gridShown) api.current?.render()
+    if (wasGrid.current && !gridShown) renders.current?.render()
     wasGrid.current = gridShown
   }, [gridShown])
   const showFretboard =
