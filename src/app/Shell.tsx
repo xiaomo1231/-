@@ -16,6 +16,7 @@ import {
   Settings,
   SlidersHorizontal,
   Sparkles,
+  Target,
   WifiOff,
 } from 'lucide-react'
 import { useOnline } from '@/features/pwa/useOnline'
@@ -34,6 +35,7 @@ import { VuBar } from '@/widgets/meter/VuBar'
 
 const NAV = [
   { to: '/camp', label: '训练营', icon: Activity },
+  { to: '/pitch', label: '音准矫正', icon: Target },
   { to: '/course', label: '课程', icon: BookOpen },
   { to: '/guitar', label: '吉他工坊', icon: Guitar },
   { to: '/studio', label: '作曲台', icon: PenLine },

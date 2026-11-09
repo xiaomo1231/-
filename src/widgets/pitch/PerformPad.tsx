@@ -21,6 +21,13 @@ export interface PerformPadProps {
   measures?: NoteMeasure[] | null
   graded?: boolean
   onSubmit: (r: DrillResponse) => void
+  /**
+   * 音准表什么时候看得到（音准矫正逐周撤掉）：live 一直看；after 唱的时候不看、唱完看偏差；
+   * score 只告诉唱对没有。默认 live。
+   */
+  feedback?: 'live' | 'after' | 'score'
+  /** 唱的时候琴也一起弹这段旋律（三步法第 1 步：跟着琴唱）。 */
+  accompany?: boolean
 }
 
 type Phase = 'idle' | 'reference' | 'countin' | 'take' | 'analysing' | 'done'
@@ -28,7 +35,7 @@ type Phase = 'idle' | 'reference' | 'countin' | 'take' | 'analysing' | 'done'
 /** Extra delay between what was heard and what reaches the analyser (buffer centre). */
 const ANALYSIS_DELAY = 0.03
 
-export function PerformPad({ question: q, disabled, measures, graded, onSubmit }: PerformPadProps) {
+export function PerformPad({ question: q, disabled, measures, graded, onSubmit, feedback = 'live', accompany = false }: PerformPadProps) {
   const preset: DetectorPreset = q.source === 'voice' ? 'voice' : q.source
   const mic = usePitchDetector(preset, true)
   const { start: micStart, record, peek, state: micState } = mic
@@ -130,9 +137,12 @@ export function PerformPad({ question: q, disabled, measures, graded, onSubmit }
       timeline.current = { takeStart, takeEnd, beat }
       timers.current.push(engine.onAudioTime(sched.startAt, () => setPhase('countin')))
       timers.current.push(engine.onAudioTime(takeStart, () => setPhase('take')))
+      // 跟着琴唱：每个目标音在它的拍上弹出来（轻一点，不盖住人声）。
+      if (accompany)
+        for (const t of q.targets) engine.playNote(t.midi, t.beats * beat * 0.9, takeStart + t.startBeat * beat, 0, 0.55)
       timers.current.push(engine.onAudioTime(takeEnd + 0.25, finish))
     }
-  }, [disabled, phase, micState, micStart, record, q, finish])
+  }, [disabled, phase, micState, micStart, record, q, finish, accompany])
 
   // Free timing: stop early once a long enough stable note is heard.
   useEffect(() => {
@@ -236,14 +246,26 @@ export function PerformPad({ question: q, disabled, measures, graded, onSubmit }
       )}
 
       <div className="grid grid-cols-5 gap-5">
-        <TunerGauge
-          className="col-span-2"
-          cents={gaugeCents}
-          tolerance={q.toleranceCents}
-          label={gaugeLabel}
-          sublabel={mic.state === 'live' ? undefined : mic.state === 'starting' ? '正在打开麦克风…' : '麦克风未开启'}
-          level={live?.rms ?? 0}
-        />
+        {feedback === 'live' ? (
+          <TunerGauge
+            className="col-span-2"
+            cents={gaugeCents}
+            tolerance={q.toleranceCents}
+            label={gaugeLabel}
+            sublabel={mic.state === 'live' ? undefined : mic.state === 'starting' ? '正在打开麦克风…' : '麦克风未开启'}
+            level={live?.rms ?? 0}
+          />
+        ) : (
+          <div className="col-span-2 flex flex-col items-center justify-center gap-2 rounded-3xl border border-dashed border-border/80 bg-background/40 p-5 text-center">
+            <div className="font-display text-lg">{feedback === 'after' ? '唱完再看' : '靠耳朵'}</div>
+            <div className="text-xs leading-relaxed text-muted-foreground">
+              {feedback === 'after' ? '这周唱的时候不看音准表，唱完告诉你偏了多少。' : '这周不看音准表，只告诉你唱对没有。'}
+            </div>
+            <div className="mt-1 h-1.5 w-24 overflow-hidden rounded-full bg-muted" aria-label="输入音量">
+              <div className="h-full bg-cyan" style={{ width: `${Math.min(100, (live?.rms ?? 0) * 600)}%` }} />
+            </div>
+          </div>
+        )}
         <div className="col-span-3 flex flex-col">
           {!q.freeTiming && (
             <div className="mb-4 flex flex-wrap gap-1.5" aria-label="目标音">
@@ -261,7 +283,7 @@ export function PerformPad({ question: q, disabled, measures, graded, onSubmit }
                     )}
                   >
                     <span className="font-medium">{t.label ?? midiToName(t.midi)}</span>
-                    {graded && (
+                    {graded && feedback !== 'score' && (
                       <span className="num text-[10px] text-muted-foreground">
                         {m?.medianCents == null ? '—' : `${m.medianCents > 0 ? '+' : ''}${m.medianCents}`}
                       </span>
@@ -271,7 +293,7 @@ export function PerformPad({ question: q, disabled, measures, graded, onSubmit }
               })}
             </div>
           )}
-          {q.freeTiming && graded && measures?.[0] && (
+          {q.freeTiming && graded && measures?.[0] && feedback !== 'score' && (
             <div className="mb-4 grid grid-cols-3 gap-2 text-center">
               <Metric label="偏差" value={measures[0].medianCents == null ? '—' : `${measures[0].medianCents > 0 ? '+' : ''}${measures[0].medianCents}`} unit="音分" />
               <Metric label="稳定时长" value={(measures[0].stableMs / 1000).toFixed(1)} unit="秒" />

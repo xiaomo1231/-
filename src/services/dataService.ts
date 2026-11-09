@@ -27,6 +27,8 @@ const TABLES = [
   'songSheets',
   'sheetFiles',
   'singMeta',
+  'pitchProgram',
+  'pitchLogs',
 ] as const satisfies ReadonlyArray<keyof GrooveLabDB>
 
 type TableName = (typeof TABLES)[number]

@@ -14,6 +14,7 @@ import { LandingPage } from '@/pages/LandingPage'
 import { OnboardingPage } from '@/pages/OnboardingPage'
 import { PlacementPage } from '@/pages/PlacementPage'
 import { CampPage } from '@/pages/CampPage'
+import { PitchProgramPage } from '@/pages/PitchProgramPage'
 import { ModulePage } from '@/pages/ModulePage'
 import { DrillPage } from '@/pages/DrillPage'
 import { SkillsPage } from '@/pages/SkillsPage'
@@ -92,6 +93,7 @@ const router = createBrowserRouter([
             element: <Shell />,
             children: [
               { path: '/camp', element: <CampPage /> },
+              { path: '/pitch', element: <PitchProgramPage /> },
               { path: '/camp/ai', element: <AIPracticePage /> },
               { path: '/camp/:moduleId', element: <ModulePage /> },
               { path: '/drill/:moduleId', element: <DrillPage /> },

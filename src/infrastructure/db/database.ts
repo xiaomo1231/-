@@ -1,4 +1,5 @@
 import Dexie, { type Table } from 'dexie'
+import type { PitchLog, PitchProgram } from '@/pitchcamp/types'
 import type {
   MixCourseVoice,
   MixLessonProgress,
@@ -84,6 +85,8 @@ export class GrooveLabDB extends Dexie {
   scoreFavorites!: Table<ScoreFavoriteRow, string>
   scoreRecent!: Table<ScoreRecentRow, string>
   artistMerges!: Table<ArtistMergeRow, string>
+  pitchProgram!: Table<PitchProgram, string>
+  pitchLogs!: Table<PitchLog, string>
 
   constructor(name = DB_NAME) {
     super(name)
@@ -173,6 +176,11 @@ export class GrooveLabDB extends Dexie {
       scoreRecent: 'path, openedAt',
       artistMerges: 'from',
     })
+    // v14: 音准矫正 — the 30-day program (one row) and its tests / sessions for the progress curve.
+    this.version(14).stores({
+      pitchProgram: 'id',
+      pitchLogs: 'id, at',
+    })
   }
 }
 
@@ -230,6 +238,8 @@ export async function clearAllData(): Promise<void> {
       db.scoreFavorites,
       db.scoreRecent,
       db.artistMerges,
+      db.pitchProgram,
+      db.pitchLogs,
     ],
     async () => {
       await Promise.all([
@@ -269,6 +279,8 @@ export async function clearAllData(): Promise<void> {
         db.scoreFavorites.clear(),
         db.scoreRecent.clear(),
         db.artistMerges.clear(),
+        db.pitchProgram.clear(),
+        db.pitchLogs.clear(),
       ])
     },
   )
